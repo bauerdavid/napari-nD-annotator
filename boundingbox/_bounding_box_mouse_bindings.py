@@ -1,44 +1,42 @@
-import itertools
+# A copy of napari.layers.shapes._shapes
 from copy import copy
 
 import numpy as np
 
-from _bounding_box_constants import Box, Mode
-# from ._shapes_utils import point_to_lines
-from _bounding_box_utils import powerset
+from ._bounding_box_constants import Box, Mode
 
 
 def highlight(layer, event):
-    """Highlight hovered shapes."""
+    """Highlight hovered bounding boxes."""
     layer._set_highlight()
 
 
 def select(layer, event):
-    """Select shapes or vertices either in select or direct select mode.
+    """Select bounding boxes or vertices either in select or direct select mode.
 
-    Once selected shapes can be moved or resized, and vertices can be moved
-    depending on the mode. Holding shift when resizing a shape will preserve
+    Once selected bounding boxes can be moved or resized, and vertices can be moved
+    depending on the mode. Holding shift when resizing a bounding box will preserve
     the aspect ratio.
     """
     shift = 'Shift' in event.modifiers
     # on press
     value = layer.get_value(event.position, world=True)
     layer._moving_value = copy(value)
-    shape_under_cursor, vertex_under_cursor = value
+    bounding_box_under_cursor, vertex_under_cursor = value
     if vertex_under_cursor is None:
-        if shift and shape_under_cursor is not None:
-            if shape_under_cursor in layer.selected_data:
-                layer.selected_data.remove(shape_under_cursor)
+        if shift and bounding_box_under_cursor is not None:
+            if bounding_box_under_cursor in layer.selected_data:
+                layer.selected_data.remove(bounding_box_under_cursor)
             else:
-                layer.selected_data.add(shape_under_cursor)
-        elif shape_under_cursor is not None:
-            if shape_under_cursor not in layer.selected_data:
-                layer.selected_data = {shape_under_cursor}
+                layer.selected_data.add(bounding_box_under_cursor)
+        elif bounding_box_under_cursor is not None:
+            if bounding_box_under_cursor not in layer.selected_data:
+                layer.selected_data = {bounding_box_under_cursor}
         else:
             layer.selected_data = set()
     layer._set_highlight()
 
-    # we don't update the thumbnail unless a shape has been moved
+    # we don't update the thumbnail unless a bounding box has been moved
     update_thumbnail = False
     yield
 
@@ -48,13 +46,13 @@ def select(layer, event):
         # ToDo: Need to pass moving_coordinates to allow fixed aspect ratio
         # keybinding to work, this should be dropped
         layer._moving_coordinates = coordinates
-        # Drag any selected shapes
+        # Drag any selected bounding boxes
         if len(layer.selected_data) == 0:
             _drag_selection_box(layer, coordinates)
         else:
             _move(layer, coordinates)
 
-        # if a shape is being moved, update the thumbnail
+        # if a bounding box is being moved, update the thumbnail
         if layer._is_moving:
             update_thumbnail = True
         yield
@@ -62,12 +60,12 @@ def select(layer, event):
     # on release
     shift = 'Shift' in event.modifiers
     if not layer._is_moving and not layer._is_selecting and not shift:
-        if shape_under_cursor is not None:
-            layer.selected_data = {shape_under_cursor}
+        if bounding_box_under_cursor is not None:
+            layer.selected_data = {bounding_box_under_cursor}
         else:
             layer.selected_data = set()
     elif layer._is_selecting:
-        layer.selected_data = layer._data_view.shapes_in_box(layer._drag_box)
+        layer.selected_data = layer._data_view.bounding_boxes_in_box(layer._drag_box)
         layer._is_selecting = False
         layer._set_highlight()
 
@@ -115,7 +113,7 @@ def _add_bounding_box(layer, event, data):
     data = layer.data[layer.nbounding_boxes - 1]
     # on move
     while event.type == 'mouse_move':
-        # Drag any selected shapes
+        # Drag any selected bounding boxes
         coordinates = layer.world_to_data(event.position)
         _move(layer, coordinates)
         min = data.min(0)
@@ -159,8 +157,8 @@ def _move(layer, coordinates):
 
     Parameters
     ----------
-    layer : napari.layers.Shapes
-        Shapes layer.
+    layer : BoundingBoxLayer
+        BoundingBoxLayer layer.
     coordinates : tuple
         Position of mouse cursor in data coordinates.
     """
@@ -174,6 +172,7 @@ def _move(layer, coordinates):
         [Mode.SELECT, Mode.ADD_BOUNDING_BOX]
     ):
         coord = [coordinates[i] for i in layer._dims_displayed]
+        layer._moving_coordinates = coordinates
         layer._is_moving = True
         if vertex is None:
             # Check where dragging box from to move whole object

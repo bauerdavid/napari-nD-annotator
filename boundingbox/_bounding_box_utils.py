@@ -1,3 +1,4 @@
+# A copy of napari.layers.shapes._shapes_utils
 import itertools
 from typing import Tuple
 
@@ -560,12 +561,12 @@ def triangulate_ellipse(corners, num_segments=100):
 
 
 def triangulate_face(data):
-    """Determines the triangulation of the face of a shape.
+    """Determines the triangulation of the face of a bounding box.
 
     Parameters
     ----------
     data : np.ndarray
-        Nx2 array of vertices of shape to be triangulated
+        Nx2 array of vertices of bounding box to be triangulated
 
     Returns
     -------
@@ -872,6 +873,7 @@ def generate_tube_meshes(path, closed=False, tube_points=10):
 
 
 def path_to_mask(mask_shape, vertices):
+    # TODO: this should be removed
     """Converts a path to a boolean mask with `True` for points lying along
     each edge.
 
@@ -903,6 +905,7 @@ def path_to_mask(mask_shape, vertices):
 
 
 def poly_to_mask(mask_shape, vertices):
+    # TODO: this should be removed
     """Converts a polygon to a boolean mask with `True` for points
     lying inside the shape. Uses the bounding box of the vertices to reduce
     computation time.
@@ -932,6 +935,7 @@ def poly_to_mask(mask_shape, vertices):
 
 
 def grid_points_in_poly(shape, vertices):
+    # TODO: this should be removed
     """Converts a polygon to a boolean mask with `True` for points
     lying inside the shape. Loops through all indices in the grid
 
@@ -956,6 +960,7 @@ def grid_points_in_poly(shape, vertices):
 
 
 def points_in_poly(points, vertices):
+    # TODO: this should be removed
     """Tests points for being inside a polygon using the ray casting algorithm
 
     Parameters
@@ -1002,6 +1007,7 @@ def points_in_poly(points, vertices):
 
 
 def extract_shape_type(data, shape_type=None):
+    # TODO: this should be removed
     """Separates shape_type from data if present, and returns both.
 
     Parameters
@@ -1030,6 +1036,7 @@ def extract_shape_type(data, shape_type=None):
 
 
 def get_default_shape_type(current_type):
+    # TODO: this should be removed
     """Returns current shape type if current_type is one shape, else "polygon".
 
     Parameters
@@ -1049,6 +1056,7 @@ def get_default_shape_type(current_type):
 
 
 def get_shape_ndim(data):
+    # TODO: this should be removed
     """Checks whether data is a list of the same type of shape, one shape, or
     a list of different shapes and returns the dimensionality of the shape/s.
 
@@ -1076,6 +1084,7 @@ def get_shape_ndim(data):
 
 
 def number_of_shapes(data):
+    # TODO: this should be removed
     """Determine number of shapes in the data.
 
     Parameters

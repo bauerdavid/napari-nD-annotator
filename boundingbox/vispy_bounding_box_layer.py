@@ -1,3 +1,4 @@
+# A copy of napari._vispy.vispy_shapes_layer
 import numpy as np
 from napari._vispy._text_utils import update_text
 from napari._vispy.vispy_base_layer import VispyBaseLayer
@@ -10,10 +11,10 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
     def __init__(self, layer):
         # Create a compound visual with the following four subvisuals:
         # Markers: corresponding to the vertices of the interaction box or the
-        # shapes that are used for highlights.
+        # bounding boxes that are used for highlights.
         # Lines: The lines of the interaction box used for highlights.
-        # Mesh: The mesh of the outlines for each shape used for highlights.
-        # Mesh: The actual meshes of the shape faces and edges
+        # Mesh: The mesh of the outlines for each bounding box used for highlights.
+        # Mesh: The actual meshes of the bounding box faces and edges
         node = Compound([Mesh(), Mesh(), Line(), Markers(), Text()])
 
         super().__init__(layer, node)
@@ -61,8 +62,8 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
         settings = get_settings()
         self.layer._highlight_width = settings.appearance.highlight_thickness
 
-        # Compute the vertices and faces of any shape outlines
-        vertices, faces = self.layer._outline_shapes()
+        # Compute the vertices and faces of any bounding box outlines
+        vertices, faces = self.layer._outline_bounding_boxes()
 
         if vertices is None or len(vertices) == 0 or len(faces) == 0:
             vertices = np.zeros((3, self.layer._ndisplay))

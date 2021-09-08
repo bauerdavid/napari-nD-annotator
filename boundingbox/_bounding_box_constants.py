@@ -1,3 +1,4 @@
+# A copy of napari.layers.shapes._shapes_constants
 import sys
 from enum import auto
 
@@ -8,18 +9,12 @@ class Mode(StringEnum):
     """Mode: Interactive mode. The normal, default mode is PAN_ZOOM, which
     allows for normal interactivity with the canvas.
 
-    The SELECT mode allows for entire shapes to be selected, moved and
+    The SELECT mode allows for bounding boxes to be selected, moved and
     resized.
 
-    The DIRECT mode allows for shapes to be selected and their individual
-    vertices to be moved.
+    The ADD_BOUNDING_BOX mode allows for bounding boxes to be added.
 
-    The VERTEX_INSERT and VERTEX_REMOVE modes allow for individual
-    vertices either to be added to or removed from shapes that are already
-    selected. Note that shapes cannot be selected in this mode.
-
-    The ADD_RECTANGLE, ADD_ELLIPSE, ADD_LINE, ADD_PATH, and ADD_POLYGON
-    modes all allow for their corresponding shape type to be added.
+    The DIRECT mode is unused, and will be removed
     """
 
     PAN_ZOOM = auto()
@@ -50,7 +45,6 @@ class Box:
 
     WITH_HANDLE = [0, 1, 2, 3, 4, 5, 6, 7, 9]
     WITHOUT_HANDLE = list(range(8))
-    # LINE_HANDLE = [7, 6, 4, 2, 0, 7, 8]
     LINE_HANDLE = [7, 6, 4, 2, 0, 7]
     LINE = [0, 2, 4, 6, 0]
     TOP_LEFT = 0

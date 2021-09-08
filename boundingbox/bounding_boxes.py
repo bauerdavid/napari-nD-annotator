@@ -1,3 +1,4 @@
+# A copy of napari.layers.shapes.shapes
 import warnings
 from contextlib import contextmanager
 from copy import deepcopy, copy
@@ -5,7 +6,6 @@ from itertools import cycle
 from typing import Dict, Optional, Union, Tuple
 
 from napari.layers import Layer
-import numpy as np
 from napari.layers.utils.color_manager_utils import map_property, guess_continuous
 from napari.layers.utils.color_transformations import transform_color_with_defaults, ColorType, \
     normalize_and_broadcast_colors, transform_color_cycle
@@ -13,19 +13,20 @@ from napari.layers.utils.layer_utils import dataframe_to_properties
 from napari.layers.utils.text import TextManager
 from napari.utils import Colormap
 from napari.utils.colormaps import ensure_colormap, ValidColormapArg
-from napari.utils.colormaps.standardize_color import get_color_namelist, transform_color, rgb_to_hex, hex_to_name
+from napari.utils.colormaps.standardize_color import transform_color, rgb_to_hex, hex_to_name
 from napari.utils.events import Event
 from napari.utils.misc import ensure_iterable
-from napari.utils.translations import trans
 from vispy.color import get_color_names
 
 
-from _bounding_box_constants import ColorMode, Mode, BACKSPACE, Box
-from _bounding_box_list import BoundingBoxList
-from _bounding_box import BoundingBox
-from _bounding_box_mouse_bindings import select, highlight, add_bounding_box
-import _bounding_boxes_key_bindings, qt_bounding_box_control, vispy_bounding_box_layer
-from _bounding_box_utils import create_box
+from ._bounding_box_constants import ColorMode, BACKSPACE, Box
+from ._bounding_box_list import BoundingBoxList
+from .bounding_box import BoundingBox
+from ._bounding_box_mouse_bindings import select, highlight, add_bounding_box
+from ._bounding_boxes_key_bindings import *
+from .qt_bounding_box_control import *
+from .vispy_bounding_box_layer import *
+from ._bounding_box_utils import create_box
 
 DEFAULT_COLOR_CYCLE = np.array([[1, 0, 1, 1], [0, 1, 0, 1]])
 
@@ -35,7 +36,7 @@ class BoundingBoxLayer(Layer):
     _rotation_handle_length = 20
     _highlight_color = (0, 0.6, 1)
     _highlight_width = 1.5
-    _max_shapes_thumbnail = 100
+    _max_bounding_boxes_thumbnail = 100
     def __init__(self,
                  data=None,
                  *,
@@ -73,7 +74,7 @@ class BoundingBoxLayer(Layer):
             if ndim is not None and ndim != data_ndim:
                 raise ValueError(
                     trans._(
-                        "Shape dimensions must be equal to ndim",
+                        "Bounding box dimensions must be equal to ndim",
                         deferred=True,
                     )
                 )
@@ -180,7 +181,7 @@ class BoundingBoxLayer(Layer):
         self._mode = Mode.PAN_ZOOM
         self._mode_history = self._mode
         self._status = self.mode
-        self._help = trans._('enter a selection mode to edit shape properties')
+        self._help = trans._('enter a selection mode to edit bounding box properties')
 
         self._init_bounding_boxes(
             data,
@@ -283,7 +284,7 @@ class BoundingBoxLayer(Layer):
             if len(v) != n_bounding_boxes:
                 raise ValueError(
                     trans._(
-                        'the number of properties must equal the number of shapes',
+                        'the number of properties must equal the number of bounding boxes',
                         deferred=True,
                     )
                 )
@@ -293,52 +294,43 @@ class BoundingBoxLayer(Layer):
 
         return properties
 
-    def _on_click(self, layer, event):
-        print("started")
-        yield
-        while event.type == "mouse_move":
-            print("moving the mouse")
-            yield
-        print("released")
-
     @property
     def data(self):
-        """list: Each element is an (N, D) array of the vertices of a shape."""
+        """list: Each element is an (N, D) array of the vertices of a bounding box."""
         return self._data_view.data
 
     @data.setter
     def data(self, data):
         self._finish_drawing()
 
-        n_new_shapes = len(data)
-        # not given a shape_type through data
+        n_new_bounding_boxes = len(data)
 
         edge_widths = self._data_view.edge_widths
         edge_color = self._data_view.edge_color
         face_color = self._data_view.face_color
         z_indices = self._data_view.z_indices
 
-        # fewer shapes, trim attributes
-        if self.nbounding_boxes > n_new_shapes:
-            edge_widths = edge_widths[:n_new_shapes]
-            z_indices = z_indices[:n_new_shapes]
-            edge_color = edge_color[:n_new_shapes]
-            face_color = face_color[:n_new_shapes]
-        # more shapes, add attributes
-        elif self.nbounding_boxes < n_new_shapes:
-            n_shapes_difference = n_new_shapes - self.nbounding_boxes
-            edge_widths = edge_widths + [1] * n_shapes_difference
-            z_indices = z_indices + [0] * n_shapes_difference
+        # fewer bounding boxes, trim attributes
+        if self.nbounding_boxes > n_new_bounding_boxes:
+            edge_widths = edge_widths[:n_new_bounding_boxes]
+            z_indices = z_indices[:n_new_bounding_boxes]
+            edge_color = edge_color[:n_new_bounding_boxes]
+            face_color = face_color[:n_new_bounding_boxes]
+        # more bounding boxes, add attributes
+        elif self.nbounding_boxes < n_new_bounding_boxes:
+            n_bounding_boxes_difference = n_new_bounding_boxes - self.nbounding_boxes
+            edge_widths = edge_widths + [1] * n_bounding_boxes_difference
+            z_indices = z_indices + [0] * n_bounding_boxes_difference
             edge_color = np.concatenate(
                 (
                     edge_color,
-                    self._get_new_shape_color(n_shapes_difference, 'edge'),
+                    self._get_new_bounding_box_color(n_bounding_boxes_difference, 'edge'),
                 )
             )
             face_color = np.concatenate(
                 (
                     face_color,
-                    self._get_new_shape_color(n_shapes_difference, 'face'),
+                    self._get_new_bounding_box_color(n_bounding_boxes_difference, 'face'),
                 )
             )
 
@@ -370,7 +362,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def current_edge_width(self):
-        """float: Width of shape edges including lines and paths."""
+        """float: Width of bounding box edges including lines and paths."""
         return self._current_edge_width
 
     @current_edge_width.setter
@@ -383,7 +375,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def selected_data(self):
-        """set: set of currently selected shapes."""
+        """set: set of currently selected bounding boxes."""
         return self._selected_data
 
     @selected_data.setter
@@ -391,7 +383,7 @@ class BoundingBoxLayer(Layer):
         self._selected_data = set(selected_data)
         self._selected_box = self.interaction_box(self._selected_data)
 
-        # Update properties based on selected shapes
+        # Update properties based on selected bounding boxes
         if len(selected_data) > 0:
             selected_data_indices = list(selected_data)
             selected_face_colors = self._data_view._face_color[
@@ -432,7 +424,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def properties(self) -> Dict[str, np.ndarray]:
-        """dict {str: np.ndarray (N,)}, DataFrame: Annotations for each shape"""
+        """dict {str: np.ndarray (N,)}, DataFrame: Annotations for each bounding box"""
         return self._properties
 
     @properties.setter
@@ -481,7 +473,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def edge_color(self):
-        """(N x 4) np.ndarray: Array of RGBA face colors for each shape"""
+        """(N x 4) np.ndarray: Array of RGBA face colors for each bounding box"""
         return self._data_view.edge_color
 
     @edge_color.setter
@@ -534,7 +526,7 @@ class BoundingBoxLayer(Layer):
     def edge_color_mode(self) -> str:
         """str: Edge color setting mode
 
-        DIRECT (default mode) allows each shape color to be set arbitrarily
+        DIRECT (default mode) allows each bounding box color to be set arbitrarily
 
         CYCLE allows the color to be set via a color cycle over an attribute
 
@@ -548,7 +540,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def face_color(self):
-        """(N x 4) np.ndarray: Array of RGBA face colors for each shape"""
+        """(N x 4) np.ndarray: Array of RGBA face colors for each bounding box"""
         return self._data_view.face_color
 
     @face_color.setter
@@ -600,7 +592,7 @@ class BoundingBoxLayer(Layer):
     def face_color_mode(self) -> str:
         """str: Face color setting mode
 
-        DIRECT (default mode) allows each shape color to be set arbitrarily
+        DIRECT (default mode) allows each bounding box color to be set arbitrarily
 
         CYCLE allows the color to be set via a color cycle over an attribute
 
@@ -614,7 +606,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def current_edge_color(self):
-        """str: color of shape edges including lines and paths."""
+        """str: color of bounding box edges including lines and paths."""
         hex_ = rgb_to_hex(self._current_edge_color)[0]
         return hex_to_name.get(hex_, hex_)
 
@@ -630,7 +622,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def current_face_color(self):
-        """str: color of shape faces."""
+        """str: color of bounding box faces."""
         hex_ = rgb_to_hex(self._current_face_color)[0]
         return hex_to_name.get(hex_, hex_)
 
@@ -646,7 +638,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def current_properties(self) -> Dict[str, np.ndarray]:
-        """dict{str: np.ndarray(1,)}: properties for the next added shape."""
+        """dict{str: np.ndarray(1,)}: properties for the next added bounding box."""
         return self._current_properties
 
     @current_properties.setter
@@ -668,7 +660,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def nbounding_boxes(self):
-        """int: Total number of shapes."""
+        """int: Total number of bounding boxes."""
         return len(self._data_view.bounding_boxes)
 
     @property
@@ -680,18 +672,10 @@ class BoundingBoxLayer(Layer):
         """MODE: Interactive mode. The normal, default mode is PAN_ZOOM, which
         allows for normal interactivity with the canvas.
 
-        The SELECT mode allows for entire shapes to be selected, moved and
+        The SELECT mode allows for entire bounding boxes to be selected, moved and
         resized.
 
-        The DIRECT mode allows for shapes to be selected and their individual
-        vertices to be moved.
-
-        The VERTEX_INSERT and VERTEX_REMOVE modes allow for individual
-        vertices either to be added to or removed from shapes that are already
-        selected. Note that shapes cannot be selected in this mode.
-
-        The ADD_RECTANGLE, ADD_ELLIPSE, ADD_LINE, ADD_PATH, and ADD_POLYGON
-        modes all allow for their corresponding shape type to be added.
+        The ADD_BOUNDING_BOX mode allows for bounding boxes to be added.
         """
         return str(self._mode)
 
@@ -716,7 +700,7 @@ class BoundingBoxLayer(Layer):
             self.cursor = 'standard'
             self.interactive = True
             self.help = trans._(
-                'enter a selection mode to edit shape properties'
+                'enter a selection mode to edit bounding box properties'
             )
         elif mode in [Mode.SELECT, Mode.DIRECT]:
             self.cursor = 'pointing'
@@ -753,31 +737,31 @@ class BoundingBoxLayer(Layer):
         # don't update thumbnail on mode changes
         with self.block_thumbnail_update():
             if not (mode in draw_modes and old_mode in draw_modes):
-                # Shapes._finish_drawing() calls Shapes.refresh()
+                # BoundingBoxLayer._finish_drawing() calls BoundingBoxLayer.refresh()
                 self._finish_drawing()
             else:
                 self.refresh()
 
     @property
     def z_index(self):
-        """list of int: z_index for each shape."""
+        """list of int: z_index for each bounding box."""
         return self._data_view.z_indices
 
     @z_index.setter
     def z_index(self, z_index):
-        """Set z_index of shape using either int or list of int.
+        """Set z_index of bounding box using either int or list of int.
 
-        When list of int is provided, must be of equal length to n shapes.
+        When list of int is provided, must be of equal length to n bounding boxes.
 
         Parameters
         ----------
         z_index : int or list of int
-            z-index of shapes
+            z-index of bounding boxes
         """
         if isinstance(z_index, list):
             if not len(z_index) == self.nbounding_boxes:
                 raise ValueError(
-                    trans._('Length of list does not match number of shapes')
+                    trans._('Length of list does not match number of bounding boxes')
                 )
             else:
                 z_indices = z_index
@@ -789,24 +773,24 @@ class BoundingBoxLayer(Layer):
 
     @property
     def edge_width(self):
-        """list of float: edge width for each shape."""
+        """list of float: edge width for each bounding box."""
         return self._data_view.edge_widths
 
     @edge_width.setter
     def edge_width(self, width):
-        """Set edge width of shapes using float or list of float.
+        """Set edge width of bounding boxes using float or list of float.
 
-        If list of float, must be of equal length to n shapes
+        If list of float, must be of equal length to n bounding boxes
 
         Parameters
         ----------
         width : float or list of float
-            width of all shapes, or each shape if list
+            width of all bounding boxes, or each bounding box if list
         """
         if isinstance(width, list):
             if not len(width) == self.nbounding_boxes:
                 raise ValueError(
-                    trans._('Length of list does not match number of shapes')
+                    trans._('Length of list does not match number of bounding boxes')
                 )
             else:
                 widths = width
@@ -817,7 +801,7 @@ class BoundingBoxLayer(Layer):
             self._data_view.update_edge_width(i, width)
 
     def _finish_drawing(self, event=None):
-        """Reset properties used in shape drawing."""
+        """Reset properties used in bounding box drawing."""
         index = copy(self._moving_value[0])
         self._is_moving = False
         self.selected_data = set()
@@ -944,7 +928,7 @@ class BoundingBoxLayer(Layer):
                 else:
                     raise ValueError(
                         trans._(
-                            'There must be a valid Shapes.properties to use {color_mode}',
+                            'There must be a valid BoundingBoxes.properties to use {color_mode}',
                             deferred=True,
                             color_mode=color_mode,
                         )
@@ -988,8 +972,8 @@ class BoundingBoxLayer(Layer):
                 )
             )
 
-    def _initialize_color(self, color, attribute: str, n_shapes: int):
-        """Get the face/edge colors the Shapes layer will be initialized with
+    def _initialize_color(self, color, attribute: str, n_bounding_boxes: int):
+        """Get the face/edge colors the BoundingBoxLayer layer will be initialized with
 
         Parameters
         ----------
@@ -1015,15 +999,15 @@ class BoundingBoxLayer(Layer):
             )
 
         else:
-            if n_shapes > 0:
+            if n_bounding_boxes > 0:
                 transformed_color = transform_color_with_defaults(
-                    num_entries=n_shapes,
+                    num_entries=n_bounding_boxes,
                     colors=color,
                     elem_name="face_color",
                     default="white",
                 )
                 init_colors = normalize_and_broadcast_colors(
-                    n_shapes, transformed_color
+                    n_bounding_boxes, transformed_color
                 )
             else:
                 init_colors = np.empty((0, 4))
@@ -1039,54 +1023,38 @@ class BoundingBoxLayer(Layer):
         edge_width=None,
         edge_color=None,
         face_color=None,
-        z_index=None,
-        z_refresh=True,
+        z_index=None
     ):
-        """Add shapes to the data view.
+        """Add bounding boxes to the data view.
 
         Parameters
         ----------
-        data : Array | Tuple(Array,str) | List[Array | Tuple(Array, str)] | Tuple(List[Array], str)
-            List of shape data, where each element is either an (N, D) array of the
-            N vertices of a shape in D dimensions or a tuple containing an array of
-            the N vertices and the shape_type string. When a shape_type is present,
-            it overrides keyword arg shape_type. Can be an 3-dimensional array
-            if each shape has the same number of vertices.
-        shape_type : string | list
-            String of shape shape_type, must be one of "{'line', 'rectangle',
-            'ellipse', 'path', 'polygon'}". If a list is supplied it must be
-            the same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes. Overriden by data shape_type, if present.
+        data : Array | List[Array]
+            List of bounding box data, where each element is an (N, D) array of the
+            N vertices of a bounding box in D dimensions. Can be an 3-dimensional array.
         edge_width : float | list
             thickness of lines and edges. If a list is supplied it must be the
             same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes.
+            applied to each bounding box otherwise the same value will be used for all
+            bounding boxes.
         edge_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
-            the length of `data` and each element will be applied to each shape
-            otherwise the same value will be used for all shapes.
+            the length of `data` and each element will be applied to each bounding box
+            otherwise the same value will be used for all bounding boxes.
         face_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
-            the length of `data` and each element will be applied to each shape
-            otherwise the same value will be used for all shapes.
+            the length of `data` and each element will be applied to each bounding box
+            otherwise the same value will be used for all bounding boxes.
         z_index : int | list
-            Specifier of z order priority. Shapes with higher z order are
+            Specifier of z order priority. Bounding boxes with higher z order are
             displayed ontop of others. If a list is supplied it must be the
             same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes.
-        z_refresh : bool
-            If set to true, the mesh elements are reindexed with the new z order.
-            When shape_index is provided, z_refresh will be overwritten to false,
-            as the z indices will not change.
-            When adding a batch of shapes, set to false  and then call
-            ShapesList._update_z_order() once at the end.
+            applied to each bounding box otherwise the same value will be used for all
+            bounding boxes.
         """
         if edge_width is None:
             edge_width = self.current_edge_width
@@ -1101,7 +1069,7 @@ class BoundingBoxLayer(Layer):
 
         if len(data) > 0:
             if np.array(data[0]).ndim == 1:
-                # If a single array for a shape has been passed turn into list
+                # If a single array for a bounding box has been passed turn into list
                 data = [data]
 
             # transform the colors
@@ -1125,7 +1093,7 @@ class BoundingBoxLayer(Layer):
             )
 
             # Turn input arguments into iterables
-            shape_inputs = zip(
+            bounding_box_inputs = zip(
                 data,
                 ensure_iterable(edge_width),
                 transformed_edge_color,
@@ -1133,17 +1101,17 @@ class BoundingBoxLayer(Layer):
                 ensure_iterable(z_index),
             )
 
-            self._add_bounding_boxes_to_view(shape_inputs, self._data_view)
+            self._add_bounding_boxes_to_view(bounding_box_inputs, self._data_view)
 
         self._display_order_stored = copy(self._dims_order)
         self._ndisplay_stored = copy(self._ndisplay)
         self._update_dims()
 
-    def _add_bounding_boxes_to_view(self, shape_inputs, data_view):
-        """Build new shapes and add them to the _data_view"""
-        for d, ew, ec, fc, z in shape_inputs:
+    def _add_bounding_boxes_to_view(self, bounding_box_inputs, data_view):
+        """Build new bounding boxes and add them to the _data_view"""
+        for d, ew, ec, fc, z in bounding_box_inputs:
 
-            shape = BoundingBox(
+            bounding_box = BoundingBox(
                 d,
                 edge_width=ew,
                 z_index=z,
@@ -1151,8 +1119,8 @@ class BoundingBoxLayer(Layer):
                 ndisplay=self._ndisplay,
             )
 
-            # Add shape
-            data_view.add(shape, edge_color=ec, face_color=fc, z_refresh=False)
+            # Add bounding box
+            data_view.add(bounding_box, edge_color=ec, face_color=fc, z_refresh=False)
         data_view._update_z_order()
 
     def add(
@@ -1164,73 +1132,64 @@ class BoundingBoxLayer(Layer):
         face_color=None,
         z_index=None,
     ):
-        """Add shapes to the current layer.
+        """Add bounding boxes to the current layer.
 
         Parameters
         ----------
-        data : Array | Tuple(Array,str) | List[Array | Tuple(Array, str)] | Tuple(List[Array], str)
-            List of shape data, where each element is either an (N, D) array of the
-            N vertices of a shape in D dimensions or a tuple containing an array of
-            the N vertices and the shape_type string. When a shape_type is present,
-            it overrides keyword arg shape_type. Can be an 3-dimensional array
-            if each shape has the same number of vertices.
-        shape_type : string | list
-            String of shape shape_type, must be one of "{'line', 'rectangle',
-            'ellipse', 'path', 'polygon'}". If a list is supplied it must be
-            the same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes. Overriden by data shape_type, if present.
+        data : Array | List[Array]
+            List of bounding box data, where each element is an (N, D) array of the
+            N vertices of a bounding box in D dimensions. Can be an 3-dimensional array.
         edge_width : float | list
             thickness of lines and edges. If a list is supplied it must be the
             same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes.
+            applied to each bounding box otherwise the same value will be used for all
+            bounding boxes.
         edge_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
-            the length of `data` and each element will be applied to each shape
-            otherwise the same value will be used for all shapes.
+            the length of `data` and each element will be applied to each bounding box
+            otherwise the same value will be used for all bounding boxes.
         face_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
-            the length of `data` and each element will be applied to each shape
-            otherwise the same value will be used for all shapes.
+            the length of `data` and each element will be applied to each bounding box
+            otherwise the same value will be used for all bounding boxes.
         z_index : int | list
-            Specifier of z order priority. Shapes with higher z order are
+            Specifier of z order priority. Bounding boxes with higher z order are
             displayed ontop of others. If a list is supplied it must be the
             same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes.
+            applied to each bounding box otherwise the same value will be used for all
+            bounding boxes.
         """
 
         if edge_width is None:
             edge_width = self.current_edge_width
 
-        n_new_shapes = len(data) if type(data) == list or data.ndim > 2 else 1
+        n_new_bounding_boxes = len(data) if type(data) == list or data.ndim > 2 else 1
         if edge_color is None:
-            edge_color = self._get_new_shape_color(
-                n_new_shapes, attribute='edge'
+            edge_color = self._get_new_bounding_box_color(
+                n_new_bounding_boxes, attribute='edge'
             )
         if face_color is None:
-            face_color = self._get_new_shape_color(
-                n_new_shapes, attribute='face'
+            face_color = self._get_new_bounding_box_color(
+                n_new_bounding_boxes, attribute='face'
             )
         if self._data_view is not None:
             z_index = z_index or max(self._data_view._z_index, default=-1) + 1
         else:
             z_index = z_index or 0
 
-        if n_new_shapes > 0:
+        if n_new_bounding_boxes > 0:
             if len(self.properties) > 0:
                 first_prop_key = next(iter(self.properties))
                 n_prop_values = len(self.properties[first_prop_key])
             else:
                 n_prop_values = 0
-            total_shapes = n_new_shapes + self.nbounding_boxes
-            if total_shapes > n_prop_values:
-                n_props_to_add = total_shapes - n_prop_values
+            total_bounding_boxes = n_new_bounding_boxes + self.nbounding_boxes
+            if total_bounding_boxes > n_prop_values:
+                n_props_to_add = total_bounding_boxes - n_prop_values
                 for k in self.properties:
                     new_property = np.repeat(
                         self.current_properties[k], n_props_to_add, axis=0
@@ -1239,10 +1198,10 @@ class BoundingBoxLayer(Layer):
                         (self.properties[k], new_property), axis=0
                     )
                 self.text.add(self.current_properties, n_props_to_add)
-            if total_shapes < n_prop_values:
+            if total_bounding_boxes < n_prop_values:
                 for k in self.properties:
-                    self.properties[k] = self.properties[k][:total_shapes]
-                n_props_to_remove = n_prop_values - total_shapes
+                    self.properties[k] = self.properties[k][:total_bounding_boxes]
+                n_props_to_remove = n_prop_values - total_bounding_boxes
                 indices_to_remove = np.arange(n_prop_values)[
                     -n_props_to_remove:
                 ]
@@ -1271,42 +1230,39 @@ class BoundingBoxLayer(Layer):
         face_contrast_limits,
         z_index=None,
     ):
-        """Add shapes to the data view.
+        """Add bounding boxes to the data view.
 
         Parameters
         ----------
-        data : Array | Tuple(Array,str) | List[Array | Tuple(Array, str)] | Tuple(List[Array], str)
-            List of shape data, where each element is either an (N, D) array of the
-            N vertices of a shape in D dimensions or a tuple containing an array of
-            the N vertices and the shape_type string. When a shape_type is present,
-            it overrides keyword arg shape_type. Can be an 3-dimensional array
-            if each shape has the same number of vertices.
+        data : Array | List[Array]
+            List of bounding box data, where each element is an (N, D) array of the
+            N vertices of a bounding box in D dimensions. Can be an 3-dimensional array.
         edge_width : float | list
             thickness of lines and edges. If a list is supplied it must be the
             same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes.
+            applied to each bounding box otherwise the same value will be used for all
+            bounding boxes.
         edge_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
-            the length of `data` and each element will be applied to each shape
-            otherwise the same value will be used for all shapes.
+            the length of `data` and each element will be applied to each bounding box
+            otherwise the same value will be used for all bounding boxes.
         face_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
-            the length of `data` and each element will be applied to each shape
-            otherwise the same value will be used for all shapes.
+            the length of `data` and each element will be applied to each bounding box
+            otherwise the same value will be used for all bounding boxes.
         z_index : int | list
-            Specifier of z order priority. Shapes with higher z order are
+            Specifier of z order priority. Bounding boxes with higher z order are
             displayed ontop of others. If a list is supplied it must be the
             same length as the length of `data` and each element will be
-            applied to each shape otherwise the same value will be used for all
-            shapes.
+            applied to each bounding box otherwise the same value will be used for all
+            bounding boxes.
         """
 
-        n_shapes = len(data)
+        n_bounding_boxes = len(data)
         with self.block_update_properties():
             self._edge_color_property = ''
             self.edge_color_cycle_map = {}
@@ -1316,7 +1272,7 @@ class BoundingBoxLayer(Layer):
                 edge_color_cycle = deepcopy(DEFAULT_COLOR_CYCLE)
             self.edge_color_cycle = edge_color_cycle
             edge_color = self._initialize_color(
-                edge_color, attribute='edge', n_shapes=n_shapes
+                edge_color, attribute='edge', n_bounding_boxes=n_bounding_boxes
             )
 
             self._face_color_property = ''
@@ -1327,7 +1283,7 @@ class BoundingBoxLayer(Layer):
                 face_color_cycle = deepcopy(DEFAULT_COLOR_CYCLE)
             self.face_color_cycle = face_color_cycle
             face_color = self._initialize_color(
-                face_color, attribute='face', n_shapes=n_shapes
+                face_color, attribute='face', n_bounding_boxes=n_bounding_boxes
             )
 
         with self.block_thumbnail_update():
@@ -1336,8 +1292,7 @@ class BoundingBoxLayer(Layer):
                 edge_width=edge_width,
                 edge_color=edge_color,
                 face_color=face_color,
-                z_index=z_index,
-                z_refresh=False,
+                z_index=z_index
             )
             self._data_view._update_z_order()
             self.refresh_colors()
@@ -1351,8 +1306,8 @@ class BoundingBoxLayer(Layer):
             If set to True, the function will recalculate the color cycle map
             or colormap (whichever is being used). If set to False, the function
             will use the current color cycle map or color map. For example, if you
-            are adding/modifying shapes and want them to be colored with the same
-            mapping as the other shapes (i.e., the new shapes shouldn't affect
+            are adding/modifying bounding boxes and want them to be colored with the same
+            mapping as the other bounding boxes (i.e., the new bounding boxes shouldn't affect
             the color cycle map or colormap), set update_color_mapping=False.
             Default value is False.
         """
@@ -1374,8 +1329,8 @@ class BoundingBoxLayer(Layer):
             If set to True, the function will recalculate the color cycle map
             or colormap (whichever is being used). If set to False, the function
             will use the current color cycle map or color map. For example, if you
-            are adding/modifying shapes and want them to be colored with the same
-            mapping as the other shapes (i.e., the new shapes shouldn't affect
+            are adding/modifying bounding boxes and want them to be colored with the same
+            mapping as the other bounding boxes (i.e., the new bounding boxes shouldn't affect
             the color cycle map or colormap), set update_color_mapping=False.
             Default value is False.
         """
@@ -1388,13 +1343,13 @@ class BoundingBoxLayer(Layer):
                 color_event = getattr(self.events, f'{attribute}_color')
                 color_event()
 
-    def _get_new_shape_color(self, adding: int, attribute: str):
-        """Get the color for the shape(s) to be added.
+    def _get_new_bounding_box_color(self, adding: int, attribute: str):
+        """Get the color for the bounding box(es) to be added.
 
         Parameters
         ----------
         adding : int
-            the number of shapes that were added
+            the number of bounding boxes that were added
             (and thus the number of color entries to add)
         attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
@@ -1403,7 +1358,7 @@ class BoundingBoxLayer(Layer):
         Returns
         -------
         new_colors : (N, 4) array
-            (Nx4) RGBA array of colors for the N new shapes
+            (Nx4) RGBA array of colors for the N new bounding boxes
         """
         color_mode = getattr(self, f'_{attribute}_color_mode')
         if color_mode == ColorMode.DIRECT:
@@ -1455,8 +1410,8 @@ class BoundingBoxLayer(Layer):
             If set to True, the function will recalculate the color cycle map
             or colormap (whichever is being used). If set to False, the function
             will use the current color cycle map or color map. For example, if you
-            are adding/modifying shapes and want them to be colored with the same
-            mapping as the other shapes (i.e., the new shapes shouldn't affect
+            are adding/modifying bounding boxes and want them to be colored with the same
+            mapping as the other bounding boxes (i.e., the new bounding boxes shouldn't affect
             the color cycle map or colormap), set update_color_mapping=False.
             Default value is False.
 
@@ -1559,36 +1514,36 @@ class BoundingBoxLayer(Layer):
         self._data_view.slice_key = slice_key
 
     def _update_thumbnail(self, event=None):
-        """Update thumbnail with current shapes and colors."""
+        """Update thumbnail with current bounding boxes and colors."""
 
-        # don't update the thumbnail if dragging a shape
+        # don't update the thumbnail if dragging a bounding box
         if self._is_moving is False and self._allow_thumbnail_update is True:
             # calculate min vals for the vertices and pad with 0.5
-            # the offset is needed to ensure that the top left corner of the shapes
+            # the offset is needed to ensure that the top left corner of the bounding boxes
             # corresponds to the top left corner of the thumbnail
             de = self._extent_data
             offset = np.array([de[0, d] for d in self._dims_displayed]) + 0.5
             # calculate range of values for the vertices and pad with 1
-            # padding ensures the entire shape can be represented in the thumbnail
+            # padding ensures the entire bounding box can be represented in the thumbnail
             # without getting clipped
-            shape = np.ceil(
+            bounding_box = np.ceil(
                 [de[1, d] - de[0, d] + 1 for d in self._dims_displayed]
             ).astype(int)
             zoom_factor = np.divide(
-                self._thumbnail_shape[:2], shape[-2:]
+                self._thumbnail_shape[:2], bounding_box[-2:]
             ).min()
 
             colormapped = self._data_view.to_colors(
                 colors_shape=self._thumbnail_shape[:2],
                 zoom_factor=zoom_factor,
                 offset=offset[-2:],
-                max_shapes=self._max_shapes_thumbnail,
+                max_bounding_boxes=self._max_bounding_boxes_thumbnail,
             )
 
             self.thumbnail = colormapped
 
     def remove_selected(self):
-        """Remove any selected shapes."""
+        """Remove any selected bounding boxes."""
         index = list(self.selected_data)
         to_remove = sorted(index, reverse=True)
         for ind in to_remove:
@@ -1610,15 +1565,15 @@ class BoundingBoxLayer(Layer):
         self._finish_drawing()
 
     def interaction_box(self, index):
-        """Create the interaction box around a shape or list of shapes.
+        """Create the interaction box around a bounding box or list of bounding boxes.
         If a single index is passed then the boudning box will be inherited
-        from that shapes interaction box. If list of indices is passed it will
+        from that bounding boxes interaction box. If list of indices is passed it will
         be computed directly.
 
         Parameters
         ----------
         index : int | list
-            Index of a single shape, or a list of shapes around which to
+            Index of a single bounding box, or a list of bounding boxes around which to
             construct the interaction box
 
         Returns
@@ -1664,7 +1619,7 @@ class BoundingBoxLayer(Layer):
         Parameters
         ----------
         scale : float, list
-            scalar or list specifying rescaling of shape.
+            scalar or list specifying rescaling of bounding box.
         center : list
             coordinates of center of rotation.
         """
@@ -1708,9 +1663,9 @@ class BoundingBoxLayer(Layer):
 
         Returns
         -------
-        shape : int | None
-            Index of shape if any that is at the coordinates. Returns `None`
-            if no shape is found.
+        bounding box : int | None
+            Index of bounding box if any that is at the coordinates. Returns `None`
+            if no bounding box is found.
         vertex : int | None
             Index of vertex if any that is at the coordinates. Returns `None`
             if no vertex is found.
@@ -1723,7 +1678,7 @@ class BoundingBoxLayer(Layer):
 
         coord = [position[i] for i in self._dims_displayed]
 
-        # Check selected shapes
+        # Check selected bounding boxes
         value = None
         selected_index = list(self.selected_data)
         if len(selected_index) > 0:
@@ -1740,7 +1695,7 @@ class BoundingBoxLayer(Layer):
                 if len(matches[0]) > 0:
                     value = (selected_index[0], matches[0][-1])
             elif self._mode == Mode.DIRECT:
-                # Check if inside vertex of shape
+                # Check if inside vertex of bounding box
                 inds = np.isin(self._data_view.displayed_index, selected_index)
                 vertices = self._data_view.displayed_vertices[inds]
                 distances = abs(vertices - coord)
@@ -1752,17 +1707,17 @@ class BoundingBoxLayer(Layer):
                 matches = np.all(distances <= sizes, axis=1).nonzero()[0]
                 if len(matches) > 0:
                     index = inds.nonzero()[0][matches[-1]]
-                    shape = self._data_view.displayed_index[index]
+                    bounding_box = self._data_view.displayed_index[index]
                     vals, idx = np.unique(
                         self._data_view.displayed_index, return_index=True
                     )
-                    shape_in_list = list(vals).index(shape)
-                    value = (shape, index - idx[shape_in_list])
+                    bounding_box_in_list = list(vals).index(bounding_box)
+                    value = (bounding_box, index - idx[bounding_box_in_list])
 
         if value is None:
-            # Check if mouse inside shape
-            shape = self._data_view.inside(coord)
-            value = (shape, None)
+            # Check if mouse inside bounding box
+            bounding_box = self._data_view.inside(coord)
+            value = (bounding_box, None)
 
         return value
 
@@ -1785,7 +1740,7 @@ class BoundingBoxLayer(Layer):
         self.refresh()
 
     def _set_highlight(self, force=False):
-        """Render highlights of shapes.
+        """Render highlights of bounding boxes.
 
         Includes boundaries, vertices, interaction boxes, and the drag
         selection box when appropriate.
@@ -1795,7 +1750,7 @@ class BoundingBoxLayer(Layer):
         force : bool
             Bool that forces a redraw to occur when `True`
         """
-        # Check if any shape or vertex ids have changed since last call
+        # Check if any bounding box or vertex ids have changed since last call
         if (
             self.selected_data == self._selected_data_stored
             and np.all(self._value == self._value_stored)
@@ -1865,23 +1820,23 @@ class BoundingBoxLayer(Layer):
         text_coords : (N x D) np.ndarray
             Array of coordindates for the N text elements in view
         """
-        # get the coordinates of the vertices for the shapes in view
-        in_view_shapes_coords = [
+        # get the coordinates of the vertices for the bounding boxes in view
+        in_view_bounding_boxes_coords = [
             self._data_view.data[i] for i in self._indices_view
         ]
 
         # get the coordinates for the dimensions being displayed
         sliced_in_view_coords = [
             position[:, self._dims_displayed]
-            for position in in_view_shapes_coords
+            for position in in_view_bounding_boxes_coords
         ]
 
         return self.text.compute_text_coords(
             sliced_in_view_coords, self._ndisplay
         )
 
-    def _outline_shapes(self):
-        """Find outlines of any selected or hovered shapes.
+    def _outline_bounding_boxes(self):
+        """Find outlines of any selected or hovered bounding boxes.
 
         Returns
         -------
@@ -1956,7 +1911,7 @@ class BoundingBoxLayer(Layer):
                     Mode.ADD_BOUNDING_BOX
                 ]
             ):
-                # If in one of these mode show the vertices of the shape itself
+                # If in one of these mode show the vertices of the bounding box itself
                 inds = np.isin(
                     self._data_view.displayed_index, list(self.selected_data)
                 )
@@ -2010,6 +1965,8 @@ class BoundingBoxLayer(Layer):
         if not self.editable:
             self.mode = Mode.PAN_ZOOM
 
-qt_bounding_box_control.register_layer_control(BoundingBoxLayer)
-vispy_bounding_box_layer.register_layer_visual(BoundingBoxLayer)
-_bounding_boxes_key_bindings.register_bounding_boxes_actions(BoundingBoxLayer)
+
+# This is an ugly solution to register every component correctly
+register_layer_control(BoundingBoxLayer)
+register_layer_visual(BoundingBoxLayer)
+register_bounding_boxes_actions(BoundingBoxLayer)

@@ -1,3 +1,4 @@
+# An EXACT copy of napari.layers.shapes._mesh
 import numpy as np
 
 

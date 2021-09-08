@@ -1,56 +1,55 @@
+# A copy of napari.layers.shapes._shape_list
 import numpy as np
 from napari.layers.shapes._shapes_utils import triangles_intersect_box, inside_triangles
 from napari.utils.translations import trans
-from _bounding_box import BoundingBox
-from _mesh import Mesh
+from .bounding_box import BoundingBox
+from ._mesh import Mesh
 
 
 class BoundingBoxList:
-    """List of shapes class.
+    """List of bounding boxes class.
 
     Parameters
     ----------
     data : list
-        List of Shape objects
+        List of BoundingBox objects
     ndisplay : int
         Number of displayed dimensions.
 
     Attributes
     ----------
     bounding_boxes : (N, ) list
-        Shape objects.
+        Bounding box objects.
     data : (N, ) list of (M, D) array
-        Data arrays for each shape.
+        Data arrays for each bounding box.
     ndisplay : int
         Number of displayed dimensions.
     slice_keys : (N, 2, P) array
-        Array of slice keys for each shape. Each slice key has the min and max
+        Array of slice keys for each bounding box. Each slice key has the min and max
         values of the P non-displayed dimensions, useful for slicing
-        multidimensional shapes. If the both min and max values of shape are
-        equal then the shape is entirely contained within the slice specified
+        multidimensional bounding boxes. If the both min and max values of bounding box are
+        equal then the bounding box is entirely contained within the slice specified
         by those values.
-    shape_types : (N, ) list of str
-        Name of shape type for each shape.
     edge_color : (N x 4) np.ndarray
-        Array of RGBA edge colors for each shape.
+        Array of RGBA edge colors for each bounding box.
     face_color : (N x 4) np.ndarray
-        Array of RGBA face colors for each shape.
+        Array of RGBA face colors for each bounding box.
     edge_widths : (N, ) list of float
-        Edge width for each shape.
+        Edge width for each bounding box.
     z_indices : (N, ) list of int
-        z-index for each shape.
+        z-index for each bounding box.
 
     Notes
     -----
     _vertices : np.ndarray
-        Mx2 array of all displayed vertices from all shapes
+        Mx2 array of all displayed vertices from all bounding boxes
     _index : np.ndarray
-        Length M array with the index (0, ..., N-1) of each shape that each
+        Length M array with the index (0, ..., N-1) of each bounding box that each
         vertex corresponds to
     _z_index : np.ndarray
-        Length N array with z_index of each shape
+        Length N array with z_index of each bounding box
     _z_order : np.ndarray
-        Length N array with z_order of each shape. This must be a permutation
+        Length N array with z_order of each bounding box. This must be a permutation
         of (0, ..., N-1).
     _mesh : Mesh
         Mesh object containing all the mesh information that will ultimately
@@ -80,7 +79,7 @@ class BoundingBoxList:
 
     @property
     def data(self):
-        """list of (M, D) array: data arrays for each shape."""
+        """list of (M, D) array: data arrays for each bounding box."""
         return [bb.data for bb in self.bounding_boxes]
 
     @property
@@ -106,12 +105,12 @@ class BoundingBoxList:
 
     @property
     def slice_keys(self):
-        """(N, 2, P) array: slice key for each shape."""
+        """(N, 2, P) array: slice key for each bounding box."""
         return np.array([bb.slice_key for bb in self.bounding_boxes])
 
     @property
     def edge_color(self):
-        """(N x 4) np.ndarray: Array of RGBA edge colors for each shape"""
+        """(N x 4) np.ndarray: Array of RGBA edge colors for each bounding box"""
         return self._edge_color
 
     @edge_color.setter
@@ -120,7 +119,7 @@ class BoundingBoxList:
 
     @property
     def face_color(self):
-        """(N x 4) np.ndarray: Array of RGBA face colors for each shape"""
+        """(N x 4) np.ndarray: Array of RGBA face colors for each bounding box"""
         return self._face_color
 
     @face_color.setter
@@ -134,19 +133,19 @@ class BoundingBoxList:
         ----------
         colors : (N, 4) np.ndarray
             The value for setting edge or face_color. There must
-            be one color for each shape
+            be one color for each bounding box
         attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color or 'face' for face_color.
         """
-        n_shapes = len(self.data)
-        if not np.all(colors.shape == (n_shapes, 4)):
+        n_bounding_boxes = len(self.data)
+        if not np.all(colors.shape == (n_bounding_boxes, 4)):
             raise ValueError(
                 trans._(
-                    '{attribute}_color must have shape ({n_shapes}, 4)',
+                    '{attribute}_color must have shape ({n_bounding_boxes}, 4)',
                     deferred=True,
                     attribute=attribute,
-                    n_shapes=n_shapes,
+                    n_bounding_boxes=n_bounding_boxes,
                 )
             )
 
@@ -158,17 +157,17 @@ class BoundingBoxList:
 
     @property
     def edge_widths(self):
-        """list of float: edge width for each shape."""
+        """list of float: edge width for each bounding box."""
         return [bb.edge_width for bb in self.bounding_boxes]
 
     @property
     def z_indices(self):
-        """list of int: z-index for each shape."""
+        """list of int: z-index for each bounding box."""
         return [bb.z_index for bb in self.bounding_boxes]
 
     @property
     def slice_key(self):
-        """list: slice key for slicing n-dimensional shapes."""
+        """list: slice key for slicing n-dimensional bounding boxes."""
         return self._slice_key
 
     @slice_key.setter
@@ -180,12 +179,7 @@ class BoundingBoxList:
 
     def _update_displayed(self):
         """Update the displayed data based on the slice key."""
-        # The list slice key is repeated to check against both the min and
-        # max values stored in the shapes slice key.
-        # slice_key = np.array([self.slice_key, self.slice_key])
         slice_key = np.array(self.slice_key)
-        # Slice key must exactly match mins and maxs of shape as then the
-        # shape is entirely contained within the current slice.
         if len(self.bounding_boxes) > 0:
             self._displayed = np.all(np.logical_and(self.slice_keys[:, 0, :] <= slice_key, slice_key <= self.slice_keys[:, 1, :]), axis=1)
         else:
@@ -218,28 +212,27 @@ class BoundingBoxList:
         bounding_box_index=None,
         z_refresh=True,
     ):
-        """Adds a single Shape object
+        """Adds a single BoundingBox object
 
         Parameters
         ----------
-        bounding_box : subclass Shape
-            Must be a subclass of Shape, one of "{'Line', 'Rectangle',
-            'Ellipse', 'Path', 'Polygon'}"
+        bounding_box : BoundingBox
+            The bounding box to add
         bounding_box_index : None | int
-            If int then edits the shape date at current index. To be used in
+            If int then edits the bounding box date at current index. To be used in
             conjunction with `remove` when renumber is `False`. If None, then
-            appends a new shape to end of shapes list
+            appends a new bounding box to end of bounding boxes list
         z_refresh : bool
             If set to true, the mesh elements are reindexed with the new z order.
-            When shape_index is provided, z_refresh will be overwritten to false,
+            When bounding_box_index is provided, z_refresh will be overwritten to false,
             as the z indices will not change.
-            When adding a batch of shapes, set to false  and then call
-            ShapesList._update_z_order() once at the end.
+            When adding a batch of bounding boxes, set to false  and then call
+            BoundingBoxList._update_z_order() once at the end.
         """
         if not issubclass(type(bounding_box), BoundingBox):
             raise ValueError(
                 trans._(
-                    'shape must be subclass of BoundingBox',
+                    'bounding_box must be subclass of BoundingBox',
                     deferred=True,
                 )
             )
@@ -342,7 +335,7 @@ class BoundingBoxList:
             self._update_z_order()
 
     def remove_all(self):
-        """Removes all shapes"""
+        """Removes all bounding boxes"""
         self.bounding_boxes = []
         self._vertices = np.empty((0, self.ndisplay))
         self._index = np.empty((0), dtype=int)
@@ -352,16 +345,16 @@ class BoundingBoxList:
         self._update_displayed()
 
     def remove(self, index, renumber=True):
-        """Removes a single shape located at index.
+        """Removes a single bounding box located at index.
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be removed.
+            Location in list of the bounding box to be removed.
         renumber : bool
-            Bool to indicate whether to renumber all shapes or not. If not the
-            expectation is that this shape is being immediately added back to the
-            list using `add_shape`.
+            Bool to indicate whether to renumber all bounding boxes or not. If not the
+            expectation is that this bounding box is being immediately added back to the
+            list using `add`.
         """
         indices = self._index != index
         self._vertices = self._vertices[indices]
@@ -403,19 +396,19 @@ class BoundingBoxList:
             self._update_z_order()
 
     def _update_mesh_vertices(self, index, edge=False, face=False):
-        """Updates the mesh vertex data and vertex data for a single shape
+        """Updates the mesh vertex data and vertex data for a single bounding box
         located at index.
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         edge : bool
             Bool to indicate whether to update mesh vertices corresponding to
             edges
         face : bool
             Bool to indicate whether to update mesh vertices corresponding to
-            faces and to update the underlying shape vertices
+            faces and to update the underlying bounding box vertices
         """
         bounding_box = self.bounding_boxes[index]
         if edge:
@@ -455,18 +448,14 @@ class BoundingBoxList:
     def edit(
         self, index, data, face_color=None, edge_color=None
     ):
-        """Updates the data of a single shape located at index. If
-        `new_type` is not None then converts the shape type to the new type
+        """Updates the data of a single bounding box located at index.
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         data : np.ndarray
             NxD array of vertices.
-        new_type : None | str | Shape
-            If string , must be one of "{'line', 'rectangle', 'ellipse',
-            'path', 'polygon'}".
         """
 
         bounding_box = self.bounding_boxes[index]
@@ -482,12 +471,12 @@ class BoundingBoxList:
         self._update_z_order()
 
     def update_edge_width(self, index, edge_width):
-        """Updates the edge width of a single shape located at index.
+        """Updates the edge width of a single bounding box located at index.
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         edge_width : float
             thickness of lines and edges.
         """
@@ -495,19 +484,19 @@ class BoundingBoxList:
         self._update_mesh_vertices(index, edge=True)
 
     def update_edge_color(self, index, edge_color, update=True):
-        """Updates the edge color of a single shape located at index.
+        """Updates the edge color of a single bounding box located at index.
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         edge_color : str | tuple
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements.
         update : bool
             If True, update the mesh with the new color property. Set to False to avoid
-            repeated updates when modifying multiple shapes. Default is True.
+            repeated updates when modifying multiple bounding boxes. Default is True.
         """
         self._edge_color[index] = edge_color
         indices = np.all(self._mesh.triangles_index == [index, 1], axis=1)
@@ -516,19 +505,19 @@ class BoundingBoxList:
             self._update_displayed()
 
     def update_face_color(self, index, face_color, update=True):
-        """Updates the face color of a single shape located at index.
+        """Updates the face color of a single bounding box located at index.
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         face_color : str | tuple
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements.
         update : bool
             If True, update the mesh with the new color property. Set to False to avoid
-            repeated updates when modifying multiple shapes. Default is True.
+            repeated updates when modifying multiple bounding boxes. Default is True.
         """
         self._face_color[index] = face_color
         indices = np.all(self._mesh.triangles_index == [index, 0], axis=1)
@@ -537,7 +526,7 @@ class BoundingBoxList:
             self._update_displayed()
 
     def update_dims_order(self, dims_order):
-        """Updates dimensions order for all shapes.
+        """Updates dimensions order for all bounding boxes.
 
         Parameters
         ----------
@@ -553,14 +542,14 @@ class BoundingBoxList:
         self._update_z_order()
 
     def update_z_index(self, index, z_index):
-        """Updates the z order of a single shape located at index.
+        """Updates the z order of a single bounding box located at index.
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         z_index : int
-            Specifier of z order priority. Shapes with higher z order are
+            Specifier of z order priority. Bounding boxes with higher z order are
             displayed ontop of others.
         """
         self.bounding_boxes[index].z_index = z_index
@@ -568,27 +557,27 @@ class BoundingBoxList:
         self._update_z_order()
 
     def shift(self, index, shift):
-        """Performs a 2D shift on a single shape located at index
+        """Performs a 2D shift on a single bounding box located at index
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         shift : np.ndarray
-            length 2 array specifying shift of shapes.
+            length 2 array specifying shift of bounding boxes.
         """
         self.bounding_boxes[index].shift(shift)
         self._update_mesh_vertices(index, edge=True, face=True)
 
     def scale(self, index, scale, center=None):
-        """Performs a scaling on a single shape located at index
+        """Performs a scaling on a single bounding box located at index
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         scale : float, list
-            scalar or list specifying rescaling of shape.
+            scalar or list specifying rescaling of bounding box.
         center : list
             length 2 list specifying coordinate of center of scaling.
         """
@@ -598,28 +587,13 @@ class BoundingBoxList:
         self.add(bounding_box, bounding_box_index=index)
         self._update_z_order()
 
-    def rotate(self, index, angle, center=None):
-        """Performs a rotation on a single shape located at index
-
-        Parameters
-        ----------
-        index : int
-            Location in list of the shape to be changed.
-        angle : float
-            angle specifying rotation of shape in degrees.
-        center : list
-            length 2 list specifying coordinate of center of rotation.
-        """
-        self.bounding_boxes[index].rotate(angle, center=center)
-        self._update_mesh_vertices(index, edge=True, face=True)
-
     def flip(self, index, axis, center=None):
-        """Performs an vertical flip on a single shape located at index
+        """Performs an vertical flip on a single bounding box located at index
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         axis : int
             integer specifying axis of flip. `0` flips horizontal, `1` flips
             vertical.
@@ -630,12 +604,12 @@ class BoundingBoxList:
         self._update_mesh_vertices(index, edge=True, face=True)
 
     def transform(self, index, transform):
-        """Performs a linear transform on a single shape located at index
+        """Performs a linear transform on a single bounding box located at index
 
         Parameters
         ----------
         index : int
-            Location in list of the shape to be changed.
+            Location in list of the bounding box to be changed.
         transform : np.ndarray
             2x2 array specifying linear transform.
         """
@@ -646,12 +620,12 @@ class BoundingBoxList:
         self._update_z_order()
 
     def outline(self, indices):
-        """Finds outlines of shapes listed in indices
+        """Finds outlines of bounding boxes listed in indices
 
         Parameters
         ----------
         indices : int | list
-            Location in list of the shapes to be outline. If list must be a
+            Location in list of the bounding boxes to be outline. If list must be a
             list of int
 
         Returns
@@ -703,10 +677,10 @@ class BoundingBoxList:
 
         return centers, offsets, triangles
 
-    def shapes_in_box(self, corners):
-        """Determines which shapes, if any, are inside an axis aligned box.
+    def bounding_boxes_in_box(self, corners):
+        """Determines which bounding boxes, if any, are inside an axis aligned box.
 
-        Looks only at displayed shapes
+        Looks only at displayed bounding boxes
 
         Parameters
         ----------
@@ -716,46 +690,47 @@ class BoundingBoxList:
 
         Returns
         -------
-        shapes : list
-            List of shapes that are inside the box.
+        bounding_boxes : list
+            List of bounding boxes that are inside the box.
         """
 
         triangles = self._mesh.vertices[self._mesh.displayed_triangles]
         intersects = triangles_intersect_box(triangles, corners)
-        shapes = self._mesh.displayed_triangles_index[intersects, 0]
-        shapes = np.unique(shapes).tolist()
+        bounding_boxes = self._mesh.displayed_triangles_index[intersects, 0]
+        bounding_boxes = np.unique(bounding_boxes).tolist()
 
-        return shapes
+        return bounding_boxes
 
     def inside(self, coord):
-        """Determines if any shape at given coord by looking inside triangle
-        meshes. Looks only at displayed shapes
+        """Determines if any bounding box at given coord by looking inside triangle
+        meshes. Looks only at displayed bounding boxes
 
         Parameters
         ----------
         coord : sequence of float
-            Image coordinates to check if any shapes are at.
+            Image coordinates to check if any bounding boxes are at.
 
         Returns
         -------
-        shape : int | None
-            Index of shape if any that is at the coordinates. Returns `None`
-            if no shape is found.
+        bounding_box : int | None
+            Index of bounding box if any that is at the coordinates. Returns `None`
+            if no bounding box is found.
         """
         triangles = self._mesh.vertices[self._mesh.displayed_triangles]
         indices = inside_triangles(triangles - coord)
-        shapes = self._mesh.displayed_triangles_index[indices, 0]
+        bounding_boxes = self._mesh.displayed_triangles_index[indices, 0]
 
-        if len(shapes) > 0:
+        if len(bounding_boxes) > 0:
             z_list = self._z_order.tolist()
-            order_indices = np.array([z_list.index(m) for m in shapes])
-            ordered_shapes = shapes[np.argsort(order_indices)]
-            return ordered_shapes[0]
+            order_indices = np.array([z_list.index(m) for m in bounding_boxes])
+            ordered_bounding_boxes = bounding_boxes[np.argsort(order_indices)]
+            return ordered_bounding_boxes[0]
         else:
             return None
 
     def to_masks(self, mask_shape=None, zoom_factor=1, offset=[0, 0]):
-        """Returns N binary masks, one for each shape, embedded in an array of
+        # TODO: check if works
+        """Returns N binary masks, one for each bounding box, embedded in an array of
         shape `mask_shape`.
 
         Parameters
@@ -774,7 +749,7 @@ class BoundingBoxList:
         -------
         masks : (N, M, P) np.ndarray
             Array where there is one binary mask of shape MxP for each of
-            N shapes
+            N bounding boxes
         """
         if mask_shape is None:
             mask_shape = self.displayed_vertices.max(axis=0).astype('int')
@@ -789,9 +764,10 @@ class BoundingBoxList:
         return masks
 
     def to_labels(self, labels_shape=None, zoom_factor=1, offset=[0, 0]):
-        """Returns a integer labels image, where each shape is embedded in an
+        # TODO: check if works
+        """Returns a integer labels image, where each bounding box is embedded in an
         array of shape labels_shape with the value of the index + 1
-        corresponding to it, and 0 for background. For overlapping shapes
+        corresponding to it, and 0 for background. For overlapping bounding boxes
         z-ordering will be respected.
 
         Parameters
@@ -810,7 +786,7 @@ class BoundingBoxList:
         -------
         labels : np.ndarray
             MxP integer array where each value is either 0 for background or an
-            integer up to N for points inside the corresponding shape.
+            integer up to N for points inside the corresponding bounding box.
         """
         if labels_shape is None:
             labels_shape = self.displayed_vertices.max(axis=0).astype(np.int)
@@ -826,12 +802,13 @@ class BoundingBoxList:
         return labels
 
     def to_colors(
-        self, colors_shape=None, zoom_factor=1, offset=[0, 0], max_shapes=None
+        self, colors_shape=None, zoom_factor=1, offset=[0, 0], max_bounding_boxes=None
     ):
-        """Rasterize shapes to an RGBA image array.
+        # TODO: check if works
+        """Rasterize bounding boxes to an RGBA image array.
 
-        Each shape is embedded in an array of shape `colors_shape` with the
-        RGBA value of the shape, and 0 for background. For overlapping shapes
+        Each bounding box is embedded in an array of shape `colors_shape` with the
+        RGBA value of the bounding box, and 0 for background. For overlapping bounding boxes
         z-ordering will be respected.
 
         Parameters
@@ -845,17 +822,17 @@ class BoundingBoxList:
         offset : 2-tuple
             Offset subtracted from coordinates before multiplying by the
             zoom_factor. Used for putting negative coordinates into the mask.
-        max_shapes : None | int
-            If provided, this is the maximum number of shapes that will be rasterized.
-            If the number of shapes in view exceeds max_shapes, max_shapes shapes
-            will be randomly selected from the in view shapes. If set to None, no
+        max_bounding_boxes : None | int
+            If provided, this is the maximum number of bounding boxes that will be rasterized.
+            If the number of bounding boxes in view exceeds max_bounding_boxes, max_bounding_boxes bounding boxes
+            will be randomly selected from the in view bounding boxes. If set to None, no
             maximum is applied. The default value is None.
 
         Returns
         -------
         colors : (N, M, 4) array
             rgba array where each value is either 0 for background or the rgba
-            value of the shape for points inside the corresponding shape.
+            value of the bounding box for points inside the corresponding bounding box.
         """
         if colors_shape is None:
             colors_shape = self.displayed_vertices.max(axis=0).astype(np.int)
@@ -864,14 +841,14 @@ class BoundingBoxList:
         colors[..., 3] = 1
 
         z_order = self._z_order[::-1]
-        shapes_in_view = np.argwhere(self._displayed)
-        z_order_in_view_mask = np.isin(z_order, shapes_in_view)
+        bounding_boxes_in_view = np.argwhere(self._displayed)
+        z_order_in_view_mask = np.isin(z_order, bounding_boxes_in_view)
         z_order_in_view = z_order[z_order_in_view_mask]
 
-        # If there are too many shapes to render responsively, just render
-        # the top max_shapes shapes
-        if max_shapes is not None and len(z_order_in_view) > max_shapes:
-            z_order_in_view = z_order_in_view[0:max_shapes]
+        # If there are too many bounding boxes to render responsively, just render
+        # the top max_bounding_boxes bounding boxes
+        if max_bounding_boxes is not None and len(z_order_in_view) > max_bounding_boxes:
+            z_order_in_view = z_order_in_view[0:max_bounding_boxes]
 
         for ind in z_order_in_view:
             mask = self.bounding_boxes[ind].to_mask(

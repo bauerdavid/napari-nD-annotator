@@ -53,12 +53,12 @@ class DataProjectionWidget(QLabel):
             if layer._mode in [Mode.ERASE, Mode.PAINT]:
                 if all(layer_dim == proj_dim for layer_dim, proj_dim in
                        zip(sorted(layer._dims_displayed), sorted(self.displayed_axes))):
-                    if 0 <= coordinates[self.displayed_axes[0]] < overlay.shape[0]:
+                    if 0 <= coordinates[self.displayed_axes[0]] < overlay.shape[1 if self.flip_image else 0]:
                         if self.flip_image:
                             overlay[:, coordinates[self.displayed_axes[0]]] = True
                         else:
                             overlay[coordinates[self.displayed_axes[0]]] = True
-                    if 0 <= coordinates[self.displayed_axes[1]] < overlay.shape[1]:
+                    if 0 <= coordinates[self.displayed_axes[1]] < overlay.shape[0 if self.flip_image else 1]:
                         if self.flip_image:
                             overlay[coordinates[self.displayed_axes[1]]] = True
                         else:
@@ -67,14 +67,14 @@ class DataProjectionWidget(QLabel):
                     for dim in layer._dims_displayed:
                         if dim == self.displayed_axes[0]:
                             start = max(coordinates[dim] - layer.brush_size // 2, 0)
-                            end = min(max(coordinates[dim] + layer.brush_size // 2 + 1, 0), overlay.shape[0])
+                            end = min(max(coordinates[dim] + layer.brush_size // 2 + 1, 0), overlay.shape[1 if self.flip_image else 0])
                             if self.flip_image and coordinates[self.displayed_axes[1]] < overlay.shape[0]:
                                 overlay[coordinates[self.displayed_axes[1]], start:end] = True
                             elif coordinates[self.displayed_axes[1]] < overlay.shape[1]:
                                 overlay[start:end, coordinates[self.displayed_axes[1]]] = True
                         elif dim == self.displayed_axes[1]:
                             start = max(coordinates[dim] - layer.brush_size // 2, 0)
-                            end = min(max(coordinates[dim] + layer.brush_size // 2 + 1, 0), overlay.shape[1])
+                            end = min(max(coordinates[dim] + layer.brush_size // 2 + 1, 0), overlay.shape[0 if self.flip_image else 1])
                             if self.flip_image and coordinates[self.displayed_axes[0]] < overlay.shape[1]:
                                 overlay[start:end, coordinates[self.displayed_axes[0]]] = True
                             elif coordinates[self.displayed_axes[0]] < overlay.shape[0]:
@@ -113,12 +113,9 @@ class DataProjectionWidget(QLabel):
             else:
                 mask = (self.mask_colormap[self.mask_data[self.im_idx]]*255).astype(np.uint8)
                 mask[..., -1] = (mask.max(2) > 0).astype(np.uint8)*180
-                # mask = np.append(mask, alpha[..., np.newaxis], -1)
             if self.flip_image:
                 mask = np.transpose(mask, (1, 0, 2))
             mask = PILImage.fromarray(mask).convert(mode="RGBA")
-                # mask.putalpha(PILImage.fromarray((np.asarray(mask).max(2) > 0).astype(np.uint8)*180))
-            # mask = PILImage.fromarray(np.append(mask, np.ones(mask.shape[:2], np.uint8)*128, 2))
             icon = PILImage.alpha_composite(im, mask)
             icon = PILImage.alpha_composite(icon, self.overlay).convert("RGB")
             icon = np.asarray(icon)
@@ -127,9 +124,6 @@ class DataProjectionWidget(QLabel):
                 _icon = np.tile(_icon, (1, 1, 3))
             elif _icon.shape[-1] == 4:
                 _icon = _icon[..., :-1]
-            # scale = 64 / max(_icon.shape[1], _icon.shape[0])
-            # out_size = (int(_icon.shape[1] * scale), int(_icon.shape[0] * scale))
-            # _resized_icon = cv2.resize(_icon, out_size, interpolation=cv2.INTER_LANCZOS4)
             self.img = QImage(_icon, _icon.shape[1], _icon.shape[0],
                          _icon.shape[1] * 3, QImage.Format.Format_RGB888)
         pixmap = QPixmap()
@@ -150,7 +144,7 @@ class DataProjectionWidget(QLabel):
     def resizeEvent(self, a0: QResizeEvent) -> None:
         self.on_resize(a0.size())
 
-    def on_click(self, event):
+    def on_click(self, _):
         order = tuple(filter(lambda x: x not in self.displayed_axes, self.viewer.dims.order))
         order = order + tuple(self.displayed_axes)
         self.viewer.dims.order = order
@@ -160,7 +154,7 @@ class DataProjectionWidget(QLabel):
 
 
 class SliceDisplayWidget(QWidget):
-    def __init__(self, viewer, image_layer, mask_layer, channels_dim, *args, **kwargs):
+    def __init__(self, viewer, image_layer, mask_layer, channels_dim=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setObjectName("Projections")
         main_layout = QVBoxLayout()
@@ -175,7 +169,6 @@ class SliceDisplayWidget(QWidget):
             slider = QSlider(QtCore.Qt.Horizontal)
             slider.setMinimum(0)
             slider.setMaximum(image_layer.data.shape[dim])
-            # slider.setValue(viewer.dims.current_step[dim])
             slider.setSingleStep(1)
             slider.setFixedWidth(100)
             slider.valueChanged.connect(self.slider_callback(dim))
@@ -190,9 +183,6 @@ class SliceDisplayWidget(QWidget):
                 slider_widget.setVisible(False)
             self.sliders.append(slider)
         grid_layout = QGridLayout()
-        # for i in range(3):
-        #     for j in range(3):
-        #         grid_layout.addWidget(QLabel("%d-%d" %(i, j)), i, j)
         self.projections = []
         for dim_pair in itertools.combinations(range(image_layer.data.ndim), 2):
             if channels_dim in dim_pair:
@@ -202,7 +192,7 @@ class SliceDisplayWidget(QWidget):
                 flip = True
             else:
                 flip = False
-            slices = [viewer.dims.current_step[dim]-image_layer.translate[dim] if dim in image_layer._dims_not_displayed else 0 for dim in range(viewer.dims.ndim)]
+            slices = [int(viewer.dims.current_step[dim]-image_layer.translate[dim]) if dim in image_layer._dims_not_displayed else 0 for dim in range(viewer.dims.ndim)]
             projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, image_colormap=image_layer.colormap.colors, mask_colormap=mask_layer.colormap.colors, slices=slices, flip_image=flip)
             grid_layout.setRowStretch(len(self.projections)//3, 1)
             grid_layout.setColumnStretch(len(self.projections)%3, 1)
@@ -224,7 +214,6 @@ class SliceDisplayWidget(QWidget):
             return
 
         float_coordinates = layer.world_to_data(event.position)
-        # coordinates = np.floor(np.asarray(float_coordinates)).astype(int)
         coordinates = np.round(np.asarray(float_coordinates)).astype(int)
         for p in self.projections:
             p.update_overlay(layer, coordinates)
@@ -234,7 +223,7 @@ class SliceDisplayWidget(QWidget):
 
     def on_step_change(self, event=None, layers=None):
         for projection in self.projections:
-            projection.setSlices(*itertools.chain(*((dim, event.source.current_step[dim]-self.offset[dim]) for dim in event.source.not_displayed)))
+            projection.setSlices(*itertools.chain(*((dim, int(event.source.current_step[dim]-self.offset[dim])) for dim in event.source.not_displayed)))
 
     def update_layer(self, layer, event):
         self.show_crosshair(layer, event)
@@ -259,7 +248,7 @@ class SliceDisplayWidget(QWidget):
                 projection.setSlices(dim, val)
         return on_slider_change
 
-    def on_order_change(self, event):
+    def on_order_change(self, _):
         for dim, slider in enumerate(self.slider_widgets):
             slider.setVisible(dim in self.viewer.dims.order[-self.viewer.dims.ndisplay:])
         for p in self.projections:

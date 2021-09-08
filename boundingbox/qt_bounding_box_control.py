@@ -1,3 +1,4 @@
+# A copy of napari._qt.layer_controls.qt_shapes_controls
 from typing import Iterable
 
 from napari._qt.widgets.qt_color_swatch import QColorSwatchEdit
@@ -12,67 +13,52 @@ from napari.utils.events import disconnect_events
 from napari.utils.interactions import Shortcut
 from napari.utils.translations import trans
 
-from _bounding_box_constants import Mode
+from ._bounding_box_constants import Mode
 
 class QtBoundingBoxControls(QtLayerControls):
-    """Qt view and controls for the napari Shapes layer.
+    # TODO: review comments
+    """Qt view and controls for the napari BoundingBoxLayer layer.
 
     Parameters
     ----------
-    layer : napari.layers.Shapes
-        An instance of a napari Shapes layer.
+    layer : napari.layers.BoundingBoxLayer
+        An instance of a napari BoundingBoxLayer layer.
 
     Attributes
     ----------
     button_group : qtpy.QtWidgets.QButtonGroup
-        Button group for shapes layer modes
+        Button group for bounding boxes layer modes
         (SELECT, DIRECT, PAN_ZOOM, ADD_RECTANGLE, ADD_ELLIPSE, ADD_LINE,
         ADD_PATH, ADD_POLYGON, VERTEX_INSERT, VERTEX_REMOVE).
     delete_button : qtpy.QtWidgets.QtModePushButton
-        Button to delete selected shapes
-    direct_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to select individual vertices in shapes.
+        Button to delete selected bounding boxes
     edgeColorSwatch : qtpy.QtWidgets.QFrame
         Thumbnail display of points edge color.
     edgeComboBox : qtpy.QtWidgets.QComboBox
         Drop down list allowing user to set edge color of points.
     ellipse_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to add ellipses to shapes layer.
+        Button to add ellipses to bounding boxes layer.
     faceColorSwatch : qtpy.QtWidgets.QFrame
         Thumbnail display of points face color.
     faceComboBox : qtpy.QtWidgets.QComboBox
         Drop down list allowing user to set face color of points.
     grid_layout : qtpy.QtWidgets.QGridLayout
         Layout of Qt widget controls for the layer.
-    layer : napari.layers.Shapes
-        An instance of a napari Shapes layer.
-    line_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to add lines to shapes layer.
-    move_back_button : qtpy.QtWidgets.QtModePushButton
-        Button to move selected shape(s) to the back.
-    move_front_button : qtpy.QtWidgets.QtModePushButton
-        Button to move shape(s) to the front.
+    layer : napari.layers.BoundingBoxLayer
+        An instance of a napari BoundingBoxLayer layer.
     panzoom_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to pan/zoom shapes layer.
-    path_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to add paths to shapes layer.
-    polygon_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to add polygons to shapes layer.
-    rectangle_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to add rectangles to shapes layer.
+        Button to pan/zoom bounding boxes layer.
+    bounding_box_button : qtpy.QtWidgets.QtModeRadioButton
+        Button to add rectangles to bounding boxes layer.
     select_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to select shapes.
-    vertex_insert_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to insert vertex into shape.
-    vertex_remove_button : qtpy.QtWidgets.QtModeRadioButton
-        Button to remove vertex from shapes.
+        Button to select bounding boxes.
     widthSlider : qtpy.QtWidgets.QSlider
-        Slider controlling line edge width of shapes.
+        Slider controlling line edge width of bounding boxes.
 
     Raises
     ------
     ValueError
-        Raise error if shapes mode is not recognized.
+        Raise error if bounding boxes mode is not recognized.
     """
 
     def __init__(self, layer):
@@ -176,7 +162,7 @@ class QtBoundingBoxControls(QtLayerControls):
             'delete_shape',
             slot=self.layer.remove_selected,
             tooltip=trans._(
-                "Delete selected shapes ({shortcut})",
+                "Delete selected bounding boxes ({shortcut})",
                 shortcut=Shortcut('Backspace').platform,
             ),
         )
@@ -228,19 +214,12 @@ class QtBoundingBoxControls(QtLayerControls):
         self.grid_layout.setSpacing(4)
 
     def _on_mode_change(self, event):
-        """Update ticks in checkbox widgets when shapes layer mode changed.
+        """Update ticks in checkbox widgets when bounding boxes layer mode changed.
 
-        Available modes for shapes layer are:
+        Available modes for bounding boxes layer are:
         * SELECT
-        * DIRECT
         * PAN_ZOOM
-        * ADD_RECTANGLE
-        * ADD_ELLIPSE
-        * ADD_LINE
-        * ADD_PATH
-        * ADD_POLYGON
-        * VERTEX_INSERT
-        * VERTEX_REMOVE
+        * ADD_BOUNDING_BOX
 
         Parameters
         ----------
@@ -250,7 +229,7 @@ class QtBoundingBoxControls(QtLayerControls):
         Raises
         ------
         ValueError
-            Raise error if event.mode is not ADD, PAN_ZOOM, or SELECT.
+            Raise error if event.mode is not ADD_BOUNDING_BOX, PAN_ZOOM, or SELECT.
         """
         mode_buttons = {
             Mode.SELECT: self.select_button,
@@ -266,46 +245,46 @@ class QtBoundingBoxControls(QtLayerControls):
             )
 
     def changeFaceColor(self, color: np.ndarray):
-        """Change face color of shapes.
+        """Change face color of bounding boxes.
 
         Parameters
         ----------
         color : np.ndarray
-            Face color for shapes, color name or hex string.
+            Face color for bounding boxes, color name or hex string.
             Eg: 'white', 'red', 'blue', '#00ff00', etc.
         """
         with self.layer.events.current_face_color.blocker():
             self.layer.current_face_color = color
 
     def changeEdgeColor(self, color: np.ndarray):
-        """Change edge color of shapes.
+        """Change edge color of bounding boxes.
 
         Parameters
         ----------
         color : np.ndarray
-            Edge color for shapes, color name or hex string.
+            Edge color for bounding boxes, color name or hex string.
             Eg: 'white', 'red', 'blue', '#00ff00', etc.
         """
         with self.layer.events.current_edge_color.blocker():
             self.layer.current_edge_color = color
 
     def changeWidth(self, value):
-        """Change edge line width of shapes on the layer model.
+        """Change edge line width of bounding boxes on the layer model.
 
         Parameters
         ----------
         value : float
-            Line width of shapes.
+            Line width of bounding boxes.
         """
         self.layer.current_edge_width = float(value) / 2
 
     def changeOpacity(self, value):
-        """Change opacity value of shapes on the layer model.
+        """Change opacity value of bounding boxes on the layer model.
 
         Parameters
         ----------
         value : float
-            Opacity value for shapes.
+            Opacity value for bounding boxes.
             Input range 0 - 100 (transparent to fully opaque).
         """
         with self.layer.events.blocker(self._on_opacity_change):

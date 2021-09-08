@@ -1,10 +1,11 @@
+# A copy of napari.layers.shapes._shapes_models.shape
 from abc import ABC, abstractmethod
 from copy import copy
 
 import numpy as np
 from napari.utils.translations import trans
 
-from _bounding_box_utils import (
+from ._bounding_box_utils import (
     is_collinear,
     path_to_mask,
     poly_to_mask,
@@ -14,16 +15,15 @@ from _bounding_box_utils import (
 
 LOG_DEBUG = True
 class BoundingBox(ABC):
-    """Base class for a single shape
-
+    """Class for a single bounding box
     Parameters
     ----------
     data : (N, D) array
-        Vertices specifying the shape.
+        Vertices specifying the bounding box.
     edge_width : float
-        thickness of lines and edges.
+        thickness of  edges.
     z_index : int
-        Specifier of z order priority. Shapes with higher z order are displayed
+        Specifier of z order priority. Bounding boxes with higher z order are displayed
         ontop of others.
     dims_order : (D,) list
         Order that the dimensions are to be rendered in.
@@ -33,54 +33,44 @@ class BoundingBox(ABC):
     Attributes
     ----------
     data : (N, D) array
-        Vertices specifying the shape.
-    data_displayed : (N, 2) array
-        Vertices of the shape that are currently displayed. Only 2D rendering
-        currently supported.
+        Vertices specifying the bounding box.
+    data_displayed : (N, 2) or (N, 3) array
+        Vertices of the bounding box that are currently displayed.
     edge_width : float
         thickness of lines and edges.
-    name : str
-        Name of shape type.
     z_index : int
-        Specifier of z order priority. Shapes with higher z order are displayed
+        Specifier of z order priority. Bounding boxes with higher z order are displayed
         ontop of others.
     dims_order : (D,) list
         Order that the dimensions are rendered in.
     ndisplay : int
-        Number of dimensions to be displayed, must be 2 as only 2D rendering
-        currently supported.
-    displayed : tuple
-        List of dimensions that are displayed.
-    not_displayed : tuple
-        List of dimensions that are not displayed.
+        Number of dimensions to be displayed.
     slice_key : (2, M) array
         Min and max values of the M non-displayed dimensions, useful for
-        slicing multidimensional shapes.
+        slicing multidimensional bounding boxes.
 
     Notes
     -----
-    _closed : bool
-        Bool if shape edge is a closed path or not
     _box : np.ndarray
         9x2 array of vertices of the interaction box. The first 8 points are
         the corners and midpoints of the box in clockwise order starting in the
         upper-left corner. The last point is the center of the box
     _face_vertices : np.ndarray
-        Qx2 array of vertices of all triangles for the shape face
+        Qx2 array of vertices of all triangles for the bounding box face
     _face_triangles : np.ndarray
-        Px3 array of vertex indices that form the triangles for the shape face
+        Px3 array of vertex indices that form the triangles for the bounding box face
     _edge_vertices : np.ndarray
-        Rx2 array of centers of vertices of triangles for the shape edge.
+        Rx2 array of centers of vertices of triangles for the bounding box edge.
         These values should be added to the scaled `_edge_offsets` to get the
         actual vertex positions. The scaling corresponds to the width of the
         edge
     _edge_offsets : np.ndarray
-        Sx2 array of offsets of vertices of triangles for the shape edge. For
+        Sx2 array of offsets of vertices of triangles for the bounding box edge. For
         These values should be scaled and added to the `_edge_vertices` to get
         the actual vertex positions. The scaling corresponds to the width of
         the edge
     _edge_triangles : np.ndarray
-        Tx3 array of vertex indices that form the triangles for the shape edge
+        Tx3 array of vertex indices that form the triangles for the bounding box edge
     _filled : bool
         Flag if array is filled or not.
     _use_face_vertices : bool
@@ -108,14 +98,12 @@ class BoundingBox(ABC):
         self._edge_triangles = np.empty((0, 3), dtype=np.uint32)
         self._box = np.empty((9, 2))
 
-        # self._closed = True
         self._filled = True
         self.data = data
         self._use_face_vertices = False
         self.edge_width = edge_width
         self.z_index = z_index
         self.name = 'bounding box'
-        self._closed = True
 
     @property
     def data(self):
@@ -155,7 +143,6 @@ class BoundingBox(ABC):
         else:
             ordered_vertices = self.data_displayed[
                 [
-                    # 0, 1, 3, 2, 0, 4, 6, 2, 6, 7, 3, 7, 5, 1, 5, 4
                     0, 1, 3, 2, 0, 4, 6, 2, 3, 7, 6, 4, 5, 7, 3, 1, 5
                 ]
             ]
@@ -224,7 +211,7 @@ class BoundingBox(ABC):
 
     @property
     def data_displayed(self):
-        """(N, 2) array: Vertices of the shape that are currently displayed."""
+        """(N, 2) or (N, 3) array: Vertices of the bounding box that are currently displayed."""
         displayed = np.unique(self.data[:, self.dims_displayed], axis=0)
         if len(self.dims_displayed) == 2:
             return find_corners(displayed)
@@ -256,7 +243,7 @@ class BoundingBox(ABC):
 
     @property
     def z_index(self):
-        """int: z order priority of shape. Shapes with higher z order displayed
+        """int: z order priority of bounding box. Bounding boxes with higher z order displayed
         ontop of others.
         """
         return self._z_index
@@ -271,7 +258,7 @@ class BoundingBox(ABC):
         Parameters
         ----------
         data : np.ndarray
-            Nx2 or Nx3 array specifying the shape to be triangulated
+            Nx2 or Nx3 array specifying the bounding box to be triangulated
         closed : bool
             Bool which determines if the edge is closed or not
         face : bool
@@ -323,7 +310,7 @@ class BoundingBox(ABC):
             self._face_triangles = np.empty((0, 3), dtype=np.uint32)
 
     def transform(self, transform):
-        """Performs a linear transform on the shape
+        """Performs a linear transform on the bounding box
 
         Parameters
         ----------
@@ -340,19 +327,19 @@ class BoundingBox(ABC):
         points = self.data_displayed
 
         centers, offsets, triangles = triangulate_edge(
-            points, closed=self._closed
+            points, closed=True
         )
         self._edge_vertices = centers
         self._edge_offsets = offsets
         self._edge_triangles = triangles
 
     def shift(self, shift):
-        """Performs a 2D shift on the shape
+        """Performs a 2D shift on the bounding box
 
         Parameters
         ----------
         shift : np.ndarray
-            length 2 array specifying shift of shapes.
+            length 2 array specifying shift of bounding boxes.
         """
         shift = np.array(shift)
         self._face_vertices = self._face_vertices + shift
@@ -360,84 +347,9 @@ class BoundingBox(ABC):
         self._box = self._box + shift
         self.data_displayed = self.data_displayed + shift
 
-
-    def scale(self, scale, center=None):
-        """Performs a scaling on the shape
-
-        Parameters
-        ----------
-        scale : float, list
-            scalar or list specifying rescaling of shape.
-        center : list
-            length 2 list specifying coordinate of center of scaling.
-        """
-
-        if isinstance(scale, (list, np.ndarray)):
-            transform = np.array([[scale[0], 0], [0, scale[1]]])
-        else:
-            transform = np.array([[scale, 0], [0, scale]])
-        if center is None:
-            self.transform(transform)
-        else:
-            self.shift(-center)
-            self.transform(transform)
-            self.shift(center)
-
-    def rotate(self, angle, center=None):
-        """Performs a rotation on the shape
-
-        Parameters
-        ----------
-        angle : float
-            angle specifying rotation of shape in degrees. CCW is positive.
-        center : list
-            length 2 list specifying coordinate of fixed point of the rotation.
-        """
-
-        theta = np.radians(angle)
-        transform = np.array(
-            [[np.cos(theta), np.sin(theta)], [-np.sin(theta), np.cos(theta)]]
-        )
-        if center is None:
-            self.transform(transform)
-        else:
-            self.shift(-center)
-            self.transform(transform)
-            self.shift(center)
-
-    def flip(self, axis, center=None):
-        """Performs a flip on the shape, either horizontal or vertical.
-
-        Parameters
-        ----------
-        axis : int
-            integer specifying axis of flip. `0` flips horizontal, `1` flips
-            vertical.
-        center : list
-            length 2 list specifying coordinate of center of flip axes.
-        """
-        if LOG_DEBUG:
-            print("flip")
-        if axis == 0:
-            transform = np.array([[1, 0], [0, -1]])
-        elif axis == 1:
-            transform = np.array([[-1, 0], [0, 1]])
-        else:
-            raise ValueError(
-                trans._(
-                    'Axis not recognized, must be one of "{{0, 1}}"',
-                    deferred=True,
-                )
-            )
-        if center is None:
-            self.transform(transform)
-        else:
-            self.shift(-center)
-            self.transform(transform)
-            self.shift(-center)
-
     def to_mask(self, mask_shape=None, zoom_factor=1, offset=[0, 0]):
-        """Convert the shape vertices to a boolean mask.
+        # TODO: might not be needed, if so, remove
+        """Convert the bounding box vertices to a boolean mask.
 
         Set points to `True` if they are lying inside the shape if the shape is
         filled, or if they are lying along the boundary of the shape if the
