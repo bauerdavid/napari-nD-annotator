@@ -116,11 +116,14 @@ class ContourWidget(FunctionGui):
                 if res[1] is not None:
                     contours.extend(res[0])
                     contour_idx.extend([idx]*len(res[0]))
+        translation = np.asarray(self.mask_layer.translate) - np.asarray(self.contour_layer.translate)
+        translation = translation.reshape(1, -1)
         shapes_data = []
         for contour, c_idx in zip(contours, contour_idx):
             contour = np.fliplr(np.squeeze(contour))
             contour_coords = np.tile(np.asarray(c_idx)[np.newaxis, :], (len(contour), 1))
             contour_coords[:, list(self.mask_layer._dims_displayed)] = contour
+            contour_coords += translation
             shapes_data.append(contour_coords)
         if self.out_mode.value == "append":
             for shape in shapes_data:
