@@ -11,7 +11,7 @@ class CreateBBoxesWidget(FunctionGui):
     def __init__(self):
         super().__init__(
             self.create_bboxes,
-            call_button="Create"
+            call_button="Create bounding boxes"
         )
     def create_bboxes(self, points: Points, image: Image, size=50) -> BoundingBoxLayer:
         if points is None or image is None:

@@ -52,7 +52,7 @@ class DataProjectionWidget(QLabel):
         if layer is not None and coordinates is not None:
             if layer._mode in [Mode.ERASE, Mode.PAINT]:
                 if all(layer_dim == proj_dim for layer_dim, proj_dim in
-                       zip(sorted(layer._dims_displayed), sorted(self.displayed_axes))):
+                       zip(sorted(self.viewer.dims.displayed), sorted(self.displayed_axes))):
                     if 0 <= coordinates[self.displayed_axes[0]] < overlay.shape[1 if self.flip_image else 0]:
                         if self.flip_image:
                             overlay[:, coordinates[self.displayed_axes[0]]] = True
@@ -64,7 +64,7 @@ class DataProjectionWidget(QLabel):
                         else:
                             overlay[:, coordinates[self.displayed_axes[1]]] = True
                 else:
-                    for dim in layer._dims_displayed:
+                    for dim in self.viewer.dims.displayed:
                         if dim == self.displayed_axes[0]:
                             start = max(coordinates[dim] - layer.brush_size // 2, 0)
                             end = min(max(coordinates[dim] + layer.brush_size // 2 + 1, 0), overlay.shape[1 if self.flip_image else 0])

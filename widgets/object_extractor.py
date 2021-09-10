@@ -13,9 +13,9 @@ class ObjectExtractorWidget(FunctionGui):
         self.viewer = viewer
         super().__init__(
             self.select_cells_widget,
-            call_button="Start",
+            call_button="List objects",
             param_options={
-                "channels_dim":{"max": viewer.dims.ndim-1}
+                "channels_dim": {"max": viewer.dims.ndim-1}
             }
         )
         self.image.native.currentIndexChanged.connect(self.set_has_channel)

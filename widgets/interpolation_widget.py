@@ -42,6 +42,12 @@ class InterpolationWidget(FunctionGui):
     def __init__(self, viewer):
         super().__init__(
             self.interpolate,
+            call_button="Interpolate",
+            param_options={
+                "n_contour_points": {
+                    "label": "# contour points"
+                }
+            }
         )
         self.viewer = viewer
         self.labels_layer.native.currentIndexChanged.connect(self.update_dim_limit)
@@ -51,7 +57,7 @@ class InterpolationWidget(FunctionGui):
             return
         data = labels_layer.data
         layer_slice_template = [
-            slice(None) if d in labels_layer._dims_displayed
+            slice(None) if d in self.viewer.dims.displayed
                 else None if d == dimension
                 else self.viewer.dims.current_step[d]
             for d in range(labels_layer.ndim)]

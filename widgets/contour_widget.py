@@ -1,6 +1,6 @@
 import math
 
-import cv2.cv2
+from cv2 import cv2
 import numpy as np
 from PyQt5.QtWidgets import QPushButton
 from magicgui.widgets import FunctionGui
@@ -18,6 +18,9 @@ class ContourWidget(FunctionGui):
             param_options={
                 "out_mode": {
                     "choices": [("Append", "append"), ("Overwrite", "overwrite")]
+                },
+                "autofill_objects": {
+                    "text": "autofill objects"
                 }
             }
 
@@ -102,9 +105,7 @@ class ContourWidget(FunctionGui):
 
     def create_contours(self, *args, **kwargs):
         data = self.mask_layer.data
-        orig_shape = data.shape
-        # data = np.moveaxis(data, self.layer._dims_displayed, [0, 1])
-        other_idx = np.meshgrid(*(range(data.shape[i]) if i not in self.mask_layer._dims_displayed else 0 for i in range(data.ndim)))
+        other_idx = np.meshgrid(*(range(data.shape[i]) if i not in self.viewer.dims.displayed else 0 for i in range(data.ndim)))
         other_idx = list(map(lambda x: x.reshape(-1), other_idx))
         label_values = np.unique(data)[1:]
         contours = []
@@ -113,29 +114,32 @@ class ContourWidget(FunctionGui):
             mask = data == val
             mask = mask.astype(np.uint8) * 255
             for idx in zip(*other_idx):
-                slice_idx = tuple(idx[i] if i not in self.mask_layer._dims_displayed else slice(None) for i in range(self.mask_layer.ndim))
+                slice_idx = tuple(idx[i] if i not in self.viewer.dims.displayed else slice(None) for i in range(self.mask_layer.ndim))
                 if mask[slice_idx].max() == 0:
                     continue
-                res = cv2.cv2.findContours(mask[slice_idx], cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+                res = cv2.findContours(mask[slice_idx], cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
                 if res[1] is not None:
-                    contours.extend(res[0])
-                    contour_idx.extend([idx]*len(res[0]))
+                    cnts = res[0]
+                    cnts = list(filter(lambda cnt: cv2.contourArea(cnt) > 0, cnts))
+                    if self.viewer.dims.displayed[0] > self.viewer.dims.displayed[1]:
+                        cnts = [np.flip(cnt, -1) for cnt in cnts]
+                    contours.extend(cnts)
+                    contour_idx.extend([idx]*len(cnts))
         translation = np.asarray(self.mask_layer.translate) - np.asarray(self.contour_layer.translate)
         translation = translation.reshape(1, -1)
         shapes_data = []
         for contour, c_idx in zip(contours, contour_idx):
             contour = np.fliplr(np.squeeze(contour))
             contour_coords = np.tile(np.asarray(c_idx)[np.newaxis, :], (len(contour), 1))
-            contour_coords[:, list(self.mask_layer._dims_displayed)] = contour
+            contour_coords[:, list(self.viewer.dims.displayed)] = contour
             contour_coords += translation
             shapes_data.append(contour_coords)
-        if self.out_mode.value == "append":
-            for shape in shapes_data:
-                self.contour_layer.add(shape, shape_type="polygon")
-        elif self.out_mode.value == "overwrite":
-            self.contour_layer.data = shapes_data
-        else:
+        if self.out_mode.value == "overwrite":
+            self.contour_layer.data = []
+        elif self.out_mode.value != "append":
             raise ValueError("out mode must be one of 'append' or 'overwrite'")
+        for shape in shapes_data:
+            self.contour_layer.add(shape, shape_type="polygon")
         self.contour_layer.refresh()
 
     def create_masks(self):
