@@ -88,3 +88,6 @@ class InterpolationWidget(FunctionGui):
             self.dimension.native.setMaximum(self.labels_layer.value.ndim)
         else:
             self.dimension.native.setMaximum(0)
+
+    def objectName(self):
+        return "interpolation"
