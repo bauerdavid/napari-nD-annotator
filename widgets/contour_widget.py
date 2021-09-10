@@ -57,8 +57,10 @@ class ContourWidget(FunctionGui):
             return
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        current_draw = np.zeros_like(layer.data[coordinates[:-2]], np.bool)
-        start_x, start_y = prev_x, prev_y = coordinates[-2:]
+        image_coords = tuple(coordinates[i] for i in range(len(coordinates)) if i in self.viewer.dims.displayed)
+        slice_dims = tuple(coordinates[i] if i in self.viewer.dims.not_displayed else slice(None) for i in range(len(coordinates)))
+        current_draw = np.zeros_like(layer.data[slice_dims], np.bool)
+        start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
         cx = np.clip(cx, 0, current_draw.shape[0] - 1)
         cy = np.clip(cy, 0, current_draw.shape[1] - 1)
@@ -68,8 +70,9 @@ class ContourWidget(FunctionGui):
 
             coordinates = layer.world_to_data(event.position)
             coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-            self.draw_line(prev_x, prev_y, coordinates[-2], coordinates[-1], layer.brush_size, current_draw)
-            prev_x, prev_y = coordinates[-2:]
+            image_coords = tuple(coordinates[i] for i in range(len(coordinates)) if i in self.viewer.dims.displayed)
+            self.draw_line(prev_x, prev_y, image_coords[-2], image_coords[-1], layer.brush_size, current_draw)
+            prev_x, prev_y = image_coords
             yield
         # s = np.asarray([[0, 1, 0],
         #                 [1, 1, 1],
@@ -78,14 +81,15 @@ class ContourWidget(FunctionGui):
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(
             max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        prev_x, prev_y = coordinates[-2:]
+        image_coords = tuple(coordinates[i] for i in range(len(coordinates)) if i in self.viewer.dims.displayed)
+        prev_x, prev_y = image_coords
         self.draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
         cx, cy = draw.disk((prev_x, prev_y), layer.brush_size/2)
         cx = np.clip(cx, 0, current_draw.shape[0] - 1)
         cy = np.clip(cy, 0, current_draw.shape[1] - 1)
         current_draw[cx, cy] = True
         binary_fill_holes(current_draw, output=current_draw, structure=s)
-        layer.data[coordinates[:-2]][current_draw] = layer.selected_label
+        layer.data[slice_dims][current_draw] = layer.selected_label
         layer.refresh()
 
     def draw_line(self, x1, y1, x2, y2, brush_size, output):
