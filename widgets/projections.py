@@ -1,4 +1,5 @@
 import itertools
+import warnings
 
 import numpy as np
 from PIL import Image as PILImage
@@ -21,7 +22,11 @@ class DataProjectionWidget(QLabel):
         self.slices = list(slices) or [s//2 for s in self.image_data.shape]
         self.displayed_axes = displayed_axes
         self._overlay = np.zeros(self.image_data[self.im_idx].shape[:2], np.uint8)
-        self.image_colormap = image_colormap
+        if image_layer.rgb and image_colormap is not None:
+            warnings.warn("colormap provided for RGB image. Ignoring")
+            self.image_colormap = None
+        else:
+            self.image_colormap = image_colormap
         self.mask_colormap = mask_colormap
         self.update()
         self.pixmap = None
@@ -94,12 +99,13 @@ class DataProjectionWidget(QLabel):
     @property
     def im_idx(self):
         return tuple(
-                self.slices[i] if i not in self.displayed_axes else slice(None) for i in range(self.image_data.ndim))
+                self.slices[i] if i not in self.displayed_axes
+                    else slice(None) for i in range(self.image_layer.ndim))
 
     def update(self, update_icon=True, new_size=None):
         if update_icon:
             if self.image_colormap is None:
-                im = (self.image_data[self.im_idx]//256)
+                im = self.image_data[self.im_idx]
             else:
                 im = (self.image_colormap[self.image_data[self.im_idx]//256]*255)
             if self.flip_image:
@@ -184,7 +190,7 @@ class SliceDisplayWidget(QWidget):
             self.sliders.append(slider)
         grid_layout = QGridLayout()
         self.projections = []
-        for dim_pair in itertools.combinations(range(image_layer.data.ndim), 2):
+        for dim_pair in itertools.combinations(range(image_layer.ndim), 2):
             if channels_dim in dim_pair:
                 continue
             if dim_pair[-2] == viewer.dims.order[-1] or dim_pair[-1] == viewer.dims.order[-2]:

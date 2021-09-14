@@ -152,9 +152,16 @@ class ContourWidget(FunctionGui):
             raise ValueError("out mode must be one of 'append' or 'overwrite'")
         for label, shape in enumerate(self.contour_layer.data, start=start_index):
             spatial_dims = np.argwhere(~np.all(shape == shape[:1], axis=0)).reshape(-1)
-            contour = np.round(np.fliplr(shape[:, spatial_dims])[:, None, :]).astype(np.int)
-            slice_idx = tuple(slice(None) if i in spatial_dims else int(shape[0, i]) for i in range(shape.shape[1]))
-            cv2.drawContours(self.mask_layer.data[slice_idx], [contour], 0, label, -1)
+            contour = np.round(shape[:, spatial_dims]).astype(np.int)
+            contour = contour - np.asarray([self.mask_layer.translate[i] for i in range(self.mask_layer.ndim) if i in spatial_dims]).reshape(1, -1)
+            contour = np.round(np.fliplr(contour))
+            contour = contour[:, None, :]
+            slice_idx = tuple(slice(None) if i in spatial_dims
+                              else int(shape[0, i] - self.mask_layer.translate[i] + self.contour_layer.translate[i])
+                              for i in range(shape.shape[1]))
+            mask = self.mask_layer.data[slice_idx].astype(np.uint8)
+            cv2.drawContours(mask, [contour], 0, label, -1)
+            self.mask_layer.data[slice_idx] = mask
             self.mask_layer.refresh()
 
     def objectName(self):

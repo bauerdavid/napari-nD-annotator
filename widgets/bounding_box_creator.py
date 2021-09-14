@@ -13,13 +13,14 @@ class CreateBBoxesWidget(FunctionGui):
             self.create_bboxes,
             call_button="Create bounding boxes"
         )
+
     def create_bboxes(self, points: Points, image: Image, size=50) -> BoundingBoxLayer:
         if points is None or image is None:
             return
         p_data = points.data.round().astype(int)
-        im_size = np.asarray(image.data.shape)
+        im_size = np.asarray(image.extent.data[1] + 1)
         corner_idx = np.asarray(list(product([0, 1], repeat=points.ndim)))
-        bboxes = np.asarray([np.where(corner_idx, np.maximum(p - size // 2, 0), np.minimum(p + size // 2, im_size)) for p in p_data])
+        bboxes = np.asarray([np.where(corner_idx, np.maximum(p - size // 2 - image.translate, 0) + image.translate, np.minimum(p + size // 2 - image.translate, im_size) + image.translate) for p in p_data])
         return BoundingBoxLayer(data=bboxes, name="BoundingBoxes", edge_color="lightgreen", face_color="transparent")
 
     def objectName(self):

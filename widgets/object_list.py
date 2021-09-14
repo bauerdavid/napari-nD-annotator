@@ -7,7 +7,7 @@ import typing
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent
 from PyQt5.QtGui import QImage, QPixmap, QCloseEvent
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu
 from napari.layers import Image, Labels
 from napari.layers.labels._labels_constants import Mode
 from qtpy import QtCore, QtGui
@@ -115,6 +115,17 @@ class QObjectListWidgetItem(QListWidgetItem):
     def name(self):
         return self.object_item.name
 
+    def create_layers(self, viewer, colormap):
+        image_layer = Image(self.image_layer.data[self.bbox_idx], name="Cropped Image %d" % self.idx, colormap=colormap,
+                            rgb=self.image_layer.rgb)
+        image_layer.translate = self.bounding_box[0, :]+self.image_layer.translate
+        viewer.add_layer(image_layer)
+        mask_layer = Labels(self.mask_layer.data[self.bbox_idx], name="Cropped Mask %d" % self.idx)
+        mask_layer.selected_label = self.idx
+        mask_layer.translate = self.bounding_box[0, :]+self.mask_layer.translate
+        viewer.add_layer(mask_layer)
+        return image_layer, mask_layer
+
     def on_double_click(self, viewer, colormap):
         if self.parent.crop_image_layer in viewer.layers:
             viewer.layers.remove(self.parent.crop_image_layer)
@@ -125,22 +136,18 @@ class QObjectListWidgetItem(QListWidgetItem):
         if self.parent.projections_widget is not None:
             viewer.window.remove_dock_widget(self.parent.projections_widget)
 
-        self.parent.crop_image_layer = Image(self.image_layer.data[self.bbox_idx], name="Cropped Image %d" % self.idx, colormap=colormap, rgb=self.image_layer.rgb)
-        self.parent.crop_image_layer.translate = tuple(self.bounding_box[0, :])
-        viewer.add_layer(self.parent.crop_image_layer)
-        self.parent.crop_mask_layer = Labels(self.mask_layer.data[self.bbox_idx], name="Cropped Mask %d" % self.idx)
-        self.parent.crop_mask_layer.selected_label = self.idx
-        self.parent.crop_mask_layer.translate = tuple(self.bounding_box[0, :])
+        self.parent.crop_image_layer, self.parent.crop_mask_layer = self.create_layers(viewer, colormap)
+        self.parent.crop_image_layer.name = "[tmp] " + self.parent.crop_image_layer.name
+        self.parent.crop_mask_layer.name = "[tmp] " + self.parent.crop_mask_layer.name
         self.parent.crop_mask_layer.events.set_data.connect(self.on_data_change)
         self.parent.projections_widget = SliceDisplayWidget(viewer, self.parent.crop_image_layer, self.parent.crop_mask_layer, self.channels_dim)
         qt_widget = viewer.window.add_dock_widget(self.parent.projections_widget)
         qt_widget.setFloating(True)
         self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
-        viewer.add_layer(self.parent.crop_mask_layer)
         viewer.layers.selection.select_only(self.parent.crop_mask_layer)
 
     def on_data_change(self, event):
-        if self.channels_dim is not None:
+        if self.channels_dim is not None and not self.image_layer.rgb:
             if self.parent.crop_mask_layer._mode == Mode.PAINT:
                 data = self.parent.crop_mask_layer.data.max(axis=self.channels_dim, keepdims=True)
                 self.parent.crop_mask_layer.data[:] = data
@@ -188,6 +195,7 @@ class ListWidget(QListWidget):
         self.itemDoubleClicked.connect(self.on_double_click)
         bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
         self.selected_idx = None
+        self.installEventFilter(self)
         # bounding_box_layer.events.set_data.connect(on_data_change)
 
     def on_double_click(self, item):
@@ -201,10 +209,9 @@ class ListWidget(QListWidget):
             slice_idx = slice(idx, idx+1)
         else:
             raise TypeError("idx must be of type int")
-        b_data = np.asarray(self.bounding_box_layer.data[slice_idx]).round().astype(int)
         bounding_boxes = self.bounding_box_corners()[slice_idx]
         bbox_idx = [tuple(
-            slice(max(bounding_boxes[i, 0, d], 0), bounding_boxes[i, 1, d]) if d in self.viewer.dims.order[-2:]
+            slice(max(bounding_boxes[i, 0, d], 0), bounding_boxes[i, 1, d]) if d in self.viewer.dims.displayed
             else self.viewer.dims.current_step[d]
             for d in range(self.bounding_box_layer.ndim))
                     for i in range(len(bounding_boxes))]
@@ -212,20 +219,31 @@ class ListWidget(QListWidget):
             icons = [(self.image_layer.data[bbox_idx[i]] // (2 ** 8)).astype(np.uint8) for i in range(len(bbox_idx))]
         else:
             icons = [self.image_layer.data[bbox_idx[i]].astype(np.uint8) for i in range(len(bbox_idx))]
-        icons = [(self.image_layer.colormap.colors[icon] * 255).astype(np.uint8)[..., :-1] for icon in icons]
+        if not self.image_layer.rgb:
+            icons = [(self.image_layer.colormap.colors[icon] * 255).astype(np.uint8)[..., :3] for icon in icons]
+        else:
+            icons = [icon.astype(np.uint8)[..., :3] for icon in icons]
+
         return icons if idx is None else icons[0]
 
     def bounding_box_corners(self):
-        b_data = np.asarray(self.bounding_box_layer.data).round().astype(int)
+        b_data = (np.asarray(self.bounding_box_layer.data).round()-self.image_layer.translate).astype(int)
         return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
-    def eventFilter(self, object: QtCore.QObject, event: QtCore.QEvent) -> bool:
+    def eventFilter(self, source: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if event.type() == QEvent.Close:
             if self.crop_image_layer is not None:
                 self.viewer.layers.remove(self.crop_image_layer)
                 self.viewer.layers.remove(self.crop_mask_layer)
                 self.viewer.window.remove_dock_widget(self.projections_widget)
-        return False
+        elif event.type() == QEvent.ContextMenu and source is self:
+            menu = QMenu()
+            menu.addAction("Create layers")
+            if menu.exec_(event.globalPos()):
+                item = self.itemAt(event.pos())
+                item.create_layers(self.viewer, self.image_layer.colormap)
+            return True
+        return super().eventFilter(source, event)
 
     def bounding_box_change(self, layer, event):
         previous_data = np.asarray([bb.copy() for bb in self.bounding_box_layer.data])

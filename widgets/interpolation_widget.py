@@ -51,6 +51,8 @@ class InterpolationWidget(FunctionGui):
         )
         self.viewer = viewer
         self.labels_layer.native.currentIndexChanged.connect(self.update_dim_limit)
+        viewer.dims.events.order.connect(self.on_order_change)
+
 
     def interpolate(self, labels_layer: Labels, dimension: int, n_contour_points=500):
         if labels_layer is None:
@@ -97,3 +99,13 @@ class InterpolationWidget(FunctionGui):
 
     def objectName(self):
         return "interpolation"
+
+    def on_order_change(self, event):
+        extents = self.labels_layer.value.extent.data[1] + 1
+        not_displayed = extents[list(self.viewer.dims.not_displayed)]
+        ch_excluded = list(filter(lambda x: x > 3, not_displayed))
+        if len(ch_excluded) == 0:
+            new_dim = self.viewer.dims.not_displayed[0]
+        else:
+            new_dim = self.viewer.dims.order[int(np.argwhere(not_displayed == ch_excluded[0])[0])]
+        self.dimension.value = new_dim
