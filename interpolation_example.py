@@ -1,12 +1,16 @@
 import napari
 import numpy as np
 from napari.layers import Labels
-from skimage.data import cells3d
 from widgets.interpolation_widget import InterpolationWidget
 from widgets.contour_widget import ContourWidget
-image_map = cells3d()[:, 1, ...]
-viewer = napari.view_image(image_map, colormap='magma', rgb=False)
-labels_layer = Labels(data=np.zeros_like(image_map))
+
+try:
+    import settings
+except ModuleNotFoundError:
+    print("create settings.py first")
+viewer = napari.Viewer()
+image_layer = viewer.add_image(settings.test_image, colormap=settings.colormap, name="Image")
+labels_layer = Labels(data=np.zeros(image_layer.extent.data[1].astype(int) + 1, dtype=np.uint16))
 labels_layer.brush_size = 1
 labels_layer.mode = "paint"
 viewer.add_layer(labels_layer)

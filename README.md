@@ -31,6 +31,9 @@ pip install -r requirements.txt
 ```
 
 ## Examples
+For the examples first you should create `settings.py` in the root folder of the
+repository (next to the examples). You can simply create a copy of 
+`settings_template.py`, and then modify the parameters as needed.
 ### `bounding_box_example.py`
 Here the BoundingBoxLayer is introduced. It can be used to draw nD bounding boxes,
 and after that they can be moved, rescaled and deleted as needed. They are displayed

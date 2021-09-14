@@ -1,14 +1,17 @@
 import napari
 import numpy as np
 from napari.layers import Image, Labels
-from skimage.data import cells3d
 from widgets.projections import SliceDisplayWidget
-viewer = napari.Viewer()
 
-image_map = cells3d()[:, 1, ...]
-image_layer = Image(image_map, colormap='magma', rgb=False)
-mask_layer = Labels(np.zeros_like(image_map))
+try:
+    import settings
+except ModuleNotFoundError:
+    print("create settings.py first")
+
+viewer = napari.Viewer()
+image_layer = Image(settings.test_image, colormap=settings.colormap, rgb=settings.rgb, name="Image")
+labels_layer = Labels(data=np.zeros(image_layer.extent.data[1].astype(int) + 1, dtype=np.uint16))
 viewer.add_layer(image_layer)
-viewer.add_layer(mask_layer)
-viewer.window.add_dock_widget(SliceDisplayWidget(viewer, image_layer, mask_layer))
+viewer.add_layer(labels_layer)
+viewer.window.add_dock_widget(SliceDisplayWidget(viewer, image_layer, labels_layer, channels_dim=settings.channels_dim))
 napari.run()
