@@ -17,10 +17,10 @@ class ObjectExtractorWidget(FunctionGui):
         )
         self.image.native.currentIndexChanged.connect(self.on_layer_changed)
         self.has_channels.native.clicked.connect(self.on_has_channels_clicked)
+        self.viewer.dims.events.ndisplay.connect(lambda _: self.call_button.native.setEnabled(self.viewer.dims.ndisplay == 2))
 
     def select_cells_widget(self, bounding_boxes: BoundingBoxLayer, image: Image, mask: Labels,
-                            object_name="Object #", has_channels=True, channels_dim=0) -> Labels:
-        print(bounding_boxes, image, mask)
+                            object_name="Object #", has_channels=True, channels_dim=0):
         if None in [bounding_boxes, image, mask]:
             raise ValueError("Each one of 'bounding boxes', 'image' and 'mask' layers must be provided")
         image.visible = False

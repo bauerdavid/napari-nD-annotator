@@ -1,13 +1,54 @@
+import math
+
 import numpy as np
 from scipy.spatial.transform.rotation import Rotation
+from scipy import ndimage as nd
 from scipy.interpolate import griddata
 from skimage.data import cells3d
 import matplotlib.pyplot as plt
 import itertools
+import SimpleITK as sitk
 
-image_map = cells3d()
+from skimage.transform import AffineTransform
 
-image_map = image_map[:, 1, :, :]
+image_map = cells3d()[15:, 1, 63:113, 29:79]
+transl = np.eye(4)
+transl[:-1, -1] = [-s/2 for s in image_map.shape]
+rot = np.eye(4)
+rot_angles = [30, 12, 20]
+rot_rads = [math.radians(a) for a in rot_angles]
+rot[:3, :3] = Rotation.from_euler('xyz', rot_angles, degrees=True).as_matrix()
+inv_transl = np.linalg.inv(transl)
+matrix = inv_transl @ rot @ transl
+tformed = nd.affine_transform(image_map,
+                              matrix,
+                              # [image_map.shape[0]/2, image_map.shape[1]/2, image_map.shape[2]/2],
+                              )
+
+
+tform = sitk.AffineTransform(3)
+tform.SetMatrix(rot[:3, :3].flatten().tolist())
+tform.Set
+
+# tform.SetMatrix(matrix.flatten().tolist())
+# tform.SetMatrix(rot[:3, :3].flatten().tolist())
+# tform.SetTranslation(euler.GetTranslation())
+# tform.SetCenter([image_map.shape[0]/2, image_map.shape[1]/2, image_map.shape[2]/2])
+itk_img = sitk.GetImageFromArray(image_map)
+itk_img.SetOrigin([image_map.shape[0]/2, image_map.shape[1]/2, image_map.shape[2]/2])
+orig_size = itk_img.GetSize()
+output_size = tform.TransformPoint(orig_size)
+output_size = list(map(lambda x: int(round(x)), output_size))
+output_spacing = itk_img.GetSpacing()
+tformed2 = sitk.Resample(itk_img, size=output_size, outputOrigin=itk_img.GetOrigin(), transform=tform.GetInverse(), interpolator=sitk.sitkLinear, defaultPixelValue=000)
+tformed2 = sitk.GetArrayFromImage(tformed2)
+import napari
+viewer = napari.Viewer()
+viewer.add_image(image_map, opacity=0.5)
+viewer.add_image(tformed, opacity=0.5)
+viewer.add_image(tformed2, opacity=0.5)
+napari.run()
+exit()
 grid = np.mgrid[:image_map.shape[0], :image_map.shape[1], :image_map.shape[2]].T.reshape(-1, 3)
 image_map = image_map.T.reshape(-1)
 coords = np.meshgrid(np.arange(50), np.arange(50), 0, indexing='xy')

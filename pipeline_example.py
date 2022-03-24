@@ -7,8 +7,9 @@ from widgets import ContourWidget, ObjectExtractorWidget, CreateBBoxesWidget, In
 
 try:
     import settings
-except ModuleNotFoundError:
+except ModuleNotFoundError as e:
     print("create settings.py first")
+    raise e
 
 viewer = napari.Viewer()
 image_layer = viewer.add_image(settings.test_image, colormap=settings.colormap, rgb=settings.rgb, name="Image")

@@ -29,6 +29,7 @@ class ContourWidget(FunctionGui):
         contour_button = QPushButton("Mask ➝ contour")
         contour_button.clicked.connect(self.create_contours)
         self.native.layout().addWidget(contour_button)
+        viewer.dims.events.ndisplay.connect(lambda _: contour_button.setEnabled(viewer.dims.ndisplay == 2))
 
         contour_to_mask_btn = QPushButton("Contour ➝ mask")
         contour_to_mask_btn.clicked.connect(self.create_masks)

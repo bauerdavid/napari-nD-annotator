@@ -210,9 +210,10 @@ class ListWidget(QListWidget):
         else:
             raise TypeError("idx must be of type int")
         bounding_boxes = self.bounding_box_corners()[slice_idx]
+        visible_dims = list(sorted(self.viewer.dims.displayed, key=lambda d: self.image_layer.data.shape[d]))[-2:]
         bbox_idx = [tuple(
-            slice(max(bounding_boxes[i, 0, d], 0), bounding_boxes[i, 1, d]) if d in self.viewer.dims.displayed
-            else self.viewer.dims.current_step[d]
+            slice(max(bounding_boxes[i, 0, d], 0), bounding_boxes[i, 1, d]) if d in visible_dims
+            else bounding_boxes[i, :, d].mean().astype(int)
             for d in range(self.bounding_box_layer.ndim))
                     for i in range(len(bounding_boxes))]
         if self.image_layer.dtype == np.uint16:

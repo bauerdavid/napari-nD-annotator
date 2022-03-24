@@ -21,7 +21,8 @@ class DataProjectionWidget(QLabel):
         self.max_width, self.max_height = QWIDGETSIZE_MAX, QWIDGETSIZE_MAX
         self.slices = list(slices) or [s//2 for s in self.image_data.shape]
         self.displayed_axes = displayed_axes
-        self._overlay = np.zeros(self.image_data[self.im_idx].shape[:2], np.uint8)
+        overlay_shape = [self.image_data.shape[i] for i in range(self.image_data.ndim) if self.im_idx[i] == slice(None)][:2]
+        self._overlay = np.zeros(overlay_shape, np.uint8)
         if image_layer.rgb and image_colormap is not None:
             warnings.warn("colormap provided for RGB image. Ignoring")
             self.image_colormap = None
@@ -53,7 +54,9 @@ class DataProjectionWidget(QLabel):
         self._overlay = new_overlay > 0
 
     def update_overlay(self, layer=None, coordinates=None):
-        overlay = np.zeros(self.image_data[self.im_idx].shape[:2], bool)
+        overlay_shape = [self.image_data.shape[i] for i in range(self.image_data.ndim) if
+                         self.im_idx[i] == slice(None)][:2]
+        overlay = np.zeros(overlay_shape, bool)
         if layer is not None and coordinates is not None:
             if layer._mode in [Mode.ERASE, Mode.PAINT]:
                 if all(layer_dim == proj_dim for layer_dim, proj_dim in
@@ -104,23 +107,31 @@ class DataProjectionWidget(QLabel):
 
     def update(self, update_icon=True, new_size=None):
         if update_icon:
-            if self.image_colormap is None:
-                im = self.image_data[self.im_idx]
+            if any(self.im_idx[i] != slice(None) and self.im_idx[i] >= self.image_data.shape[i]
+                    for i in range(self.image_data.ndim)):
+                im_shape = tuple(self.image_data.shape[i] for i in range(self.image_data.ndim)
+                                 if self.im_idx[i] == slice(None))[:2]
+                im = np.zeros(im_shape + (4,), np.uint8)
+                mask = np.zeros_like(im)
             else:
-                im = (self.image_colormap[self.image_data[self.im_idx]//256]*255)
-            if self.flip_image:
-                im = np.transpose(im, (1, 0, 2))
+                if self.image_colormap is None:
+                    im = self.image_data[self.im_idx]
+                else:
+                    im = (self.image_colormap[self.image_data[self.im_idx]//256]*255)
+
+                if self.mask_colormap is None:
+                    mask = (self.mask_data[self.im_idx] > 0).astype(np.uint8)
+                    alpha = np.ones_like(mask) * 180
+                    mask = np.tile(mask[..., np.newaxis], (1, 1, 4))
+                else:
+                    mask = (self.mask_colormap[self.mask_data[self.im_idx]] * 255).astype(np.uint8)
+                    alpha = (mask.max(2) > 0).astype(np.uint8) * 180
+                mask[..., -1] = alpha
+
+                if self.flip_image:
+                    im = np.transpose(im, (1, 0, 2))
+                    mask = np.transpose(mask, (1, 0, 2))
             im = PILImage.fromarray(im.astype(np.uint8)).convert(mode="RGBA")
-            if self.mask_colormap is None:
-                mask = (self.mask_data[self.im_idx] > 0).astype(np.uint8)
-                alpha = np.ones_like(mask)*127
-                mask = np.tile(mask[..., np.newaxis], (1, 1, 3))
-                mask = np.append(mask, alpha[..., np.newaxis], -1)
-            else:
-                mask = (self.mask_colormap[self.mask_data[self.im_idx]]*255).astype(np.uint8)
-                mask[..., -1] = (mask.max(2) > 0).astype(np.uint8)*180
-            if self.flip_image:
-                mask = np.transpose(mask, (1, 0, 2))
             mask = PILImage.fromarray(mask).convert(mode="RGBA")
             icon = PILImage.alpha_composite(im, mask)
             icon = PILImage.alpha_composite(icon, self.overlay).convert("RGB")

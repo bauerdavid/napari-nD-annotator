@@ -10,7 +10,7 @@ from napari.layers.utils.color_manager_utils import map_property, guess_continuo
 from napari.layers.utils.color_transformations import transform_color_with_defaults, ColorType, \
     normalize_and_broadcast_colors, transform_color_cycle
 from napari.layers.utils.layer_utils import dataframe_to_properties
-from napari.layers.utils.text import TextManager
+from napari.layers.utils.text_manager import TextManager
 from napari.utils import Colormap
 from napari.utils.colormaps import ensure_colormap, ValidColormapArg
 from napari.utils.colormaps.standardize_color import transform_color, rgb_to_hex, hex_to_name

@@ -1,6 +1,7 @@
 # A copy of napari.layers.shapes._shape_list
 import numpy as np
-from napari.layers.shapes._shapes_utils import triangles_intersect_box, inside_triangles
+from napari.layers.shapes._shapes_utils import triangles_intersect_box
+from napari.utils.geometry import inside_triangles
 from napari.utils.translations import trans
 from .bounding_box import BoundingBox
 from ._mesh import Mesh

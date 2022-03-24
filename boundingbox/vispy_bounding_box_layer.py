@@ -1,7 +1,7 @@
-# A copy of napari._vispy.vispy_shapes_layer
+# A copy of napari._vispy.layers.shapes
 import numpy as np
-from napari._vispy._text_utils import update_text
-from napari._vispy.vispy_base_layer import VispyBaseLayer
+from napari._vispy.layers.base import VispyBaseLayer
+from napari._vispy.utils.text import update_text
 from napari.utils.events import disconnect_events
 from napari.utils.settings import get_settings
 from vispy.scene import Compound, Mesh, Line, Markers, Text
@@ -22,12 +22,10 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
         self.layer.events.edge_width.connect(self._on_data_change)
         self.layer.events.edge_color.connect(self._on_data_change)
         self.layer.events.face_color.connect(self._on_data_change)
-        self.layer.text._connect_update_events(
-            self._on_text_change, self._on_blending_change
-        )
+        self.layer.text.events.connect(self._on_text_change)
         self.layer.events.highlight.connect(self._on_highlight_change)
 
-        self._reset_base()
+        self.reset()
         self._on_data_change()
         self._on_highlight_change()
 
@@ -55,7 +53,7 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
 
         # Call to update order of translation values with new dims:
         self._on_matrix_change()
-        self._on_text_change(update_node=False)
+        self._update_text(update_node=False)
         self.node.update()
 
     def _on_highlight_change(self, event=None):
@@ -111,7 +109,7 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
             pos=pos, color=edge_color, width=width
         )
 
-    def _on_text_change(self, update_node=True):
+    def _update_text(self, *, update_node=True):
         """Function to update the text node properties
 
         Parameters
@@ -119,32 +117,15 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
         update_node : bool
             If true, update the node after setting the properties
         """
-        ndisplay = self.layer._ndisplay
-        if (len(self.layer._indices_view) == 0) or (
-            self.layer._text.visible is False
-        ):
-            text_coords = np.zeros((1, ndisplay))
-            text = []
-            anchor_x = 'center'
-            anchor_y = 'center'
-        else:
-            text_coords, anchor_x, anchor_y = self.layer._view_text_coords
-            if len(text_coords) == 0:
-                text_coords = np.zeros((1, ndisplay))
-            text = self.layer._view_text
-        text_node = self._get_text_node()
-        update_text(
-            text_values=text,
-            coords=text_coords,
-            anchor=(anchor_x, anchor_y),
-            rotation=self.layer._text.rotation,
-            color=self.layer._text.color,
-            size=self.layer._text.size,
-            ndisplay=ndisplay,
-            text_node=text_node,
-        )
+        update_text(node=self._get_text_node(), layer=self.layer)
         if update_node:
             self.node.update()
+
+    def _on_text_change(self, event=None):
+        if event is not None and event.type == 'blending':
+            self._on_blending_change(event)
+        else:
+            self._update_text()
 
     def _get_text_node(self):
         """Function to get the text node from the Compound visual"""
@@ -164,7 +145,7 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
         disconnect_events(self.layer.text.events, self)
         super().close()
 
-from napari._vispy.utils import layer_to_visual
+from napari._vispy.utils.visual import layer_to_visual
 
 def register_layer_visual(layer_type):
     layer_to_visual[layer_type] =  VispyBoundingBoxLayer

@@ -52,6 +52,7 @@ class InterpolationWidget(FunctionGui):
         self.viewer = viewer
         self.labels_layer.native.currentIndexChanged.connect(self.update_dim_limit)
         viewer.dims.events.order.connect(self.on_order_change)
+        viewer.dims.events.ndisplay.connect(lambda _: self.call_button.native.setEnabled(viewer.dims.ndisplay == 2))
 
 
     def interpolate(self, labels_layer: Labels, dimension: int, n_contour_points=500):
