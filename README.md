@@ -10,9 +10,6 @@ when visualizing in 3D:
 2) The surrounding objects won't occlude the annotated ones, making it easier to check
 the annotation.
 
-The project uses napari==0.4.10, because with 0.4.11 some new errors appear,
-but the project can be easily moved to the newer version when these are resolved.
-
 ## Installation
 Clone the repository by
 ```
