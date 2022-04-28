@@ -121,7 +121,14 @@ def _add_bounding_box(layer, event, data):
         size = max-min
         visible_size = size[layer._dims_displayed]
         max[layer._dims_displayed] = np.nan
-        data[:] = np.where(data == max, min.reshape(1, -1)+visible_size.mean(), data)
+        min[layer._dims_displayed] = np.nan
+        # print("original data", data)
+        data[:] = np.where(data == max, coordinates+visible_size.mean()/2, data)
+        data[:] = np.where(data == min, coordinates-visible_size.mean()/2, data)
+        # print("original size", size)
+        # print("visible size", visible_size)
+        # print("coordinates", coordinates)
+        # print("new data", data)
         yield
 
     # on release

@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image as PILImage
 from PyQt5.Qt import QWIDGETSIZE_MAX
 from PyQt5.QtGui import QImage, QPixmap, QResizeEvent
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout, QSlider, QHBoxLayout, QGridLayout
+from PyQt5.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout, QSlider, QHBoxLayout, QGridLayout, QCheckBox
 from napari.layers.labels._labels_constants import Mode
 from qtpy import QtCore
 
@@ -219,6 +219,9 @@ class SliceDisplayWidget(QWidget):
         self.grid_widget.setLayout(grid_layout)
         self.grid_widget.setSizePolicy(self.grid_widget.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
         main_layout.addWidget(self.grid_widget)
+        self.dockable_checkbox = QCheckBox("dockable")
+        self.dockable_checkbox.setChecked(True)
+        main_layout.addWidget(self.dockable_checkbox)
         self.setLayout(main_layout)
         self.setSizePolicy(self.grid_widget.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
         viewer.dims.events.current_step.connect(self.on_step_change)
@@ -275,3 +278,4 @@ class SliceDisplayWidget(QWidget):
 
     def sizeHint(self) -> QtCore.QSize:
         return QtCore.QSize(640, 480)
+

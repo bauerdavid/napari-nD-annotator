@@ -81,7 +81,6 @@ class QtBoundingBoxControls(QtLayerControls):
         sld.setMaximum(40)
         sld.setSingleStep(1)
         value = self.layer.current_edge_width
-        # value = np.asarray(5)
         if isinstance(value, Iterable):
             if isinstance(value, list):
                 value = np.asarray(value)
@@ -130,11 +129,11 @@ class QtBoundingBoxControls(QtLayerControls):
             """
             action_name = 'napari:' + action_name
             btn = QtModeRadioButton(parent, btn_name, mode, **kwargs)
-            action_manager.bind_button(
+            '''action_manager.bind_button(
                 action_name,
                 btn,
                 extra_tooltip_text='',
-            )
+            )'''
             return btn
 
         self.select_button = _radio_button(

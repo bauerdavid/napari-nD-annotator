@@ -199,7 +199,7 @@ class ListWidget(QListWidget):
         # bounding_box_layer.events.set_data.connect(on_data_change)
 
     def on_double_click(self, item):
-        item.on_double_click(self.viewer, self.image_layer.colormap)
+        item.on_select(self.viewer, self.image_layer.colormap)
         self.selected_idx = self.indexFromItem(item)
 
     def get_icons(self, idx=None):

@@ -3,7 +3,7 @@ import numpy as np
 from napari._vispy.layers.base import VispyBaseLayer
 from napari._vispy.utils.text import update_text
 from napari.utils.events import disconnect_events
-from napari.utils.settings import get_settings
+from napari.settings import get_settings
 from vispy.scene import Compound, Mesh, Line, Markers, Text
 
 

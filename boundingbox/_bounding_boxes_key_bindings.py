@@ -6,7 +6,7 @@ from ._bounding_box_constants import Mode
 
 def register_bounding_boxes_action(layer_type, description):
     return register_layer_action(layer_type, description)
-
+'''
 def register_bounding_boxes_actions(layer_type):
 
     @register_bounding_boxes_action(layer_type, trans._('Select bounding boxes'))
@@ -24,3 +24,4 @@ def register_bounding_boxes_actions(layer_type):
     def activate_add_bb_mode(layer):
         """Activate add bounding box tool."""
         layer.mode = Mode.ADD_BOUNDING_BOX
+'''

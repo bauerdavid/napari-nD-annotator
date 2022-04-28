@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from copy import deepcopy, copy
 from itertools import cycle
 from typing import Dict, Optional, Union, Tuple
-
+import napari.layers
 from napari.layers import Layer
 from napari.layers.utils.color_manager_utils import map_property, guess_continuous
 from napari.layers.utils.color_transformations import transform_color_with_defaults, ColorType, \
@@ -23,7 +23,7 @@ from ._bounding_box_constants import ColorMode, BACKSPACE, Box
 from ._bounding_box_list import BoundingBoxList
 from .bounding_box import BoundingBox
 from ._bounding_box_mouse_bindings import select, highlight, add_bounding_box
-from ._bounding_boxes_key_bindings import *
+# from ._bounding_boxes_key_bindings import *
 from .qt_bounding_box_control import *
 from .vispy_bounding_box_layer import *
 from ._bounding_box_utils import create_box
@@ -228,6 +228,7 @@ class BoundingBoxLayer(Layer):
 
         # Trigger generation of view slice and thumbnail
         self._update_dims()
+        self._mouse_down = False
 
     def _initialize_current_color_for_empty_layer(
             self, color: ColorType, attribute: str
@@ -1969,4 +1970,7 @@ class BoundingBoxLayer(Layer):
 # This is an ugly solution to register every component correctly
 register_layer_control(BoundingBoxLayer)
 register_layer_visual(BoundingBoxLayer)
-register_bounding_boxes_actions(BoundingBoxLayer)
+# register_bounding_boxes_actions(BoundingBoxLayer)
+import sys
+napari.layers.__dict__["BoundingBoxLayer"] = BoundingBoxLayer
+napari.layers.__dict__["bounding_boxes"] = sys.modules[__name__]
