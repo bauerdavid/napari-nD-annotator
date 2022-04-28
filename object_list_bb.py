@@ -343,8 +343,8 @@ class ListWidget(QListWidget):
             yield
         self._mouse_down = False
         new_data = np.asarray(self.bounding_box_layer.data)
-        if np.any(np.all(new_data > self.image_layer.data.shape, 1))\
-                or np.any(np.all(new_data < 0, 1)):
+        if len(new_data) > 0 and (np.any(np.all(new_data > self.image_layer.data.shape, 1))\
+                or np.any(np.all(new_data < 0, 1))):
             self.bounding_box_layer.data = previous_data
         if np.shape(previous_data) != np.shape(self.bounding_box_layer.data):
             if len(new_data) > len(previous_data):

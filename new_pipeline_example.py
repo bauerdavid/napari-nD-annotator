@@ -16,7 +16,11 @@ except ModuleNotFoundError as e:
 viewer = napari.Viewer()
 viewer.window.add_dock_widget(AnnotatorModule(viewer))
 image_layer = viewer.add_image(settings.test_image, channel_axis=settings.channels_dim, colormap=settings.colormap, rgb=settings.rgb, name="Image")
-labels_layer = Labels(data=np.zeros(image_layer.extent.data[1].astype(int), dtype=np.uint16))
+
+extent = image_layer[0].extent.data[1].astype(int) if type(image_layer) is list else image_layer.extent.data[1].astype(int)
+
+labels_layer = Labels(data=np.zeros(extent, dtype=np.uint16))
 viewer.add_layer(labels_layer)
-viewer.window.add_dock_widget(ListWidgetBB(viewer), area="left")
+list_widget = ListWidgetBB(viewer)
+viewer.window.add_dock_widget(list_widget, area="left")
 napari.run()
