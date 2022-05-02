@@ -188,8 +188,11 @@ class AnnotatorModule(QWidget):
 
     @active_labels_layer.setter
     def active_labels_layer(self, labels_layer):
+        if type(labels_layer) is not Labels and labels_layer is not None:
+            return
         if self.active_labels_layer is not None and self.fill_holes in self.active_labels_layer.mouse_drag_callbacks:
             self.active_labels_layer.mouse_drag_callbacks.remove(self.fill_holes)
+        if labels_layer is not None:
             labels_layer.mouse_drag_callbacks.append(self.fill_holes)
         self._active_labels_layer = labels_layer
         self.set_fill_objects(self.fill_objects)
@@ -215,7 +218,8 @@ class AnnotatorModule(QWidget):
             active_layer = self.viewer.layers.selection.active
             if type(active_layer) == Labels:
                 self.active_labels_layer = active_layer
-                # print("changed to", active_layer.name, "(",self.active_labels_layer,")")
+            else:
+                self.active_labels_layer = None
 
     def draw_line(self, x1, y1, x2, y2, brush_size, output):
         line_x, line_y = draw.line(x1, y1, x2, y2)
