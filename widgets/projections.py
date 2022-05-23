@@ -4,16 +4,20 @@ import warnings
 import numpy as np
 from PIL import Image as PILImage
 from PyQt5.Qt import QWIDGETSIZE_MAX
-from PyQt5.QtGui import QImage, QPixmap, QResizeEvent
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout, QSlider, QHBoxLayout, QGridLayout, QCheckBox
+from PyQt5.QtCore import QSettings
+from PyQt5.QtGui import QImage, QPixmap, QResizeEvent, QColor
+from PyQt5.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout, QSlider, QHBoxLayout, QGridLayout, QCheckBox, \
+    QColorDialog, QPushButton
 from napari.layers.labels._labels_constants import Mode
 from qtpy import QtCore
 
-
+from matplotlib import colors
 
 class DataProjectionWidget(QLabel):
-    def __init__(self, viewer, image_layer, mask_layer, displayed_axes, image_colormap=None, mask_colormap=None, slices=None, flip_image=False):
+    def __init__(self, viewer, image_layer, mask_layer, displayed_axes, image_colormap=None, mask_colormap=None,
+                 slices=None, flip_image=False, crosshair_color=None):
         super().__init__()
+        self._crosshair_color = None
         self.viewer = viewer
         self.image_layer = image_layer
         self.mask_layer = mask_layer
@@ -29,6 +33,10 @@ class DataProjectionWidget(QLabel):
         else:
             self.image_colormap = image_colormap
         self.mask_colormap = mask_colormap
+        if crosshair_color is None:
+            self.crosshair_color = (255, 0, 0, 160)
+        else:
+            self.crosshair_color = crosshair_color
         self.update()
         self.pixmap = None
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
@@ -42,9 +50,20 @@ class DataProjectionWidget(QLabel):
         self.update()
 
     @property
+    def crosshair_color(self):
+        return self._crosshair_color
+
+    @crosshair_color.setter
+    def crosshair_color(self, new_color):
+        if all(map(lambda v: 0.<=v<=1., new_color)):
+            new_color = map(lambda v: int(v*255), new_color)
+        self._crosshair_color = tuple(new_color)
+        self.update()
+
+    @property
     def overlay(self):
-        overlay = np.zeros(self._overlay.shape + (4,), np.uint8)
-        overlay[..., -1] = self._overlay*160
+        overlay = (np.ones(self._overlay.shape + (4,)) * self.crosshair_color).astype(np.uint8)
+        overlay[..., -1] *= self._overlay
         if self.flip_image:
             overlay = np.transpose(overlay, (1, 0, 2))
         return PILImage.fromarray(overlay)
@@ -172,6 +191,8 @@ class SliceDisplayWidget(QWidget):
         super().__init__(*args, **kwargs)
         self.setObjectName("Projections")
         main_layout = QVBoxLayout()
+        self.settings = QSettings()
+        self.overlay_color = self.settings.value("projection_overlay_color", (255, 0, 0, 160))
         self.slider_labels = []
         self.sliders = []
         self.slider_widgets = []
@@ -207,7 +228,7 @@ class SliceDisplayWidget(QWidget):
             else:
                 flip = False
             slices = [int(viewer.dims.current_step[dim]-image_layer.translate[dim]) if dim in image_layer._dims_not_displayed else 0 for dim in range(viewer.dims.ndim)]
-            projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, image_colormap=image_layer.colormap.colors, mask_colormap=mask_layer.colormap.colors, slices=slices, flip_image=flip)
+            projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, image_colormap=image_layer.colormap.colors, mask_colormap=mask_layer.colormap.colors, slices=slices, flip_image=flip, crosshair_color=self.overlay_color)
             grid_layout.setRowStretch(len(self.projections)//3, 1)
             grid_layout.setColumnStretch(len(self.projections)%3, 1)
             grid_layout.addWidget(projection, len(self.projections)//3, len(self.projections)%3, QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -216,9 +237,20 @@ class SliceDisplayWidget(QWidget):
         self.grid_widget.setLayout(grid_layout)
         self.grid_widget.setSizePolicy(self.grid_widget.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
         main_layout.addWidget(self.grid_widget)
+        extra_settings_layout = QHBoxLayout()
         self.dockable_checkbox = QCheckBox("dockable")
         self.dockable_checkbox.setChecked(True)
-        main_layout.addWidget(self.dockable_checkbox)
+        extra_settings_layout.addWidget(self.dockable_checkbox)
+        self.change_color_button = QPushButton()
+        self.change_color_button.setFlat(True)
+        self.change_color_button.setStyleSheet("background-color: %s;" % colors.to_hex(list(map(lambda v: v/255, self.overlay_color))))
+        self.change_color_button.clicked.connect(self.show_overlay_colorpicker)
+        self.change_color_button.setFixedWidth(20)
+        self.change_color_button.setFixedHeight(20)
+        self.setToolTip("Change overlay color")
+
+        extra_settings_layout.addWidget(self.change_color_button)
+        main_layout.addLayout(extra_settings_layout)
         self.setLayout(main_layout)
         self.setSizePolicy(self.grid_widget.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
         viewer.dims.events.current_step.connect(self.on_step_change)
@@ -276,3 +308,11 @@ class SliceDisplayWidget(QWidget):
     def sizeHint(self) -> QtCore.QSize:
         return QtCore.QSize(640, 480)
 
+    def show_overlay_colorpicker(self):
+        color = QColorDialog.getColor(QColor(*self.overlay_color), options=QColorDialog.ShowAlphaChannel)
+        if color.isValid():
+            self.overlay_color = color.red(), color.green(), color.blue(), color.alpha()
+            self.settings.setValue("projection_overlay_color", self.overlay_color)
+            self.change_color_button.setStyleSheet("background-color: %s;" % colors.to_hex(list(map(lambda v: v/255, self.overlay_color))))
+            for projection in self.projections:
+                projection.crosshair_color = self.overlay_color
