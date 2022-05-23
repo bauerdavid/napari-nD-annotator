@@ -70,6 +70,7 @@ class BoundingBoxLayer(Layer):
                 ndim = 2
             data = np.empty((0, 2, ndim))
         else:
+            data = np.asarray(data)
             data_ndim = data.shape[-1]
             if ndim is not None and ndim != data_ndim:
                 raise ValueError(
@@ -110,7 +111,7 @@ class BoundingBoxLayer(Layer):
         self._ndisplay_stored = self._ndisplay
         # self.mouse_drag_callbacks.append(self._on_click)
         # Save the properties
-        if properties is None:
+        if properties is None or properties == {}:
             self._properties = {}
             self._property_choices = {}
         elif len(data) > 0:
@@ -1965,6 +1966,16 @@ class BoundingBoxLayer(Layer):
 
         if not self.editable:
             self.mode = Mode.PAN_ZOOM
+
+    def __deepcopy__(self, memodict={}):
+        result = BoundingBoxLayer(self.data, ndim=self.ndim, properties=self.properties, text=dict(self.text), edge_width=self.edge_width,
+                                  edge_color=self.edge_color, edge_color_cycle=self.edge_color_cycle,
+                                  edge_colormap=self.edge_colormap, edge_contrast_limits=self.edge_contrast_limits,
+                                  face_color=self.face_color, face_color_cycle=self.face_color_cycle, face_colormap=self.face_colormap,
+                                  face_contrast_limits=self.face_contrast_limits, z_index=self.z_index, name=self.name, metadata=self.metadata,
+                                  scale=self.scale, translate=self.translate, rotate=self.rotate, shear=self.shear, affine=self.affine,
+                                  opacity=self.opacity, blending=self.blending, visible=self.visible)
+        return result
 
 
 # This is an ugly solution to register every component correctly

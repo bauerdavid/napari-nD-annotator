@@ -119,13 +119,10 @@ class DataProjectionWidget(QLabel):
                 else:
                     im = (self.image_colormap[self.image_data[self.im_idx]//256]*255)
 
-                if self.mask_colormap is None:
-                    mask = (self.mask_data[self.im_idx] > 0).astype(np.uint8)
-                    alpha = np.ones_like(mask) * 180
-                    mask = np.tile(mask[..., np.newaxis], (1, 1, 4))
-                else:
-                    mask = (self.mask_colormap[self.mask_data[self.im_idx]] * 255).astype(np.uint8)
-                    alpha = (mask.max(2) > 0).astype(np.uint8) * 180
+                mask = (self.mask_data[self.im_idx] > 0).astype(np.uint8)
+                alpha = mask * 180
+                mask = np.tile(mask[..., np.newaxis], (1, 1, 4))*255
+
                 mask[..., -1] = alpha
 
                 if self.flip_image:

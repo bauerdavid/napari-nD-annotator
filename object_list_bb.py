@@ -95,6 +95,10 @@ class QObjectListWidgetItem(QListWidgetItem):
     def idx(self):
         return int(self.object_item.id_label.text().split(":")[-1])
 
+    @idx.setter
+    def idx(self, idx):
+        self.object_item.id_label.setText("Id: " + str(idx))
+
     @property
     def icon(self):
         return self._icon
@@ -244,6 +248,7 @@ class ListWidget(QListWidget):
         super().__init__()
         self._bounding_box_layer = None
         self._image_layer = None
+        self._mask_layer = None
         self.crop_image_layer = None
         self.crop_mask_layer = None
         self.projections_widget = None
@@ -296,8 +301,23 @@ class ListWidget(QListWidget):
             item.update_icon()
         self.update_items()
 
+    @property
+    def mask_layer(self):
+        return self._mask_layer
+
+    @mask_layer.setter
+    def mask_layer(self, new_layer):
+        self._mask_layer = new_layer
+        for i in range(self.count()):
+            item = self.item(i)
+            item.mask_layer = new_layer
+            item.update_icon()
+            if self.currentIndex().row() == i:
+                item.on_select()
+        self.update_items()
+
     def on_layer_event(self, event):
-        print(event.type, self._mouse_down)
+        # print(event.type, self._mouse_down)
         if event.type == "set_data" and not self._mouse_down:
             self.update_items(True)
 
@@ -478,6 +498,8 @@ class ListWidgetBB(QWidget):
         if index == 0 and self.mask_layer_dropdown.count() > 0:
             self.mask_layer_dropdown.setCurrentIndex(self.prev_mask_index)
             return
+        if self.list_widget is not None:
+            self.list_widget.mask_layer = self.mask_layer
         self.prev_mask_index = index
 
     def img_index_change(self, index):
@@ -489,7 +511,7 @@ class ListWidgetBB(QWidget):
 
     def update_layers(self, event=None):
         type_ = event.type if event else "reordered"
-        print(type_)
+        # print(type_)
         if type_ in ["reordered", "removed"]:
             bb_idx = 1
             img_idx = 1
@@ -624,7 +646,6 @@ class ListWidgetBB(QWidget):
         if self.bounding_box_layer is None:
             bounding_box_layer = BoundingBoxLayer(bounding_boxes, edge_color="green", face_color="transparent")
             self.viewer.add_layer(bounding_box_layer)
-            self.bounding_box_layer = bounding_box_layer
         else:
             self.bounding_box_layer.data = bounding_boxes
 
