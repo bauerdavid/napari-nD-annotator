@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from PyQt5 import QtGui
 
-from PyQt5.QtCore import QEvent
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
     QComboBox, QPushButton, QStackedLayout, QStackedWidget, QDockWidget, QFileDialog, QSpinBox
@@ -259,6 +259,7 @@ class ListWidget(QListWidget):
         self.previously_hovered = None
         self.previous_face_color = None
         self.previous_edge_color = None
+        self.bb_was_visible = None
         if indices is None:
             indices = range(1, 1000000)
         self.indices = itertools.cycle(indices)
@@ -274,6 +275,7 @@ class ListWidget(QListWidget):
         self.update_items()
         self.itemClicked.connect(self.select_item)
         self.installEventFilter(self)
+        self.viewer.bind_key('d')(self.toggle_bb_visibility)
         # bounding_box_layer.events.set_data.connect(on_data_change)
 
     def __del__(self):
@@ -355,7 +357,6 @@ class ListWidget(QListWidget):
         return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
     def eventFilter(self, source: QtCore.QObject, event: QtCore.QEvent) -> bool:
-        print(event.type(), source)
         if event.type() == QEvent.Close:
             if self.crop_image_layer is not None:
                 self.viewer.layers.remove(self.crop_image_layer)
@@ -369,28 +370,27 @@ class ListWidget(QListWidget):
                 item.create_layers(self.viewer, self.image_layer.colormap)
             return True
         elif event.type() == QEvent.Enter and type(source) == QObjectWidget:
-            print("mouse entered event")
             item = source.parent
             if item is None:
                 return False
             idx = self.indexFromItem(item).row()
-            print("setting color")
             self.previously_hovered = idx
             self.previous_face_color = self.bounding_box_layer.face_color[idx].copy()
             self.bounding_box_layer.face_color[idx] = (1., 1.0, 1.0, 0.5)
-            print(self.previously_hovered, self.previous_face_color)
             self.bounding_box_layer.data = self.bounding_box_layer.data
             return True
         elif event.type() == QEvent.Leave and type(source) == QObjectWidget:
-            print("leave")
             if self.previous_face_color is not None:
-                print("resetting color")
                 self.bounding_box_layer.face_color[self.previously_hovered] = self.previous_face_color
                 self.bounding_box_layer.data = self.bounding_box_layer.data
                 self.previously_hovered = None
                 self.previous_face_color = None
             return True
         return super().eventFilter(source, event)
+
+    def toggle_bb_visibility(self, _=None):
+        if self.bounding_box_layer is not None:
+            self.bounding_box_layer.visible = not self.bounding_box_layer.visible
 
     def bounding_box_change(self, layer, event):
         previous_data = np.asarray([bb.copy() for bb in self.bounding_box_layer.data])
