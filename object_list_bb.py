@@ -13,6 +13,7 @@ import napari.utils.events
 from napari.layers import Image, Labels
 from napari.layers.labels._labels_constants import Mode
 from qtpy import QtCore
+from scipy.ndimage import find_objects
 
 from widgets.projections import SliceDisplayWidget
 from boundingbox.bounding_boxes import BoundingBoxLayer
@@ -524,8 +525,11 @@ class ListWidgetBB(QWidget):
         import_button.clicked.connect(self.import_bounding_boxes)
         export_button = QPushButton("Export")
         export_button.clicked.connect(self.export_bounding_boxes)
+        from_labels_button = QPushButton("From labels")
+        from_labels_button.clicked.connect(self.bounding_boxes_from_labels)
         buttons_layout.addWidget(import_button)
         buttons_layout.addWidget(export_button)
+        buttons_layout.addWidget(from_labels_button)
         buttons_widget.setLayout(buttons_layout)
         layout.addWidget(buttons_widget)
         self.setLayout(layout)
@@ -699,6 +703,29 @@ class ListWidgetBB(QWidget):
             item.name = name
             item.idx = idx
         self.next_index_spinner.setValue(max(idxs)+1)
+
+    def bounding_boxes_from_labels(self):
+        if self.mask_layer is None:
+            return
+        if self.bounding_box_layer is None:
+            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
+            self.viewer.add_layer(bb_layer)
+        else:
+            bb_layer = self.bounding_box_layer
+        bb_corners = find_objects(self.mask_layer.data)
+        ids = []
+        bbs = []
+        for i, bb in enumerate(bb_corners):
+            if bb is None:
+                continue
+            min_ = [slice_.start for slice_ in bb]
+            max_ = [slice_.stop - 1 for slice_ in bb]
+            bb = np.asarray(np.where(list(itertools.product((False, True), repeat=3)), max_, min_))
+            bbs.append(bb)
+            ids.append(i+1)
+        bb_layer.data = bbs
+        for i, id_ in enumerate(ids):
+            self.list_widget.item(i).idx = id_
 
     def index_iterator(self):
         while True:
