@@ -140,6 +140,11 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
         text_node.set_gl_state(self.layer.text.blending)
         self.node.update()
 
+    def reset(self):
+        super().reset()
+        self._on_highlight_change()
+        self._on_blending_change()
+
     def close(self):
         """Vispy visual is closing."""
         disconnect_events(self.layer.text.events, self)
@@ -148,4 +153,4 @@ class VispyBoundingBoxLayer(VispyBaseLayer):
 from napari._vispy.utils.visual import layer_to_visual
 
 def register_layer_visual(layer_type):
-    layer_to_visual[layer_type] =  VispyBoundingBoxLayer
+    layer_to_visual[layer_type] = VispyBoundingBoxLayer

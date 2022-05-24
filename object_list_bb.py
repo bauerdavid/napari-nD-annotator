@@ -2,6 +2,7 @@ import math
 
 import cv2
 import numpy as np
+from PyQt5 import QtGui
 
 from PyQt5.QtCore import QEvent
 from PyQt5.QtGui import QImage, QPixmap
@@ -51,6 +52,7 @@ class QObjectWidget(QWidget):
         if bounding_box is not None:
             self.setTextDown(bounding_box)
         self.name = name
+        self.parent = parent
 
     @property
     def name(self):
@@ -129,7 +131,7 @@ class QObjectListWidgetItem(QListWidgetItem):
         self.object_item.setTextDown(bounding_box)
         self.object_item.update()
         if self.parent.crop_image_layer is not None and \
-            self.parent.selected_idx == self.parent.indexFromItem(self):
+            self.parent.selected_idx == self.parent.indexFromItem(self).row():
             self.parent.crop_image_layer.data = self.image_layer.data[self.bbox_idx]
             self.parent.crop_image_layer.translate = tuple(self.bounding_box[0, :])
             self.parent.crop_image_layer.refresh()
@@ -254,6 +256,9 @@ class ListWidget(QListWidget):
         self.projections_widget = None
         self._mouse_down = False
         self.selected_idx = None
+        self.previously_hovered = None
+        self.previous_face_color = None
+        self.previous_edge_color = None
         if indices is None:
             indices = range(1, 1000000)
         self.indices = itertools.cycle(indices)
@@ -282,9 +287,11 @@ class ListWidget(QListWidget):
     def bounding_box_layer(self, new_layer):
         if self._bounding_box_layer:
             self._bounding_box_layer.mouse_drag_callbacks.remove(self.bounding_box_change)
+            self._bounding_box_layer.mouse_double_click_callbacks.remove(self._on_bb_double_click)
             self._bounding_box_layer.events.disconnect(self.on_layer_event)
         self._bounding_box_layer = new_layer
         self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
+        self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
         self._bounding_box_layer.events.connect(self.on_layer_event)
         self.update_items()
 
@@ -323,14 +330,21 @@ class ListWidget(QListWidget):
 
     def select_item(self, item):
         item.on_select()
-        selected_idx = self.indexFromItem(item)
+        selected_idx = self.indexFromItem(item).row()
         if selected_idx == self.selected_idx:
             self.selected_idx = None
             item.unselect()
             self.clearSelection()
             self.clearFocus()
+            self.bounding_box_layer.edge_color[selected_idx] = self.previous_edge_color
+            self.bounding_box_layer.data = self.bounding_box_layer.data
         else:
-            self.selected_idx = self.indexFromItem(item)
+            if self.selected_idx is not None:
+                self.bounding_box_layer.edge_color[self.selected_idx] = self.previous_edge_color
+            self.selected_idx = selected_idx
+            self.previous_edge_color = self.bounding_box_layer.edge_color[selected_idx].copy()
+            self.bounding_box_layer.edge_color[selected_idx] = (1., 0., 0., 1.)
+            self.bounding_box_layer.data = self.bounding_box_layer.data
 
     def bounding_box_corners(self):
         if self._bounding_box_layer is None or len(self._bounding_box_layer.data) == 0:
@@ -341,6 +355,7 @@ class ListWidget(QListWidget):
         return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
     def eventFilter(self, source: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        print(event.type(), source)
         if event.type() == QEvent.Close:
             if self.crop_image_layer is not None:
                 self.viewer.layers.remove(self.crop_image_layer)
@@ -352,6 +367,28 @@ class ListWidget(QListWidget):
             if menu.exec_(event.globalPos()):
                 item = self.itemAt(event.pos())
                 item.create_layers(self.viewer, self.image_layer.colormap)
+            return True
+        elif event.type() == QEvent.Enter and type(source) == QObjectWidget:
+            print("mouse entered event")
+            item = source.parent
+            if item is None:
+                return False
+            idx = self.indexFromItem(item).row()
+            print("setting color")
+            self.previously_hovered = idx
+            self.previous_face_color = self.bounding_box_layer.face_color[idx].copy()
+            self.bounding_box_layer.face_color[idx] = (1., 1.0, 1.0, 0.5)
+            print(self.previously_hovered, self.previous_face_color)
+            self.bounding_box_layer.data = self.bounding_box_layer.data
+            return True
+        elif event.type() == QEvent.Leave and type(source) == QObjectWidget:
+            print("leave")
+            if self.previous_face_color is not None:
+                print("resetting color")
+                self.bounding_box_layer.face_color[self.previously_hovered] = self.previous_face_color
+                self.bounding_box_layer.data = self.bounding_box_layer.data
+                self.previously_hovered = None
+                self.previous_face_color = None
             return True
         return super().eventFilter(source, event)
 
@@ -427,6 +464,14 @@ class ListWidget(QListWidget):
         while True:
             for idx in self.indices:
                 yield idx
+
+    def _on_bb_double_click(self, layer=None, event=None):
+        if len(self.bounding_box_layer.selected_data) == 0:
+            return
+        idx = next(iter(self.bounding_box_layer.selected_data))
+        item = self.item(idx)
+        self.setCurrentItem(item)
+        self.select_item(item)
 
 
 class ListWidgetBB(QWidget):
