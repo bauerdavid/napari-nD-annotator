@@ -90,6 +90,20 @@ class QtBoundingBoxControls(QtLayerControls):
         sld.valueChanged.connect(self.changeWidth)
         self.widthSlider = sld
 
+        sld = QSlider(Qt.Horizontal)
+        sld.setFocusPolicy(Qt.NoFocus)
+        sld.setMinimum(1)
+        sld.setMaximum(100)
+        sld.setSingleStep(1)
+        value = self.layer.text.size
+        if isinstance(value, Iterable):
+            if isinstance(value, list):
+                value = np.asarray(value)
+            value = value.mean()
+        sld.setValue(int(value))
+        sld.valueChanged.connect(self.changeTextSize)
+        self.textSlider = sld
+
         def _radio_button(
             parent,
             btn_name,
@@ -191,8 +205,16 @@ class QtBoundingBoxControls(QtLayerControls):
             tooltip=trans._('click to set current edge color'),
         )
         self._on_current_edge_color_change()
+
+        self.textColorEdit = QColorSwatchEdit(
+            initial_color=self.layer.text.color,
+            tooltip=trans._('click to set current text color'),
+        )
+        self._on_current_text_color_change()
+
         self.faceColorEdit.color_changed.connect(self.changeFaceColor)
         self.edgeColorEdit.color_changed.connect(self.changeEdgeColor)
+        self.textColorEdit.color_changed.connect(self.changeTextColor)
 
         text_disp_cb = QCheckBox()
         text_disp_cb.setToolTip(trans._('toggle text visibility'))
@@ -216,7 +238,11 @@ class QtBoundingBoxControls(QtLayerControls):
         self.grid_layout.addWidget(self.edgeColorEdit, 5, 1)
         self.grid_layout.addWidget(QLabel(trans._('display text:')), 6, 0)
         self.grid_layout.addWidget(self.textDispCheckBox, 6, 1)
-        self.grid_layout.setRowStretch(7, 1)
+        self.grid_layout.addWidget(QLabel(trans._('text color:')), 7, 0)
+        self.grid_layout.addWidget(self.textColorEdit, 7, 1)
+        self.grid_layout.addWidget(QLabel(trans._('text size:')), 8, 0)
+        self.grid_layout.addWidget(self.textSlider, 8, 1)
+        self.grid_layout.setRowStretch(9, 1)
         self.grid_layout.setColumnStretch(1, 1)
         self.grid_layout.setSpacing(4)
 
@@ -275,6 +301,19 @@ class QtBoundingBoxControls(QtLayerControls):
         with self.layer.events.current_edge_color.blocker():
             self.layer.current_edge_color = color
 
+    def changeTextColor(self, color: np.ndarray):
+        """Change edge color of bounding boxes.
+
+        Parameters
+        ----------
+        color : np.ndarray
+            Edge color for bounding boxes, color name or hex string.
+            Eg: 'white', 'red', 'blue', '#00ff00', etc.
+        """
+        with self.layer.text.events.color.blocker():
+            self.layer.text.color = color
+            self.layer.refresh()
+
     def changeWidth(self, value):
         """Change edge line width of bounding boxes on the layer model.
 
@@ -284,6 +323,16 @@ class QtBoundingBoxControls(QtLayerControls):
             Line width of bounding boxes.
         """
         self.layer.current_edge_width = float(value) / 2
+
+    def changeTextSize(self, value):
+        """Change edge line width of bounding boxes on the layer model.
+
+        Parameters
+        ----------
+        value : float
+            Line width of bounding boxes.
+        """
+        self.layer.text.size = float(value) / 2
 
     def changeOpacity(self, value):
         """Change opacity value of bounding boxes on the layer model.
@@ -355,6 +404,17 @@ class QtBoundingBoxControls(QtLayerControls):
         """
         with qt_signals_blocked(self.faceColorEdit):
             self.faceColorEdit.setColor(self.layer.current_face_color)
+
+    def _on_current_text_color_change(self, event=None):
+        """Receive layer model face color change event and update color swatch.
+
+        Parameters
+        ----------
+        event : napari.utils.event.Event, optional
+            The napari event that triggered this method, by default None.
+        """
+        with qt_signals_blocked(self.textColorEdit):
+            self.textColorEdit.setColor(self.layer.text.color)
 
     def _on_editable_change(self, event=None):
         """Receive layer model editable change event & enable/disable buttons.
