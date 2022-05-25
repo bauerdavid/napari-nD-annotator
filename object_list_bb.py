@@ -1,15 +1,11 @@
-import math
-
 import cv2
 import numpy as np
-from PyQt5 import QtGui
 
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
     QComboBox, QPushButton, QStackedLayout, QStackedWidget, QDockWidget, QFileDialog, QSpinBox
 from napari import Viewer
-import napari.utils.events
 from napari.layers import Image, Labels
 from napari.layers.labels._labels_constants import Mode
 from qtpy import QtCore

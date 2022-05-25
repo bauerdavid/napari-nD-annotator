@@ -1,6 +1,7 @@
 # A copy of napari._qt.layer_controls.qt_shapes_controls
 from typing import Iterable
 
+from PyQt5.QtWidgets import QCheckBox
 from napari._qt.widgets.qt_color_swatch import QColorSwatchEdit
 from napari.utils.action_manager import action_manager
 from qtpy.QtCore import Qt
@@ -193,6 +194,12 @@ class QtBoundingBoxControls(QtLayerControls):
         self.faceColorEdit.color_changed.connect(self.changeFaceColor)
         self.edgeColorEdit.color_changed.connect(self.changeEdgeColor)
 
+        text_disp_cb = QCheckBox()
+        text_disp_cb.setToolTip(trans._('toggle text visibility'))
+        text_disp_cb.setChecked(self.layer.text.visible)
+        text_disp_cb.stateChanged.connect(self.change_text_visibility)
+        self.textDispCheckBox = text_disp_cb
+
 
         # grid_layout created in QtLayerControls
         # addWidget(widget, row, column, [row_span, column_span])
@@ -208,6 +215,7 @@ class QtBoundingBoxControls(QtLayerControls):
         self.grid_layout.addWidget(QLabel(trans._('edge color:')), 5, 0)
         self.grid_layout.addWidget(self.edgeColorEdit, 5, 1)
         self.grid_layout.addWidget(QLabel(trans._('display text:')), 6, 0)
+        self.grid_layout.addWidget(self.textDispCheckBox, 6, 1)
         self.grid_layout.setRowStretch(7, 1)
         self.grid_layout.setColumnStretch(1, 1)
         self.grid_layout.setSpacing(4)

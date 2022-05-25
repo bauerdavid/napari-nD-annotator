@@ -5,16 +5,18 @@ from copy import deepcopy, copy
 from itertools import cycle
 from typing import Dict, Optional, Union, Tuple
 import napari.layers
+import pandas as pd
 from napari.layers import Layer
 from napari.layers.utils.color_manager_utils import map_property, guess_continuous
 from napari.layers.utils.color_transformations import transform_color_with_defaults, ColorType, \
     normalize_and_broadcast_colors, transform_color_cycle
-from napari.layers.utils.layer_utils import dataframe_to_properties
+from napari.layers.utils.layer_utils import dataframe_to_properties, _FeatureTable
 from napari.layers.utils.text_manager import TextManager
 from napari.utils import Colormap
 from napari.utils.colormaps import ensure_colormap, ValidColormapArg
 from napari.utils.colormaps.standardize_color import transform_color, rgb_to_hex, hex_to_name
 from napari.utils.events import Event
+from napari.utils.events.custom_types import Array
 from napari.utils.misc import ensure_iterable
 from vispy.color import get_color_names
 
@@ -42,7 +44,9 @@ class BoundingBoxLayer(Layer):
                  *,
 
                  ndim=None,
+                 features=None,
                  properties=None,
+                 property_choices=None,
                  text=None,
                  edge_width=1,
                  edge_color='black',
@@ -109,42 +113,15 @@ class BoundingBoxLayer(Layer):
 
         self._display_order_stored = []
         self._ndisplay_stored = self._ndisplay
+
+        self._feature_table = _FeatureTable.from_layer(
+            features=features,
+            properties=properties,
+            property_choices=property_choices,
+            num_data=len(data),
+        )
         # self.mouse_drag_callbacks.append(self._on_click)
         # Save the properties
-        if properties is None or properties == {}:
-            self._properties = {}
-            self._property_choices = {}
-        elif len(data) > 0:
-            properties, _ = dataframe_to_properties(properties)
-            self._properties = self._validate_properties(properties, len(data))
-            self._property_choices = {
-                k: np.unique(v) for k, v in properties.items()
-            }
-        elif len(data) == 0:
-            self._property_choices = {
-                k: np.asarray(v) for k, v in properties.items()
-            }
-            empty_properties = {
-                k: np.empty(0, dtype=v.dtype)
-                for k, v in self._property_choices.items()
-            }
-            self._properties = empty_properties
-
-        # make the text
-        if text is None or isinstance(text, (list, np.ndarray, str)):
-            self._text = TextManager(text, len(data), self.properties)
-        elif isinstance(text, dict):
-            copied_text = deepcopy(text)
-            copied_text['properties'] = self.properties
-            copied_text['n_text'] = len(data)
-            self._text = TextManager(**copied_text)
-        else:
-            raise TypeError(
-                trans._(
-                    'text should be a string, array, or dict',
-                    deferred=True,
-                )
-            )
 
         if np.isscalar(edge_width):
             self._current_edge_width = edge_width
@@ -179,10 +156,9 @@ class BoundingBoxLayer(Layer):
         self._is_creating = False
         self._clipboard = {}
 
-        self._mode = Mode.PAN_ZOOM
-        self._mode_history = self._mode
+        self._mode = None
+        self.mode = Mode.PAN_ZOOM
         self._status = self.mode
-        self._help = trans._('enter a selection mode to edit bounding box properties')
 
         self._init_bounding_boxes(
             data,
@@ -202,14 +178,7 @@ class BoundingBoxLayer(Layer):
         if len(data) > 0:
             self._current_edge_color = self.edge_color[-1]
             self._current_face_color = self.face_color[-1]
-            self.current_properties = {
-                k: np.asarray([v[-1]]) for k, v in self.properties.items()
-            }
         elif len(data) == 0 and self.properties:
-            self.current_properties = {
-                k: np.asarray([v[0]])
-                for k, v in self._property_choices.items()
-            }
             self._initialize_current_color_for_empty_layer(edge_color, 'edge')
             self._initialize_current_color_for_empty_layer(face_color, 'face')
         elif len(data) == 0 and len(self.properties) == 0:
@@ -227,9 +196,88 @@ class BoundingBoxLayer(Layer):
             )
             self.current_properties = {}
 
+        self._text = TextManager._from_layer(
+            text=text,
+            n_text=self.nbounding_boxes,
+            properties=self.properties,
+        )
+
         # Trigger generation of view slice and thumbnail
         self._update_dims()
         self._mouse_down = False
+
+    @property
+    def features(self):
+        """Dataframe-like features table.
+
+        It is an implementation detail that this is a `pandas.DataFrame`. In the future,
+        we will target the currently-in-development Data API dataframe protocol [1].
+        This will enable us to use alternate libraries such as xarray or cuDF for
+        additional features without breaking existing usage of this.
+
+        If you need to specifically rely on the pandas API, please coerce this to a
+        `pandas.DataFrame` using `features_to_pandas_dataframe`.
+
+        References
+        ----------
+        .. [1]: https://data-apis.org/dataframe-protocol/latest/API.html
+        """
+        return self._feature_table.values
+
+    @features.setter
+    def features(
+            self,
+            features: Union[Dict[str, np.ndarray], pd.DataFrame],
+    ) -> None:
+        self._feature_table.set_values(features, num_data=self.nshapes)
+        if self._face_color_property and (
+                self._face_color_property not in self.features
+        ):
+            self._face_color_property = ''
+            warnings.warn(
+                trans._(
+                    'property used for face_color dropped',
+                    deferred=True,
+                ),
+                RuntimeWarning,
+            )
+
+        if self._edge_color_property and (
+                self._edge_color_property not in self.features
+        ):
+            self._edge_color_property = ''
+            warnings.warn(
+                trans._(
+                    'property used for edge_color dropped',
+                    deferred=True,
+                ),
+                RuntimeWarning,
+            )
+
+        if self.text.values is not None:
+            self.refresh_text()
+        self.events.properties()
+
+    @property
+    def feature_defaults(self):
+        """Dataframe-like with one row of feature default values.
+
+        See `features` for more details on the type of this property.
+        """
+        return self._feature_table.defaults
+
+    @property
+    def properties(self) -> Dict[str, np.ndarray]:
+        """dict {str: np.ndarray (N,)}, DataFrame: Annotations for each shape"""
+        return self._feature_table.properties()
+
+    @properties.setter
+    def properties(self, properties: Dict[str, Array]):
+        self.features = properties
+
+    @property
+    def property_choices(self) -> Dict[str, np.ndarray]:
+        return self._feature_table.choices()
 
     def _initialize_current_color_for_empty_layer(
             self, color: ColorType, attribute: str
@@ -425,52 +473,16 @@ class BoundingBoxLayer(Layer):
                     self.current_properties = properties
 
     @property
-    def properties(self) -> Dict[str, np.ndarray]:
-        """dict {str: np.ndarray (N,)}, DataFrame: Annotations for each bounding box"""
-        return self._properties
-
-    @properties.setter
-    def properties(self, properties: Dict[str, np.ndarray]):
-        if not isinstance(properties, dict):
-            properties, _ = dataframe_to_properties(properties)
-        self._properties = self._validate_properties(properties)
-        if self._face_color_property and (
-                self._face_color_property not in self._properties
-        ):
-            self._face_color_property = ''
-            warnings.warn(
-                trans._(
-                    'property used for face_color dropped',
-                    deferred=True,
-                ),
-                RuntimeWarning,
-            )
-
-        if self._edge_color_property and (
-                self._edge_color_property not in self._properties
-        ):
-            self._edge_color_property = ''
-            warnings.warn(
-                trans._(
-                    'property used for edge_color dropped',
-                    deferred=True,
-                ),
-                RuntimeWarning,
-            )
-
-        if self.text.values is not None:
-            self.refresh_text()
-        self.events.properties()
-
-    @property
     def text(self) -> TextManager:
         """TextManager: The TextManager object containing the text properties"""
         return self._text
 
     @text.setter
     def text(self, text):
-        self._text._set_text(
-            text, n_text=len(self.data), properties=self.properties
+        self._text._update_from_layer(
+            text=text,
+            n_text=self.nbounding_boxes,
+            properties=self.properties,
         )
 
     @property
@@ -640,23 +652,22 @@ class BoundingBoxLayer(Layer):
 
     @property
     def current_properties(self) -> Dict[str, np.ndarray]:
-        """dict{str: np.ndarray(1,)}: properties for the next added bounding box."""
-        return self._current_properties
+        """dict{str: np.ndarray(1,)}: properties for the next added shape."""
+        return self._feature_table.currents()
 
     @current_properties.setter
     def current_properties(self, current_properties):
-        self._current_properties = current_properties
-
+        update_indices = None
         if (
                 self._update_properties
                 and len(self.selected_data) > 0
                 and self._mode in [Mode.SELECT, Mode.PAN_ZOOM]
         ):
-            props = self.properties
-            for k in props:
-                props[k][list(self.selected_data)] = current_properties[k]
-            self.properties = props
-
+            update_indices = list(self.selected_data)
+        self._feature_table.set_currents(
+            current_properties, update_indices=update_indices
+        )
+        if update_indices is not None:
             self.refresh_colors()
         self.events.current_properties()
 
@@ -1190,15 +1201,9 @@ class BoundingBoxLayer(Layer):
             else:
                 n_prop_values = 0
             total_bounding_boxes = n_new_bounding_boxes + self.nbounding_boxes
+            self._feature_table.resize(total_bounding_boxes)
             if total_bounding_boxes > n_prop_values:
                 n_props_to_add = total_bounding_boxes - n_prop_values
-                for k in self.properties:
-                    new_property = np.repeat(
-                        self.current_properties[k], n_props_to_add, axis=0
-                    )
-                    self.properties[k] = np.concatenate(
-                        (self.properties[k], new_property), axis=0
-                    )
                 self.text.add(self.current_properties, n_props_to_add)
             if total_bounding_boxes < n_prop_values:
                 for k in self.properties:
@@ -1552,10 +1557,7 @@ class BoundingBoxLayer(Layer):
             self._data_view.remove(ind)
 
         if len(index) > 0:
-            for k in self.properties:
-                self.properties[k] = np.delete(
-                    self.properties[k], index, axis=0
-                )
+            self._feature_table.remove(index)
             self.text.remove(index)
             self._data_view._edge_color = np.delete(
                 self._data_view._edge_color, index, axis=0
@@ -1741,6 +1743,64 @@ class BoundingBoxLayer(Layer):
             self._data_view.update_z_index(index, new_z_index)
         self.refresh()
 
+    def _copy_data(self):
+        """Copy selected shapes to clipboard."""
+        if len(self.selected_data) > 0:
+            index = list(self.selected_data)
+            self._clipboard = {
+                'data': [
+                    deepcopy(self._data_view.bounding_boxes[i])
+                    for i in self._selected_data
+                ],
+                'edge_color': deepcopy(self._data_view._edge_color[index]),
+                'face_color': deepcopy(self._data_view._face_color[index]),
+                'features': deepcopy(self.features.iloc[index]),
+                'indices': self._slice_indices,
+            }
+            if len(self.text.values) == 0:
+                self._clipboard['text'] = np.empty(0)
+            else:
+                self._clipboard['text'] = deepcopy(self.text.values[index])
+        else:
+            self._clipboard = {}
+
+    def _paste_data(self):
+        """Paste any shapes from clipboard and then selects them."""
+        cur_bboxes = self.nbounding_boxes
+        if len(self._clipboard.keys()) > 0:
+            # Calculate offset based on dimension shifts
+            offset = [
+                self._slice_indices[i] - self._clipboard['indices'][i]
+                for i in self._dims_not_displayed
+            ]
+
+            self._feature_table.append(self._clipboard['features'])
+
+            # Add new shape data
+            for i, bb in enumerate(self._clipboard['data']):
+                bbox = deepcopy(bb)
+                data = copy(bbox.data)
+                data[:, self._dims_not_displayed] = data[
+                    :, self._dims_not_displayed
+                ] + np.array(offset)
+                bbox.data = data
+                face_color = self._clipboard['face_color'][i]
+                edge_color = self._clipboard['edge_color'][i]
+                self._data_view.add(
+                    bbox, face_color=face_color, edge_color=edge_color
+                )
+
+            if len(self._clipboard['text']) > 0:
+                self.text.values = np.concatenate(
+                    (self.text.values, self._clipboard['text']), axis=0
+                )
+
+            self.selected_data = set(
+                range(cur_bboxes, cur_bboxes + len(self._clipboard['data']))
+            )
+
+            self.move_to_front()
+
     def _set_highlight(self, force=False):
         """Render highlights of bounding boxes.
 
@@ -1785,7 +1845,7 @@ class BoundingBoxLayer(Layer):
             {
                 'ndim': self.ndim,
                 'properties': self.properties,
-                'text': self.text._get_state(),
+                'text': self.text.dict(),
                 'opacity': self.opacity,
                 'z_index': self.z_index,
                 'edge_width': self.edge_width,
@@ -1798,6 +1858,7 @@ class BoundingBoxLayer(Layer):
                 'edge_colormap': self.edge_colormap.name,
                 'edge_contrast_limits': self.edge_contrast_limits,
                 'data': self.data,
+                'features': self.features,
             }
         )
         return state
@@ -1966,16 +2027,6 @@ class BoundingBoxLayer(Layer):
 
         if not self.editable:
             self.mode = Mode.PAN_ZOOM
-
-    def __deepcopy__(self, memodict={}):
-        result = BoundingBoxLayer(self.data, ndim=self.ndim, properties=self.properties, text=dict(self.text), edge_width=self.edge_width,
-                                  edge_color=self.edge_color, edge_color_cycle=self.edge_color_cycle,
-                                  edge_colormap=self.edge_colormap, edge_contrast_limits=self.edge_contrast_limits,
-                                  face_color=self.face_color, face_color_cycle=self.face_color_cycle, face_colormap=self.face_colormap,
-                                  face_contrast_limits=self.face_contrast_limits, z_index=self.z_index, name=self.name, metadata=self.metadata,
-                                  scale=self.scale, translate=self.translate, rotate=self.rotate, shear=self.shear, affine=self.affine,
-                                  opacity=self.opacity, blending=self.blending, visible=self.visible)
-        return result
 
 
 # This is an ugly solution to register every component correctly
