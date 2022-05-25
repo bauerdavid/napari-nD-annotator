@@ -260,6 +260,7 @@ class ListWidget(QListWidget):
         if indices is None:
             indices = range(1, 1000000)
         self.indices = itertools.cycle(indices)
+        self.current_index = 0
         self.object_counter = 0
         self.viewer = viewer
         self.name_template = name_template
@@ -292,7 +293,7 @@ class ListWidget(QListWidget):
         self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
         self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
         self._bounding_box_layer.events.connect(self.on_layer_event)
-        self._bounding_box_layer.current_properties |= {"label": next(self.index())}
+        self._bounding_box_layer.current_properties |= {"label": self.current_index}
         self._bounding_box_layer.text = {
             "text": "{label:d}",
             "size": 10,
@@ -398,20 +399,16 @@ class ListWidget(QListWidget):
     def bounding_box_change(self, layer, event):
         previous_data = np.asarray([bb.copy() for bb in self.bounding_box_layer.data])
         self._mouse_down = True
-        print(self.bounding_box_layer.features)
+        print(len(previous_data), len(layer.data))
         yield
-        print(self.bounding_box_layer.features)
-        text = dict(self.bounding_box_layer.text)
-        del text["values"]
-        text["text"] = "{label:d}"
-        self.bounding_box_layer.text = text
-        #self.bounding_box_layer.features["label"][i] = int(self.item(i).idx)
-
+        if len(layer.data)>len(previous_data):
+            self.bounding_box_layer.features["label"].iat[-1] = next(self.index())
+            text = dict(self.bounding_box_layer.text)
+            del text["values"]
+            text["text"] = "{label:d}"
+            self.bounding_box_layer.text = text
         while event.type == "mouse_move":
-            #print(self.bounding_box_layer.features)
-
             yield
-        print(self.bounding_box_layer.features)
         self._mouse_down = False
         new_data = np.asarray(self.bounding_box_layer.data)
         if len(new_data) > 0 and (np.any(np.all(new_data > self.image_layer.data.shape, 1))\
@@ -464,9 +461,8 @@ class ListWidget(QListWidget):
                 elif update_all_icons:
                     curr_item.update_icon()
             else:
-                new_item = QObjectListWidgetItem(self.name_template, bb, self.bounding_box_layer.current_properties["label"][0], self, self.viewer, self.image_layer, self.mask_layer, self.channels_dim)
+                new_item = QObjectListWidgetItem(self.name_template, bb, self.bounding_box_layer.features["label"][i], self, self.viewer, self.image_layer, self.mask_layer, self.channels_dim)
                 self.insertItem(i, new_item)
-                self.bounding_box_layer.current_properties["label"][0] = next(self.index())
 
     def insertItem(self, index, item: QObjectListWidgetItem):
         super().insertItem(index, item)
