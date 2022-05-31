@@ -92,8 +92,8 @@ class QtBoundingBoxControls(QtLayerControls):
 
         sld = QSlider(Qt.Horizontal)
         sld.setFocusPolicy(Qt.NoFocus)
-        sld.setMinimum(1)
-        sld.setMaximum(100)
+        sld.setMinimum(2)
+        sld.setMaximum(200)
         sld.setSingleStep(1)
         value = self.layer.text.size
         if isinstance(value, Iterable):
