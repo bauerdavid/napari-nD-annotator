@@ -1,0 +1,20 @@
+name: napari-nD-annotator
+display_name: Annotation Toolbox
+contributions:
+  commands: 
+    - id: napari-nD-annotator.annotator_widget
+      python_name: napari_nd_annotator:AnnotatorWidget
+      title: Annotator Toolbox
+    - id: napari-nD-annotator.interpolation_widget
+      python_name: napari_nd_annotator:InterpolationWidget
+      title: Slice Interpolation
+    - id: napari-nD-annotator.object_list_widget
+      python_name: napari_nd_annotator:ListWidgetBB
+      title: Object List
+  widgets:
+    - command: napari-nD-annotator.annotator_widget
+      display_name: Annotation Toolbox
+    - command: napari-nD-annotator.interpolation_widget
+      display_name: Slice Interpolator
+    - command: napari-nD-annotator.object_list_widget
+      display_name: Object List

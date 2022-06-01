@@ -1,18 +1,17 @@
 import cv2
 import numpy as np
 
-from PyQt5.QtCore import QEvent
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
-    QComboBox, QPushButton, QStackedLayout, QStackedWidget, QDockWidget, QFileDialog, QSpinBox
+from qtpy.QtCore import QEvent, Qt, QObject
+from qtpy.QtGui import QImage, QPixmap
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
+    QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox
 from napari import Viewer
 from napari.layers import Image, Labels
 from napari.layers.labels._labels_constants import Mode
-from qtpy import QtCore
 from scipy.ndimage import find_objects
 
-from widgets.projections import SliceDisplayWidget
-from boundingbox.bounding_boxes import BoundingBoxLayer
+from .projections import SliceDisplayWidget
+from ..boundingbox import BoundingBoxLayer
 
 import itertools
 import csv
@@ -79,7 +78,7 @@ class QObjectListWidgetItem(QListWidgetItem):
             name = parent.name_template
         self.object_item = QObjectWidget(name=name, index=index, bounding_box=bounding_box, parent=self)
         self.setSizeHint(self.object_item.sizeHint())
-        self.setFlags(self.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
+        self.setFlags(self.flags() | Qt.ItemFlag.ItemIsEditable)
         self.parent = parent
         self.viewer = viewer
         self.image_layer = image_layer
@@ -114,7 +113,7 @@ class QObjectListWidgetItem(QListWidgetItem):
         self._resized_icon = cv2.resize(self._icon, out_size, interpolation=cv2.INTER_LANCZOS4)
         img = QImage(self._resized_icon, self._resized_icon.shape[1], self._resized_icon.shape[0], self._resized_icon.shape[1] * 3, QImage.Format.Format_RGB888)
         self.pixmap = QPixmap()
-        self.pixmap = self.pixmap.fromImage(img, QtCore.Qt.ImageConversionFlag.ColorOnly)
+        self.pixmap = self.pixmap.fromImage(img, Qt.ImageConversionFlag.ColorOnly)
         self.object_item.setIcon(self.pixmap)
         # self.update_icon()
 
@@ -183,16 +182,17 @@ class QObjectListWidgetItem(QListWidgetItem):
     def on_select(self):
         self.unselect()
         self.parent.crop_image_layer, self.parent.crop_mask_layer = self.create_layers(self.image_layer.colormap)
-        self.parent.crop_image_layer.name = "[tmp] " + self.parent.crop_image_layer.name
-        self.parent.crop_mask_layer.name = "[tmp] " + self.parent.crop_mask_layer.name
+        self.parent.crop_image_layer.name = self.parent.crop_image_layer.name
+        self.parent.crop_mask_layer.name = self.parent.crop_mask_layer.name
         self.parent.crop_mask_layer.events.set_data.connect(self.on_data_change)
-        self.parent.projections_widget = SliceDisplayWidget(self.viewer, self.parent.crop_image_layer, self.parent.crop_mask_layer, self.channels_dim)
-        qt_widget = self.viewer.window.add_dock_widget(self.parent.projections_widget)
-        qt_widget.setFloating(True)
-        qt_widget.setFeatures(qt_widget.features() & ~QDockWidget.DockWidgetClosable)
-        def set_dockable(state):
-            qt_widget.setAllowedAreas(QtCore.Qt.AllDockWidgetAreas if state else QtCore.Qt.NoDockWidgetArea)
-        self.parent.projections_widget.dockable_checkbox.clicked.connect(set_dockable)
+        if self.image_layer.ndim > 2:
+            self.parent.projections_widget = SliceDisplayWidget(self.viewer, self.parent.crop_image_layer, self.parent.crop_mask_layer, self.channels_dim)
+            qt_widget = self.viewer.window.add_dock_widget(self.parent.projections_widget)
+            qt_widget.setFloating(True)
+            qt_widget.setFeatures(qt_widget.features() & ~QDockWidget.DockWidgetClosable)
+            def set_dockable(state):
+                qt_widget.setAllowedAreas(Qt.AllDockWidgetAreas if state else Qt.NoDockWidgetArea)
+            self.parent.projections_widget.dockable_checkbox.clicked.connect(set_dockable)
         self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
         self.viewer.layers.selection.select_only(self.parent.crop_mask_layer)
         self.mask_layer.visible = False
@@ -207,7 +207,8 @@ class QObjectListWidgetItem(QListWidgetItem):
                 data = self.parent.crop_mask_layer.data.min(axis=self.channels_dim, keepdims=True)
                 self.parent.crop_mask_layer.data[:] = data
         self.mask_layer.data[self.bbox_idx] = self.parent.crop_mask_layer.data
-        self.parent.projections_widget.update_slider_ranges()
+        if self.parent.projections_widget is not None:
+            self.parent.projections_widget.update_slider_ranges()
         self.parent.on_layer_event(event)
     @staticmethod
     def update_layer(layer, event):
@@ -242,7 +243,8 @@ class QObjectListWidgetItem(QListWidgetItem):
             icon = np.asarray(img)
         self.icon = icon
 
-class ListWidget(QListWidget):
+
+class ObjectListWidget(QListWidget):
     def __init__(self, viewer, name_template, bounding_box_layer, image_layer, mask_layer, channels_dim, indices=None):
         super().__init__()
         self._bounding_box_layer = None
@@ -360,7 +362,7 @@ class ListWidget(QListWidget):
             b_data -= self.image_layer.translate.astype(int)
         return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
-    def eventFilter(self, source: QtCore.QObject, event: QtCore.QEvent) -> bool:
+    def eventFilter(self, source: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Close:
             if self.crop_image_layer is not None:
                 self.viewer.layers.remove(self.crop_image_layer)
@@ -545,6 +547,7 @@ class ListWidgetBB(QWidget):
         self.setLayout(layout)
         self.name_template = "Object"
         self.update_list()
+        self.installEventFilter(self)
 
     def bb_index_change(self, index):
         if index == 0 and self.bounding_box_layer_dropdown.count() > 0:
@@ -576,7 +579,7 @@ class ListWidgetBB(QWidget):
             img_idx = 1
             mask_idx = 1
             for layer in self.viewer.layers:
-                if type(layer) == BoundingBoxLayer:
+                if isinstance(layer, BoundingBoxLayer):
                     if bb_idx >= self.bounding_box_layer_dropdown.count():
                         self.bounding_box_layer_dropdown.addItem(layer.name)
                     else:
@@ -585,7 +588,7 @@ class ListWidgetBB(QWidget):
                             or self.bounding_box_layer_dropdown.itemText(bb_idx) == self.bounding_box_layer.name:
                         self.bounding_box_layer_dropdown.setCurrentIndex(bb_idx)
                     bb_idx += 1
-                elif type(layer) == Image:
+                elif isinstance(layer, Image):
                     if img_idx >= self.image_layer_dropdown.count():
                         self.image_layer_dropdown.addItem(layer.name)
                     else:
@@ -594,7 +597,7 @@ class ListWidgetBB(QWidget):
                             or self.image_layer_dropdown.itemText(img_idx) == self.image_layer.name:
                         self.image_layer_dropdown.setCurrentIndex(img_idx)
                     img_idx += 1
-                elif type(layer) == Labels:
+                elif isinstance(layer, Labels):
                     if mask_idx >=self.mask_layer_dropdown.count():
                         self.mask_layer_dropdown.addItem(layer.name)
                     else:
@@ -612,25 +615,25 @@ class ListWidgetBB(QWidget):
                     self.mask_layer_dropdown.removeItem(mask_idx)
         elif type_ == "inserted":
             layer = self.viewer.layers[-1]
-            if type(layer) == BoundingBoxLayer:
+            if isinstance(layer, BoundingBoxLayer):
                 self.bounding_box_layer_dropdown.addItem(layer.name)
                 if self.bounding_box_layer_dropdown.count() == 2:
                     self.bounding_box_layer_dropdown.setCurrentIndex(1)
-            elif type(layer) == Image:
+            elif isinstance(layer, Image):
                 self.image_layer_dropdown.addItem(layer.name)
                 if self.image_layer_dropdown.count() == 2:
                     self.image_layer_dropdown.setCurrentIndex(1)
-            elif type(layer) == Labels:
+            elif isinstance(layer, Labels):
                 self.mask_layer_dropdown.addItem(layer.name)
                 if self.mask_layer_dropdown.count() == 2:
                     self.mask_layer_dropdown.setCurrentIndex(1)
         elif type_ == "name":
             layer = event.source[event.index]
-            if type(layer) == BoundingBoxLayer:
+            if isinstance(layer, BoundingBoxLayer):
                 self.bounding_box_layer_dropdown.setItemText(event.index+1, layer.name)
-            elif type(layer) == Image:
+            elif isinstance(layer, Image):
                 self.image_layer_dropdown.setItemText(event.index+1, layer.name)
-            elif type(layer) == Labels:
+            elif isinstance(layer, Labels):
                 self.mask_layer_dropdown.setItemText(event.index+1, layer.name)
 
 
@@ -668,7 +671,7 @@ class ListWidgetBB(QWidget):
 
     def update_list(self):
         if self.bounding_box_layer is not None:
-            self.list_widget = ListWidget(self.viewer, self.name_template, self.bounding_box_layer, self.image_layer, self.mask_layer, self.channels_dim, self.index_iterator())
+            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box_layer, self.image_layer, self.mask_layer, self.channels_dim, self.index_iterator())
             self.list_widget_container.addWidget(self.list_widget)
             self.list_widget_container.setCurrentIndex(1)
         else:
@@ -742,3 +745,9 @@ class ListWidgetBB(QWidget):
             idx = self.next_index_spinner.value()
             self.next_index_spinner.setValue(idx+1)
             yield idx
+
+    def eventFilter(self, a0: 'QObject', a1: 'QEvent') -> bool:
+        if a0 == self and a1.type() == QEvent.Show:
+            self.parent().setAllowedAreas(Qt.LeftDockWidgetArea)
+            return True
+        return super().eventFilter(a0, a1)

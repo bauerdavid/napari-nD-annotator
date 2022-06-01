@@ -133,10 +133,11 @@ class DataProjectionWidget(QLabel):
                 im = np.zeros(im_shape + (4,), np.uint8)
                 mask = np.zeros_like(im)
             else:
+                print(self.im_idx)
                 if self.image_colormap is None:
                     im = self.image_data[self.im_idx]
                 else:
-                    im = (self.image_colormap[self.image_data[self.im_idx]//256]*255)
+                    im = (self.image_colormap[self.image_data[self.im_idx].astype(np.uint16)//256]*255)
 
                 mask = (self.mask_data[self.im_idx] > 0).astype(np.uint8)
                 alpha = mask * 180
