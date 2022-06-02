@@ -67,7 +67,7 @@ The proposed pipeline goes as follows:
     viewer.add_labels(np.zeros_like(nuclei))
     napari.run()
 
-![](https://imgur.com/G23jS3i.gif)
+![](https://i.imgur.com/xZxdvEQ.gif)
 
 ## License
 
