@@ -9,6 +9,19 @@
 
 A toolbox for annotating objects one by one in nD
 
+This plugin contains some tools to make 2D/3D, but basically any dimensional annotation easier.
+Main features:
+ * nD bounding box layer
+ * object list from bounding boxes
+ * visualizing selected objects from different projections
+ * auto-filling labels
+ * label slice interpolation
+
+The main idea is to create bounding boxes around objects we want to annotate, crop them, and annotate them one by one. This has mainly two advantages when visualizing in 3D:
+
+1. We don't have to load the whole data into memory
+2. The surrounding objects won't occlude the annotated ones, making it easier to check the annotation.
+
 ----------------------------------
 
 This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template.
@@ -27,13 +40,34 @@ You can install `napari-nD-annotator` via [pip]:
 
     pip install napari-nD-annotator
 
+The plugin is also available in napari-hub, to install it directly from napari, please refer to
+[plugin installation instructions] at the official [napari] website.
 
+## Usage
+You can start napari with the plugin's widgets already opened as:
 
+    napari -w napari-nD-annotator "Object List" "Annotation Toolbox"
 
-## Contributing
+The proposed pipeline goes as follows:
 
-Contributions are very welcome. Tests can be run with [tox], please ensure
-the coverage at least stays the same before you submit a pull request.
+ 1. Create a bounding box layer
+ 2. Select data parts using the bounding boxes
+ 3. Select an object from the object list
+ 4. Annotate the object
+ 5. Repeat from 3.
+
+## Example
+
+    import napari
+    from skimage.data import cells3d
+    import numpy as np
+    viewer = napari.Viewer()
+    nuclei = cells3d()[:, 1]
+    viewer.add_image(nuclei, colormap="magma")
+    viewer.add_labels(np.zeros_like(nuclei))
+    napari.run()
+
+![](https://imgur.com/G23jS3i.gif)
 
 ## License
 
@@ -59,3 +93,5 @@ If you encounter any problems, please [file an issue] along with a detailed desc
 [tox]: https://tox.readthedocs.io/en/latest/
 [pip]: https://pypi.org/project/pip/
 [PyPI]: https://pypi.org/
+[plugin installation instructions]: https://napari.org/plugins/find_and_install_plugin.html
+[file an issue]: https://github.com/bauerdavid/napari-nD-annotator/issues/new/choose
