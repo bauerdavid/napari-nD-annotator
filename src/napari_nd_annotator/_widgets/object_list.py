@@ -388,6 +388,10 @@ class ObjectListWidget(QListWidget):
             return True
         return super().eventFilter(source, event)
 
+    def hideEvent(self, a0: QHideEvent) -> None:
+        self.viewer.bind_key('d')(None)
+        super().hideEvent(a0)
+    
     def toggle_bb_visibility(self, _=None):
         if self.bounding_box_layer is not None:
             self.bounding_box_layer.visible = not self.bounding_box_layer.visible
