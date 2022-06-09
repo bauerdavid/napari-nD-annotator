@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 from qtpy.QtCore import QEvent, Qt, QObject
-from qtpy.QtGui import QImage, QPixmap
+from qtpy.QtGui import QImage, QPixmap, QHideEvent, QShowEvent
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
     QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox
 from napari import Viewer
@@ -187,12 +187,7 @@ class QObjectListWidgetItem(QListWidgetItem):
         self.parent.crop_mask_layer.events.set_data.connect(self.on_data_change)
         if self.image_layer.ndim > 2:
             self.parent.projections_widget = SliceDisplayWidget(self.viewer, self.parent.crop_image_layer, self.parent.crop_mask_layer, self.channels_dim)
-            qt_widget = self.viewer.window.add_dock_widget(self.parent.projections_widget)
-            qt_widget.setFloating(True)
-            qt_widget.setFeatures(qt_widget.features() & ~QDockWidget.DockWidgetClosable)
-            def set_dockable(state):
-                qt_widget.setAllowedAreas(Qt.AllDockWidgetAreas if state else Qt.NoDockWidgetArea)
-            self.parent.projections_widget.dockable_checkbox.clicked.connect(set_dockable)
+            self.viewer.window.add_dock_widget(self.parent.projections_widget)
         self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
         self.viewer.layers.selection.select_only(self.parent.crop_mask_layer)
         self.mask_layer.visible = False
@@ -332,7 +327,6 @@ class ObjectListWidget(QListWidget):
         self.update_items()
 
     def on_layer_event(self, event):
-        # print(event.type, self._mouse_down)
         if event.type == "set_data" and not self._mouse_down:
             self.update_items(True)
 
@@ -401,7 +395,6 @@ class ObjectListWidget(QListWidget):
     def bounding_box_change(self, layer, event):
         previous_data = np.asarray([bb.copy() for bb in self.bounding_box_layer.data])
         self._mouse_down = True
-        print(len(previous_data), len(layer.data))
         yield
         if len(layer.data)>len(previous_data):
             self.bounding_box_layer.features["label"].iat[-1] = next(self.index())
@@ -421,7 +414,6 @@ class ObjectListWidget(QListWidget):
                 self.bounding_box_layer.data = [np.clip(data, 0, np.asarray(self.image_layer.data.shape) - 1) for data in new_data]
             else:
                 removed_idx = np.argwhere(~np.any(np.equal(previous_data[np.newaxis], new_data[:, np.newaxis]), (-2, -1)))
-                print("removed_idx was ", removed_idx)
                 self.takeItem(removed_idx)
             '''if self.crop_mask_layer is not None:
                 self.viewer.layers.remove(self.crop_mask_layer)
@@ -573,7 +565,6 @@ class ListWidgetBB(QWidget):
 
     def update_layers(self, event=None):
         type_ = event.type if event else "reordered"
-        # print(type_)
         if type_ in ["reordered", "removed"]:
             bb_idx = 1
             img_idx = 1

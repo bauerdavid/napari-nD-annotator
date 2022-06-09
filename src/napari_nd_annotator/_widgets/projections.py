@@ -3,11 +3,10 @@ import warnings
 
 import numpy as np
 from PIL import Image as PILImage
-from PyQt5.Qt import QWIDGETSIZE_MAX
-from PyQt5.QtCore import QSettings
-from PyQt5.QtGui import QImage, QPixmap, QResizeEvent, QColor
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout, QSlider, QHBoxLayout, QGridLayout, QCheckBox, \
-    QColorDialog, QPushButton
+from qtpy.QtCore import QSettings, Qt
+from qtpy.QtGui import QImage, QPixmap, QResizeEvent, QColor
+from qtpy.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout, QSlider, QHBoxLayout, QGridLayout, QCheckBox, \
+    QColorDialog, QPushButton, QWIDGETSIZE_MAX, QDockWidget
 from napari.layers.labels._labels_constants import Mode
 from qtpy import QtCore
 
@@ -133,7 +132,6 @@ class DataProjectionWidget(QLabel):
                 im = np.zeros(im_shape + (4,), np.uint8)
                 mask = np.zeros_like(im)
             else:
-                print(self.im_idx)
                 if self.image_colormap is None:
                     im = self.image_data[self.im_idx]
                 else:
@@ -200,6 +198,7 @@ class SliceDisplayWidget(QWidget):
         self.offset = image_layer.translate
         self.viewer = viewer
         self.image_layer = image_layer
+        self.shown = False
         for dim in range(viewer.dims.ndim):
             label = QLabel("%d" % dim)
             slider = QSlider(QtCore.Qt.Horizontal)
@@ -240,7 +239,9 @@ class SliceDisplayWidget(QWidget):
         main_layout.addWidget(self.grid_widget)
         extra_settings_layout = QHBoxLayout()
         self.dockable_checkbox = QCheckBox("dockable")
-        self.dockable_checkbox.setChecked(True)
+        dockable = self.settings.value("projectionsWidgetDockable", 'false')
+        self.dockable_checkbox.setChecked(dockable == "true")
+        self.dockable_checkbox.clicked.connect(self.set_dockable)
         extra_settings_layout.addWidget(self.dockable_checkbox)
         self.change_color_button = QPushButton()
         self.change_color_button.setFlat(True)
@@ -317,3 +318,26 @@ class SliceDisplayWidget(QWidget):
             self.change_color_button.setStyleSheet("background-color: %s;" % colors.to_hex(list(map(lambda v: v/255, self.overlay_color))))
             for projection in self.projections:
                 projection.crosshair_color = self.overlay_color
+
+    def set_dockable(self, state):
+        self.parent().setAllowedAreas(Qt.AllDockWidgetAreas if state else Qt.NoDockWidgetArea)
+
+    def showEvent(self, QShowEvent):
+        if self.shown:
+            return
+        self.shown = True
+        dock_widget = self.parent()
+        dock_widget.setFeatures(dock_widget.features() & ~QDockWidget.DockWidgetClosable)
+        geometry = self.settings.value("projectionsWidgetGeometry", None)
+        is_floating = self.settings.value("projectionsWidgetFloating", None)
+        if is_floating is not None:
+            dock_widget.setFloating(is_floating == 'true')
+        if geometry is not None:
+            dock_widget.setGeometry(geometry)
+        self.set_dockable(self.dockable_checkbox.isChecked())
+
+    def hideEvent(self, QHideEvent):
+        self.settings.setValue("projectionsWidgetGeometry", self.parent().geometry())
+        self.settings.setValue("projectionsWidgetFloating", self.parent().isFloating())
+        self.settings.setValue("projectionsWidgetDockable", self.dockable_checkbox.isChecked())
+        super().hideEvent(QHideEvent)
