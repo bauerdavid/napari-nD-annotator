@@ -1,3 +1,5 @@
+import os.path
+
 import cv2
 import numpy as np
 
@@ -287,15 +289,17 @@ class ObjectListWidget(QListWidget):
             self._bounding_box_layer.mouse_double_click_callbacks.remove(self._on_bb_double_click)
             self._bounding_box_layer.events.disconnect(self.on_layer_event)
         self._bounding_box_layer = new_layer
-        self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
-        self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
-        self._bounding_box_layer.events.connect(self.on_layer_event)
-        self._bounding_box_layer.current_properties |= {"label": self.current_index}
-        self._bounding_box_layer.text = {
-            "text": "{label:d}",
-            "size": 10,
-            "color": "green"
-        }
+        if new_layer is not None:
+            print("new layer was not None")
+            self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
+            self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
+            self._bounding_box_layer.events.connect(self.on_layer_event)
+            self._bounding_box_layer.current_properties |= {"label": self.current_index}
+            self._bounding_box_layer.text = {
+                "text": "{label:d}",
+                "size": 10,
+                "color": "green"
+            }
         self.update_items()
 
     @property
@@ -391,7 +395,7 @@ class ObjectListWidget(QListWidget):
     def hideEvent(self, a0: QHideEvent) -> None:
         self.viewer.bind_key('d')(None)
         super().hideEvent(a0)
-    
+
     def toggle_bb_visibility(self, _=None):
         if self.bounding_box_layer is not None:
             self.bounding_box_layer.visible = not self.bounding_box_layer.visible
@@ -494,6 +498,8 @@ class ListWidgetBB(QWidget):
         self.prev_bb_index = 0
         self.prev_img_index = 0
         self.prev_mask_index = 0
+        self.index_iterator = None
+        self.reset_index()
         viewer.layers.events.connect(self.update_layers)
         self.bounding_box_layer_dropdown = QComboBox()
         self.bounding_box_layer_dropdown.addItem("[Bounding box layer]")
@@ -546,9 +552,15 @@ class ListWidgetBB(QWidget):
         self.installEventFilter(self)
 
     def bb_index_change(self, index):
+        print("bb_index_change", index)
         if index == 0 and self.bounding_box_layer_dropdown.count() > 0:
             self.bounding_box_layer_dropdown.setCurrentIndex(self.prev_bb_index)
             return
+        if index == -1:
+            print("list widget was not None")
+            self.reset_index()
+        elif self.list_widget is not None:
+            self.list_widget.bounding_box_layer = self.bounding_box_layer
         self.prev_bb_index = index
         self.update_list()
 
@@ -631,11 +643,21 @@ class ListWidgetBB(QWidget):
             elif isinstance(layer, Labels):
                 self.mask_layer_dropdown.setItemText(event.index+1, layer.name)
 
-
     @property
     def bounding_box_layer(self):
         return self.viewer.layers[self.bounding_box_layer_dropdown.currentText()] \
             if self.bounding_box_layer_dropdown.currentIndex() > 0 else None
+
+    @bounding_box_layer.setter
+    def bounding_box_layer(self, new_layer):
+        if new_layer == self.bounding_box_layer:
+            return
+        if new_layer in self.viewer.layers and isinstance(new_layer, BoundingBoxLayer):
+            for i in range(self.bounding_box_layer_dropdown.count()):
+                layer_name = self.bounding_box_layer_dropdown.itemText(i)
+                if layer_name == new_layer.name:
+                    self.bounding_box_layer_dropdown.setCurrentIndex(i)
+                    break
 
     @property
     def image_layer(self):
@@ -670,6 +692,8 @@ class ListWidgetBB(QWidget):
             self.list_widget_container.addWidget(self.list_widget)
             self.list_widget_container.setCurrentIndex(1)
         else:
+            self.list_widget_container.removeWidget(self.list_widget_container.widget(1))
+            self.list_widget = None
             self.list_widget_container.setCurrentIndex(0)
 
     def export_bounding_boxes(self):
@@ -700,11 +724,9 @@ class ListWidgetBB(QWidget):
         bounding_box_corners = np.reshape(data, (len(data), 2, -1))
         mask = np.asarray(list(itertools.product((False, True), repeat=bounding_box_corners[0].shape[1])))
         bounding_boxes = np.asarray([np.where(mask, bbc[1], bbc[0]) for bbc in bounding_box_corners])
-        if self.bounding_box_layer is None:
-            bounding_box_layer = BoundingBoxLayer(bounding_boxes, edge_color="green", face_color="transparent")
-            self.viewer.add_layer(bounding_box_layer)
-        else:
-            self.bounding_box_layer.data = bounding_boxes
+        bounding_box_layer = BoundingBoxLayer(bounding_boxes, name=os.path.basename(filename), edge_color="green", face_color="transparent", features={"label": idxs})
+        self.viewer.add_layer(bounding_box_layer)
+        self.bounding_box_layer = bounding_box_layer
 
         for i, (name, idx) in enumerate(zip(names, idxs)):
             item = self.list_widget.item(i)
@@ -715,11 +737,9 @@ class ListWidgetBB(QWidget):
     def bounding_boxes_from_labels(self):
         if self.mask_layer is None:
             return
-        if self.bounding_box_layer is None:
-            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
-            self.viewer.add_layer(bb_layer)
-        else:
-            bb_layer = self.bounding_box_layer
+        bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
+        self.viewer.add_layer(bb_layer)
+        self.bounding_box_layer = bb_layer
         bb_corners = find_objects(self.mask_layer.data)
         ids = []
         bbs = []
@@ -735,11 +755,16 @@ class ListWidgetBB(QWidget):
         for i, id_ in enumerate(ids):
             self.list_widget.item(i).idx = id_
 
-    def index_iterator(self):
-        while True:
-            idx = self.next_index_spinner.value()
-            self.next_index_spinner.setValue(idx+1)
-            yield idx
+    def reset_index(self):
+        def index_iterator():
+            idx = 0
+            while True:
+                idx += 1
+                yield idx
+        self.index_iterator = index_iterator
+
+    def next_index(self):
+        return self.index_iterator()
 
     def eventFilter(self, a0: 'QObject', a1: 'QEvent') -> bool:
         if a0 == self and a1.type() == QEvent.Show:
