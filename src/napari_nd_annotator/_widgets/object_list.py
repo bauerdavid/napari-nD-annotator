@@ -229,7 +229,10 @@ class QObjectListWidgetItem(QListWidgetItem):
         else:
             icon = self.image_layer.data[bbox_idx].astype(np.uint8)
         if self.image_layer is not None and not self.image_layer.rgb:
-            icon = (self.image_layer.colormap.colors[icon] * 255).astype(np.uint8)[..., :3]
+            max_ = icon.max()
+            min_ = icon.min()
+            icon = (icon-min_)/(max_ - min_)
+            icon = (self.image_layer.colormap.map(icon.ravel()).reshape(icon.shape + (4,)) * 255).astype(np.uint8)[..., :3]
         else:
             icon = icon.astype(np.uint8)[..., :3]
         if self.mask_layer is not None:
