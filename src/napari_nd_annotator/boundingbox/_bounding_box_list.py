@@ -92,7 +92,6 @@ class BoundingBoxList:
     def ndisplay(self, ndisplay):
         if self.ndisplay == ndisplay:
             return
-
         self._ndisplay = ndisplay
         self._mesh.ndisplay = self.ndisplay
         self._vertices = np.empty((0, self.ndisplay))

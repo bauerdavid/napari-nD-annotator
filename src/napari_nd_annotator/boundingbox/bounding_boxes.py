@@ -384,7 +384,7 @@ class BoundingBoxLayer(Layer):
                 )
             )
 
-        self._data_view = BoundingBoxList()
+        self._data_view = BoundingBoxList(ndisplay=self._ndisplay)
         self._data_view.slice_key = np.array(self._slice_indices)[
             list(self._dims_not_displayed)
         ]

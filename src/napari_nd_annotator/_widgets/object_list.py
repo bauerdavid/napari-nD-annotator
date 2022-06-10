@@ -294,7 +294,6 @@ class ObjectListWidget(QListWidget):
             self._bounding_box_layer.events.disconnect(self.on_layer_event)
         self._bounding_box_layer = new_layer
         if new_layer is not None:
-            print("new layer was not None")
             self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
             self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
             self._bounding_box_layer.events.connect(self.on_layer_event)
@@ -563,17 +562,17 @@ class ListWidgetBB(QWidget):
         self.installEventFilter(self)
 
     def bb_index_change(self, index):
-        print("bb_index_change", index)
         if index == 0 and self.bounding_box_layer_dropdown.count() > 0:
             self.bounding_box_layer_dropdown.setCurrentIndex(self.prev_bb_index)
             return
         if index == -1:
-            print("list widget was not None")
             self.reset_index()
+            self.update_list()
         elif self.list_widget is not None:
             self.list_widget.bounding_box_layer = self.bounding_box_layer
+        else:
+            self.update_list()
         self.prev_bb_index = index
-        self.update_list()
 
     def mask_index_change(self, index):
         if index == 0 and self.mask_layer_dropdown.count() > 0:
