@@ -207,6 +207,7 @@ class QObjectListWidgetItem(QListWidgetItem):
         if self.parent.projections_widget is not None:
             self.parent.projections_widget.update_slider_ranges()
         self.parent.on_layer_event(event)
+
     @staticmethod
     def update_layer(layer, event):
         yield
@@ -397,8 +398,12 @@ class ObjectListWidget(QListWidget):
         super().hideEvent(a0)
 
     def toggle_bb_visibility(self, _=None):
-        if self.bounding_box_layer is not None:
-            self.bounding_box_layer.visible = not self.bounding_box_layer.visible
+        if self.bounding_box_layer is not None and self.bounding_box_layer.visible:
+            mode = self.bounding_box_layer.mode
+            self.bounding_box_layer.visible = False
+            yield
+            self.bounding_box_layer.visible = True
+            self.bounding_box_layer.mode = mode
 
     def bounding_box_change(self, layer, event):
         previous_data = np.asarray([bb.copy() for bb in self.bounding_box_layer.data])
