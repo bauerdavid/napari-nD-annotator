@@ -1,5 +1,5 @@
 import numpy as np
-from cv2 import cv2
+import cv2
 from napari import Viewer
 from napari.layers import Labels
 from scipy.interpolate import interp1d
