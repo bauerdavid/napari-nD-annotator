@@ -62,7 +62,6 @@ class InterpolationWidget(QWidget):
         self.interpolate_button.clicked.connect(self.interpolate)
         layout.addWidget(self.interpolate_button)
         self.viewer.layers.selection.events.connect(self.on_layer_selection_change)
-        self.viewer.layers.events.connect(self.on_layers_event)
         viewer.dims.events.order.connect(self.on_order_change)
         viewer.dims.events.ndisplay.connect(lambda _: self.interpolate_button.setEnabled(viewer.dims.ndisplay == 2))
         self.setLayout(layout)
@@ -72,15 +71,9 @@ class InterpolationWidget(QWidget):
     def on_layer_selection_change(self, event=None):
         if event is None or event.type == "changed":
             active_layer = self.viewer.layers.selection.active
-            print(isinstance(active_layer, Labels))
             if isinstance(active_layer, Labels):
                 self.active_labels_layer = active_layer
-                print(self.active_labels_layer.name)
                 self.dimension_dropdown.setMaximum(self.active_labels_layer.ndim)
-
-    def on_layers_event(self, event):
-        if event.type == "inserted":
-            print(event.type, event.source[event.index])
 
     def set_has_channels(self, has_channels):
         self.channels_dim_dropdown.setEnabled(has_channels)
@@ -96,10 +89,8 @@ class InterpolationWidget(QWidget):
         self.dimension_dropdown.setValue(new_dim)
 
     def interpolate(self):
-        print("interpolate")
         if self.active_labels_layer is None:
             return
-        print("found layer")
         dimension = self.dimension_dropdown.value()
         n_contour_points = self.n_points.value()
         data = self.active_labels_layer.data

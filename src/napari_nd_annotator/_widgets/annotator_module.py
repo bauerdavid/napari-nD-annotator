@@ -12,7 +12,6 @@ from .interpolation_widget import InterpolationWidget
 
 class AnnotatorWidget(QWidget):
     def __init__(self, viewer: Viewer):
-        print("AnnotatorWidget init")
         super().__init__()
         layout = QVBoxLayout()
         self.fill_objects_checkbox = QCheckBox("autofill objects")
@@ -78,7 +77,6 @@ class AnnotatorWidget(QWidget):
 
     def on_layer_selection_change(self, event=None):
         if event is None or event.type == "changed":
-            print("change")
             active_layer = self.viewer.layers.selection.active
             if isinstance(active_layer, Labels):
                 self.active_labels_layer = active_layer
