@@ -110,8 +110,8 @@ class InterpolationWidget(QWidget):
                 continue
             cnt = contour_cv2_mask_uniform(mask, n_contour_points)
             centroid = cnt.mean(0)
-            start_index = np.argmin(np.arctan2(*(cnt - centroid).T))
-            cnt = np.roll(cnt, start_index, 0)
+            start_index = np.argmin(np.abs(np.arctan2(*(cnt - centroid).T)))
+            cnt = np.roll(cnt, -start_index, 0)
             if prev_cnt is not None:
                 for j in range(prev_layer + 1, i):
                     inter_layer_slice = layer_slice_template.copy()
