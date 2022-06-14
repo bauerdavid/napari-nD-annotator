@@ -122,7 +122,8 @@ class InterpolationWidget(QWidget):
                     mean_cnt = mean_cnt.astype(np.int32)
                     mask = np.zeros_like(data[tuple(inter_layer_slice)])
                     cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.active_labels_layer.selected_label, -1)
-                    data[tuple(inter_layer_slice)] = mask
+                    cur_slice = data[tuple(inter_layer_slice)]
+                    cur_slice[mask > 0] = mask[mask > 0]
             prev_cnt = cnt
             prev_layer = i
             self.active_labels_layer.refresh()
