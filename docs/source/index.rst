@@ -28,8 +28,11 @@ check the annotation.
 .. note::
    This documentation is currently in progress.
 
+
+Contents
+--------
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
-   Usage
+
+   usage
 
