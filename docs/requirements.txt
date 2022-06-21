@@ -1,1 +1,1 @@
-qtpy
+PyQt5
