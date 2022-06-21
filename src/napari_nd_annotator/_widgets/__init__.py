@@ -1,3 +1,4 @@
+__all__ = ["InterpolationWidget", "ListWidgetBB", "SliceDisplayWidget", "AnnotatorWidget"]
 from .interpolation_widget import InterpolationWidget
 from .object_list import ListWidgetBB
 from .projections import SliceDisplayWidget

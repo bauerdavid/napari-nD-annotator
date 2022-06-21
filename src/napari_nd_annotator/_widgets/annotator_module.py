@@ -11,6 +11,11 @@ from .interpolation_widget import InterpolationWidget
 
 
 class AnnotatorWidget(QWidget):
+    """
+    Widget combining multiple annotation tools.
+
+    :param viewer: the current Viewer
+    """
     def __init__(self, viewer: Viewer):
         super().__init__()
         layout = QVBoxLayout()

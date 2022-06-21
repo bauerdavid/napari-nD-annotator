@@ -10,11 +10,9 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
-# import os
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
-
-
+import os
+import sys
+sys.path.insert(0, os.path.abspath('../../src'))
 # -- Project information -----------------------------------------------------
 
 project = 'napari-nD-annotator'
@@ -31,8 +29,25 @@ release = '0.0.6'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    'sphinx.ext.autodoc',
+    'sphinx.ext.autosummary'
 ]
+autosummary_generate = True
+autosummary_imported_members = True
+autosummary_ignore_module_all = False
+autosummary_context = \
+    {
+        "ignored_members": {
+            "BoundingBoxLayer": [
+                "mouse_move_callbacks",
+                "mouse_wheel_callbacks",
+                "mouse_drag_callbacks",
+                "mouse_double_click_callbacks"
+            ]
+        }
+    }
 
+add_module_names = False
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 

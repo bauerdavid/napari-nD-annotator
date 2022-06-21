@@ -1,4 +1,5 @@
 # A copy of napari.layers.shapes._shapes_models.shape
+__all__ = ["BoundingBox"]
 from abc import ABC, abstractmethod
 from copy import copy
 
@@ -16,6 +17,7 @@ from ._bounding_box_utils import (
 LOG_DEBUG = True
 class BoundingBox(ABC):
     """Class for a single bounding box
+
     Parameters
     ----------
     data : (N, D) array
@@ -86,7 +88,14 @@ class BoundingBox(ABC):
         dims_order=None,
         ndisplay=2,
     ):
+        """
 
+        :param data: coordinates of the bounding box's corners (in any order)
+        :param edge_width: the displayed width of the bounding box's edges
+        :param z_index: determines the order of display
+        :param dims_order: order of the dimensions
+        :param ndisplay: number of displayed dimensions. Must be either 2 or 3
+        """
         self._dims_order = dims_order or list(range(2))
         self._ndisplay = ndisplay
         self.slice_key = None
@@ -107,7 +116,7 @@ class BoundingBox(ABC):
 
     @property
     def data(self):
-        # user writes own docstring
+        """:return: the coordinates of the bounding box"""
         return self._data
 
     @data.setter
