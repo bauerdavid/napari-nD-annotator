@@ -260,9 +260,8 @@ class ObjectListWidget(QListWidget):
         self.previous_face_color = None
         self.previous_edge_color = None
         self.bb_was_visible = None
-        if indices is None:
-            indices = range(1, 1000000)
-        self.indices = itertools.cycle(indices)
+        self._indices = None
+        self.indices = indices
         self.current_index = 0
         self.object_counter = 0
         self.viewer = viewer
@@ -332,6 +331,24 @@ class ObjectListWidget(QListWidget):
             if self.currentIndex().row() == i:
                 item.on_select()
         self.update_items()
+
+    @property
+    def indices(self):
+        return self._indices
+
+    @indices.setter
+    def indices(self, indices):
+        if indices is None:
+            indices = 1
+        if type(indices) is int:
+            starting_value = indices
+            def index():
+                idx = starting_value
+                while True:
+                    yield idx
+                    idx += 1
+            indices = index()
+        self._indices = itertools.cycle(iter(indices))
 
     def on_layer_event(self, event):
         if event.type == "set_data" and not self._mouse_down:
@@ -412,7 +429,7 @@ class ObjectListWidget(QListWidget):
         self._mouse_down = True
         yield
         if len(layer.data)>len(previous_data):
-            self.bounding_box_layer.features["label"].iat[-1] = next(self.index())
+            self.bounding_box_layer.features["label"].iat[-1] = self.next_index()
             text = dict(self.bounding_box_layer.text)
             del text["values"]
             text["text"] = "{label:d}"
@@ -483,10 +500,8 @@ class ObjectListWidget(QListWidget):
     def addItem(self, item: QObjectListWidgetItem):
         self.insertItem(self.count(), item)
 
-    def index(self):
-        while True:
-            for idx in self.indices:
-                yield idx
+    def next_index(self):
+        return next(self.indices)
 
     def _on_bb_double_click(self, layer=None, event=None):
         if len(self.bounding_box_layer.selected_data) == 0:
@@ -508,7 +523,6 @@ class ListWidgetBB(QWidget):
         self.prev_bb_index = 0
         self.prev_img_index = 0
         self.prev_mask_index = 0
-        self.index_iterator = None
         self.reset_index()
         viewer.layers.events.connect(self.update_layers)
         self.bounding_box_layer_dropdown = QComboBox()
@@ -526,12 +540,7 @@ class ListWidgetBB(QWidget):
         layout.addWidget(self.bounding_box_layer_dropdown)
         layout.addWidget(self.image_layer_dropdown)
         layout.addWidget(self.mask_layer_dropdown)
-        self.next_index_spinner = QSpinBox()
-        self.next_index_spinner.setMinimum(1)
-        self.next_index_spinner.setMaximum(1000000)
-        self.next_index_spinner.setToolTip("Next index")
-        self.next_index_spinner.setVisible(False)
-        layout.addWidget(self.next_index_spinner)
+
         self.list_widget_container = QStackedWidget()
         no_data_widget = QWidget()
         no_data_layout = QVBoxLayout()
@@ -698,7 +707,7 @@ class ListWidgetBB(QWidget):
 
     def update_list(self):
         if self.bounding_box_layer is not None:
-            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box_layer, self.image_layer, self.mask_layer, self.channels_dim, self.index_iterator())
+            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box_layer, self.image_layer, self.mask_layer, self.channels_dim, 1)
             self.list_widget_container.addWidget(self.list_widget)
             self.list_widget_container.setCurrentIndex(1)
         else:
@@ -742,7 +751,7 @@ class ListWidgetBB(QWidget):
             item = self.list_widget.item(i)
             item.name = name
             item.idx = idx
-        self.next_index_spinner.setValue(max(idxs)+1)
+        self.reset_index(max(idxs) + 1)
 
     def bounding_boxes_from_labels(self):
         if self.mask_layer is None:
@@ -765,16 +774,9 @@ class ListWidgetBB(QWidget):
         for i, id_ in enumerate(ids):
             self.list_widget.item(i).idx = id_
 
-    def reset_index(self):
-        def index_iterator():
-            idx = 0
-            while True:
-                idx += 1
-                yield idx
-        self.index_iterator = index_iterator
-
-    def next_index(self):
-        return self.index_iterator()
+    def reset_index(self, starting_index=1):
+        if self.list_widget is not None:
+            self.list_widget.indices = starting_index
 
     def eventFilter(self, a0: 'QObject', a1: 'QEvent') -> bool:
         if a0 == self and a1.type() == QEvent.Show:
