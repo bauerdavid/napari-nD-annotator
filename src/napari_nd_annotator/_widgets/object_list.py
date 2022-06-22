@@ -223,7 +223,7 @@ class QObjectListWidgetItem(QListWidgetItem):
             for d in range(self.bounding_box.shape[1])
         )
         if self.image_layer is None:
-            icon = np.zeros([len(bbox_idx[d]) for d in range(len(bbox_idx)) if type(bbox_idx[d]) is slice])
+            icon = np.zeros([slice_len(bbox_idx[d]) for d in range(len(bbox_idx)) if type(bbox_idx[d]) is slice] + [3])
         elif self.image_layer.dtype == np.uint16:
             icon = (self.image_layer.data[bbox_idx] // (2 ** 8)).astype(np.uint8)
         else:
