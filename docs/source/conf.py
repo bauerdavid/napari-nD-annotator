@@ -20,7 +20,8 @@ copyright = '2022, David Bauer'
 author = 'David Bauer'
 
 # The full version, including alpha/beta/rc tags
-release = '0.0.6'
+import napari_nd_annotator
+release = napari_nd_annotator.__version__
 
 
 # -- General configuration ---------------------------------------------------

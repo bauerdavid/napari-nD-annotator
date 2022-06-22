@@ -15,7 +15,9 @@
    .. autosummary::
    {% for item in methods %}
    {%- if item not in ignored_members[objname] %}
+      {%- if item not in inherited_members %}
       ~{{ name }}.{{ item }}
+      {%- endif %}
    {%- endif %}
    {%- endfor %}
    {% endif %}
@@ -28,7 +30,9 @@
    .. autosummary::
    {% for item in attributes %}
    {%- if item not in ignored_members[objname] %}
+      {%- if item not in inherited_members %}
       ~{{ name }}.{{ item }}
+      {%- endif %}
    {%- endif %}
    {%- endfor %}
    {% endif %}
