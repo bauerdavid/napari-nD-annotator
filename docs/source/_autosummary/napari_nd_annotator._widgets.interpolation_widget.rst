@@ -27,14 +27,6 @@ napari\_nd\_annotator.\_widgets.interpolation\_widget
       :template: custom-class-template.rst
    
       InterpolationWidget
-      Labels
-      QLabel
-      QPushButton
-      QSpinBox
-      QVBoxLayout
-      QWidget
-      Viewer
-      interp1d
    
    
 

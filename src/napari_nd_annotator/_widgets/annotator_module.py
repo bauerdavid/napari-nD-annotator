@@ -1,3 +1,4 @@
+__all__ = ["AnnotatorWidget"]
 from qtpy.QtCore import QObject, QEvent
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QTabWidget, QLabel
 from napari import Viewer

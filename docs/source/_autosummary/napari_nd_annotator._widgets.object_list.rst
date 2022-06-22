@@ -9,14 +9,6 @@ napari\_nd\_annotator.\_widgets.object\_list
 
    
    
-   .. rubric:: Functions
-
-   .. autosummary::
-      :toctree:
-   
-      find_objects
-      slice_len
-   
    
 
    
@@ -27,37 +19,10 @@ napari\_nd\_annotator.\_widgets.object\_list
       :toctree:
       :template: custom-class-template.rst
    
-      BoundingBoxLayer
-      Image
-      Labels
       ListWidgetBB
-      Mode
-      ObjectListWidget
-      QComboBox
-      QDockWidget
-      QEvent
-      QFileDialog
-      QHBoxLayout
-      QHideEvent
-      QImage
-      QLabel
-      QLineEdit
-      QListWidget
-      QListWidgetItem
-      QMenu
-      QObject
-      QObjectListWidgetItem
       QObjectWidget
-      QPixmap
-      QPushButton
-      QShowEvent
-      QSpinBox
-      QStackedWidget
-      QVBoxLayout
-      QWidget
-      Qt
-      SliceDisplayWidget
-      Viewer
+      QObjectListWidgetItem
+      ObjectListWidget
    
    
 

@@ -9,13 +9,6 @@ napari\_nd\_annotator.\_widgets.annotator\_module
 
    
    
-   .. rubric:: Functions
-
-   .. autosummary::
-      :toctree:
-   
-      binary_fill_holes
-   
    
 
    
@@ -27,17 +20,6 @@ napari\_nd\_annotator.\_widgets.annotator\_module
       :template: custom-class-template.rst
    
       AnnotatorWidget
-      InterpolationWidget
-      Labels
-      Layer
-      QCheckBox
-      QEvent
-      QLabel
-      QObject
-      QTabWidget
-      QVBoxLayout
-      QWidget
-      Viewer
    
    
 
