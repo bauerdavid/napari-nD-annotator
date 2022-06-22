@@ -90,11 +90,13 @@ class BoundingBox(ABC):
     ):
         """
 
-        :param data: coordinates of the bounding box's corners (in any order)
-        :param edge_width: the displayed width of the bounding box's edges
-        :param z_index: determines the order of display
-        :param dims_order: order of the dimensions
-        :param ndisplay: number of displayed dimensions. Must be either 2 or 3
+        Parameters
+        ----------
+        data : coordinates of the bounding box's corners (in any order)
+        edge_width : the displayed width of the bounding box's edges
+        z_index : determines the order of display
+        dims_order : order of the dimensions
+        ndisplay : number of displayed dimensions. Must be either 2 or 3
         """
         self._dims_order = dims_order or list(range(2))
         self._ndisplay = ndisplay
@@ -116,7 +118,7 @@ class BoundingBox(ABC):
 
     @property
     def data(self):
-        """:return: the coordinates of the bounding box"""
+        """The coordinates of the bounding box corners"""
         return self._data
 
     @data.setter
@@ -186,7 +188,7 @@ class BoundingBox(ABC):
 
     @property
     def ndisplay(self):
-        """int: Number of displayed dimensions."""
+        """int : Number of displayed dimensions."""
         return self._ndisplay
 
     @ndisplay.setter

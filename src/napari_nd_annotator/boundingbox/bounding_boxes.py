@@ -1,8 +1,6 @@
 # A copy of napari.layers.shapes.shapes
 
-__all__ = ["BoundingBoxLayer", "x"]
-"""Some documentation for x"""
-x = 15
+__all__ = ["BoundingBoxLayer"]
 import warnings
 from contextlib import contextmanager
 from copy import deepcopy, copy
@@ -289,9 +287,11 @@ class BoundingBoxLayer(Layer):
     ):
         """Initialize current_{edge,face}_color when starting with empty layer.
 
-        :param color: (N, 4) array or str
+        Parameters
+        ----------
+        color : (N, 4) array or str
             The value for setting edge or face_color
-        :param attribute: str in {'edge', 'face'}
+        attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color or 'face' for face_color.
         """
@@ -837,9 +837,11 @@ class BoundingBoxLayer(Layer):
     def _set_color_cycle(self, color_cycle: np.ndarray, attribute: str):
         """Set the face_color_cycle or edge_color_cycle property
 
-        :param color_cycle: (N, 4) or (N, 1) array
+        Parameters
+        ----------
+        color_cycle : (N, 4) or (N, 1) array
             The value for setting edge or face_color_cycle
-        :param attribute: str in {'edge', 'face'}
+        attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color or 'face' for face_color.
         """
@@ -859,9 +861,11 @@ class BoundingBoxLayer(Layer):
     def _set_color(self, color, attribute: str):
         """Set the face_color or edge_color property
 
-        :param color: (N, 4) array or str
+        Parameters
+        ----------
+        color : (N, 4) array or str
             The value for setting edge or face_color
-        :param attribute: str in {'edge', 'face'}
+        attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color or 'face' for face_color.
         """
@@ -898,10 +902,12 @@ class BoundingBoxLayer(Layer):
     ):
         """Set the face_color_mode or edge_color_mode property
 
-        :param color_mode: str, ColorMode
+        Parameters
+        ----------
+        color_mode : str, ColorMode
             The value for setting edge or face_color_mode. If color_mode is a string,
             it should be one of: 'direct', 'cycle', or 'colormap'
-        :param attribute: str in {'edge', 'face'}
+        attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_colo_moder or 'face' for face_color_mode.
         """
@@ -960,8 +966,14 @@ class BoundingBoxLayer(Layer):
     def _is_color_mapped(self, color: Union[str, list, np.ndarray]) -> bool:
         """Determines if the new color argument is for directly setting or cycle/colormap
 
-        :param color: The color to check
-        :returns: True if color is the name of a property, False otherwise (if it is a valid colormap).
+        Parameters
+        ----------
+        color : The color to check
+
+        Returns
+        -------
+        bool
+            True if color is the name of a property, False otherwise (if it is a valid colormap).
         """
         if isinstance(color, str):
             if color in self.properties:
@@ -981,13 +993,18 @@ class BoundingBoxLayer(Layer):
     def _initialize_color(self, color, attribute: str, n_bounding_boxes: int):
         """Get the face/edge colors the BoundingBoxLayer layer will be initialized with
 
-        :param color: (N, 4) array or str
+        Parameters
+        ----------
+        color : (N, 4) array or str
             The value for setting edge or face_color
-        :param attribute: str in {'edge', 'face'}
+        attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color or 'face' for face_color.
 
-        :returns: (N, 4) array or str, the calculated values for setting edge or face_color
+        Returns
+        -------
+        (N, 4) array or str
+            the calculated values for setting edge or face_color
         """
         if self._is_color_mapped(color):
             if guess_continuous(self.properties[color]):
@@ -1028,27 +1045,29 @@ class BoundingBoxLayer(Layer):
     ):
         """Add bounding boxes to the data view.
 
-        :param data: Array | List[Array]
+        Parameters
+        ----------
+        data : Array | List[Array]
             List of bounding box data, where each element is an (N, D) array of the
             N vertices of a bounding box in D dimensions. Can be an 3-dimensional array.
-        :param edge_width: float | list
+        edge_width : float | list
             thickness of lines and edges. If a list is supplied it must be the
             same length as the length of `data` and each element will be
             applied to each bounding box otherwise the same value will be used for all
             bounding boxes.
-        :param edge_color: str | tuple | list
+        edge_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
             the length of `data` and each element will be applied to each bounding box
             otherwise the same value will be used for all bounding boxes.
-        :param face_color: str | tuple | list
+        face_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
             the length of `data` and each element will be applied to each bounding box
             otherwise the same value will be used for all bounding boxes.
-        :param z_index: int | list
+        z_index : int | list
             Specifier of z order priority. Bounding boxes with higher z order are
             displayed ontop of others. If a list is supplied it must be the
             same length as the length of `data` and each element will be
@@ -1133,27 +1152,29 @@ class BoundingBoxLayer(Layer):
     ):
         """Add bounding boxes to the current layer.
 
-        :param data: Array | List[Array]
+        Parameters
+        ----------
+        data : Array | List[Array]
             List of bounding box data, where each element is an (N, D) array of the
             N vertices of a bounding box in D dimensions. Can be an 3-dimensional array.
-        :param edge_width: float | list
+        edge_width : float | list
             thickness of lines and edges. If a list is supplied it must be the
             same length as the length of `data` and each element will be
             applied to each bounding box otherwise the same value will be used for all
             bounding boxes.
-        :param edge_color: str | tuple | list
+        edge_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
             the length of `data` and each element will be applied to each bounding box
             otherwise the same value will be used for all bounding boxes.
-        :param face_color: str | tuple | list
+        face_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
             the length of `data` and each element will be applied to each bounding box
             otherwise the same value will be used for all bounding boxes.
-        :param z_index: int | list
+        z_index : int | list
             Specifier of z order priority. Bounding boxes with higher z order are
             displayed ontop of others. If a list is supplied it must be the
             same length as the length of `data` and each element will be
@@ -1223,27 +1244,29 @@ class BoundingBoxLayer(Layer):
     ):
         """Add bounding boxes to the data view.
 
-        :param data: Array | List[Array]
+        Parameters
+        ----------
+        data : Array | List[Array]
             List of bounding box data, where each element is an (N, D) array of the
             N vertices of a bounding box in D dimensions. Can be an 3-dimensional array.
-        :param edge_width: float | list
+        edge_width : float | list
             thickness of lines and edges. If a list is supplied it must be the
             same length as the length of `data` and each element will be
             applied to each bounding box otherwise the same value will be used for all
             bounding boxes.
-        :param edge_color: str | tuple | list
+        edge_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
             the length of `data` and each element will be applied to each bounding box
             otherwise the same value will be used for all bounding boxes.
-        :param face_color: str | tuple | list
+        face_color : str | tuple | list
             If string can be any color name recognized by vispy or hex value if
             starting with `#`. If array-like must be 1-dimensional array with 3
             or 4 elements. If a list is supplied it must be the same length as
             the length of `data` and each element will be applied to each bounding box
             otherwise the same value will be used for all bounding boxes.
-        :param z_index: int | list
+        z_index : int | list
             Specifier of z order priority. Bounding boxes with higher z order are
             displayed ontop of others. If a list is supplied it must be the
             same length as the length of `data` and each element will be
@@ -1289,7 +1312,9 @@ class BoundingBoxLayer(Layer):
     def refresh_colors(self, update_color_mapping: bool = False):
         """Calculate and update face and edge colors if using a cycle or color map
 
-        :param update_color_mapping: bool
+        Parameters
+        ----------
+        update_color_mapping : bool
             If set to True, the function will recalculate the color cycle map
             or colormap (whichever is being used). If set to False, the function
             will use the current color cycle map or color map. For example, if you
@@ -1307,10 +1332,12 @@ class BoundingBoxLayer(Layer):
     ):
         """Calculate and update face or edge colors if using a cycle or color map
 
-        :param attribute: str  in {'edge', 'face'}
+        Parameters
+        ----------
+        attribute : str  in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color or 'face' for face_color.
-        :param update_color_mapping: bool
+        update_color_mapping : bool
             If set to True, the function will recalculate the color cycle map
             or colormap (whichever is being used). If set to False, the function
             will use the current color cycle map or color map. For example, if you
@@ -1331,13 +1358,17 @@ class BoundingBoxLayer(Layer):
     def _get_new_bounding_box_color(self, adding: int, attribute: str):
         """Get the color for the bounding box(es) to be added.
 
-        :param adding: int
+        Parameters
+        ----------
+        adding : int
             the number of bounding boxes that were added
             (and thus the number of color entries to add)
-        :param attribute: str in {'edge', 'face'}
+        attribute : str in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color_mode or 'face' for face_color_mode.
 
+        Returns
+        -------
         new_colors : (N, 4) array
             (Nx4) RGBA array of colors for the N new bounding boxes
         """
@@ -1382,10 +1413,12 @@ class BoundingBoxLayer(Layer):
     def _map_color(self, attribute: str, update_color_mapping: bool = False):
         """Calculate the mapping for face or edge colors if using a cycle or color map
 
-        :param attribute: str  in {'edge', 'face'}
+        Parameters
+        ----------
+        attribute : str  in {'edge', 'face'}
             The name of the attribute to set the color of.
             Should be 'edge' for edge_color or 'face' for face_color.
-        :param update_color_mapping: bool
+        update_color_mapping : bool
             If set to True, the function will recalculate the color cycle map
             or colormap (whichever is being used). If set to False, the function
             will use the current color cycle map or color map. For example, if you
@@ -1394,6 +1427,8 @@ class BoundingBoxLayer(Layer):
             the color cycle map or colormap), set update_color_mapping=False.
             Default value is False.
 
+        Returns
+        -------
         colors : (N, 4) array or str
             The calculated values for setting edge or face_color
         """
@@ -1544,11 +1579,16 @@ class BoundingBoxLayer(Layer):
         from that bounding boxes interaction box. If list of indices is passed it will
         be computed directly.
 
-        :param int|list index:
+        Parameters
+        ----------
+        index : int | list
             Index of a single bounding box, or a list of bounding boxes around which to
             construct the interaction box
 
-        :returns: 10x2 array of vertices of the interaction box.
+        Returns
+        -------
+        10x2 array
+            Vertices of the interaction box.
             The first 8 points are the corners and midpoints of the box in
             clockwise order starting in the upper-left corner. The 9th point
             is the center of the box, and the last point is the location of
@@ -1585,9 +1625,11 @@ class BoundingBoxLayer(Layer):
     def _scale_box(self, scale, center=[0, 0]):
         """Perform a scaling on the selected box.
 
-        :param scale: float, list
+        Parameters
+        ----------
+        scale : float, list
             scalar or list specifying rescaling of bounding box.
-        :param center: list
+        center : list
             coordinates of center of rotation.
         """
         if not isinstance(scale, (list, np.ndarray)):
@@ -1604,9 +1646,11 @@ class BoundingBoxLayer(Layer):
     def _transform_box(self, transform, center=[0, 0]):
         """Perform a linear transformation on the selected box.
 
-        :param transform : np.ndarray
+        Parameters
+        ----------
+        transform : np.ndarray
             2x2 array specifying linear transform.
-        :param center : list
+        center : list
             coordinates of center of rotation.
         """
         box = self._selected_box - center
@@ -1621,15 +1665,19 @@ class BoundingBoxLayer(Layer):
     def _get_value(self, position):
         """Value of the data at a position in data coordinates.
 
-        :param position : tuple
+        Parameters
+        ----------
+        position : tuple
             Position in data coordinates.
-        :returns:
-            bounding box : int | None
-                Index of bounding box if any that is at the coordinates. Returns `None`
-                if no bounding box is found.
-            vertex : int | None
-                Index of vertex if any that is at the coordinates. Returns `None`
-                if no vertex is found.
+
+        Returns
+        -------
+        bounding box : int | None
+            Index of bounding box if any that is at the coordinates. Returns `None`
+            if no bounding box is found.
+        vertex : int | None
+            Index of vertex if any that is at the coordinates. Returns `None`
+            if no vertex is found.
         """
         if self._ndisplay == 3:
             return (None, None)
@@ -1764,7 +1812,9 @@ class BoundingBoxLayer(Layer):
         Includes boundaries, vertices, interaction boxes, and the drag
         selection box when appropriate.
 
-        :param force: bool
+        Parameters
+        ----------
+        force: bool
             Bool that forces a redraw to occur when `True`
         """
         # Check if any bounding box or vertex ids have changed since last call
@@ -1849,12 +1899,13 @@ class BoundingBoxLayer(Layer):
     def _outline_bounding_boxes(self):
         """Find outlines of any selected or hovered bounding boxes.
 
-        :returns:
-            vertices : None | np.ndarray
-                Nx2 array of any vertices of outline or None
-            triangles : None | np.ndarray
-                Mx3 array of any indices of vertices for triangles of outline or
-                None
+        Returns
+        -------
+        vertices : None | np.ndarray
+            Nx2 array of any vertices of outline or None
+        triangles : None | np.ndarray
+            Mx3 array of any indices of vertices for triangles of outline or
+            None
         """
         if self._value is not None and (
             self._value[0] is not None or len(self.selected_data) > 0
@@ -1884,18 +1935,19 @@ class BoundingBoxLayer(Layer):
     def _compute_vertices_and_box(self):
         """Compute location of highlight vertices and box for rendering.
 
-        :returns:
-            vertices : np.ndarray
-                Nx2 array of any vertices to be rendered as Markers
-            face_color : str
-                String of the face color of the Markers
-            edge_color : str
-                String of the edge color of the Markers and Line for the box
-            pos : np.ndarray
-                Nx2 array of vertices of the box that will be rendered using a
-                Vispy Line
-            width : float
-                Width of the box edge
+        Returns
+        -------
+        vertices : np.ndarray
+            Nx2 array of any vertices to be rendered as Markers
+        face_color : str
+            String of the face color of the Markers
+        edge_color : str
+            String of the edge color of the Markers and Line for the box
+        pos : np.ndarray
+            Nx2 array of vertices of the box that will be rendered using a
+            Vispy Line
+        width : float
+            Width of the box edge
         """
         if len(self.selected_data) > 0:
             if self._mode == Mode.SELECT:

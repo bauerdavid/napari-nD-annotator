@@ -30,7 +30,8 @@ release = '0.0.6'
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
-    'sphinx.ext.autosummary'
+    'sphinx.ext.autosummary',
+    'sphinx.ext.napoleon'
 ]
 autosummary_generate = True
 autosummary_imported_members = True
@@ -48,6 +49,7 @@ autosummary_context = \
     }
 
 add_module_names = False
+napoleon_google_docstrings = False
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
