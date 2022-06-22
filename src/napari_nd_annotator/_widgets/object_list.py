@@ -728,6 +728,8 @@ class ListWidgetBB(QWidget):
 
     def import_bounding_boxes(self):
         filename = QFileDialog.getOpenFileName(self, "Select...", None, "(*.txt)")[0]
+        if not filename:
+            return
         names = []
         idxs = []
         data = []
