@@ -68,6 +68,7 @@ class QObjectWidget(QWidget):
 
     def setIcon(self, icon):
         self.iconQLabel.setPixmap(icon)
+        self.iconQLabel.setFixedSize(icon.size())
 
     def bounding_box_str(self, bb):
         pass
