@@ -32,25 +32,6 @@ class BoundingBox(ABC):
     ndisplay : int
         Number of displayed dimensions.
 
-    Attributes
-    ----------
-    data : (N, D) array
-        Vertices specifying the bounding box.
-    data_displayed : (N, 2) or (N, 3) array
-        Vertices of the bounding box that are currently displayed.
-    edge_width : float
-        thickness of lines and edges.
-    z_index : int
-        Specifier of z order priority. Bounding boxes with higher z order are displayed
-        ontop of others.
-    dims_order : (D,) list
-        Order that the dimensions are rendered in.
-    ndisplay : int
-        Number of dimensions to be displayed.
-    slice_key : (2, M) array
-        Min and max values of the M non-displayed dimensions, useful for
-        slicing multidimensional bounding boxes.
-
     Notes
     -----
     _box : np.ndarray
@@ -100,8 +81,9 @@ class BoundingBox(ABC):
         """
         self._dims_order = dims_order or list(range(2))
         self._ndisplay = ndisplay
-        self.slice_key = None
 
+        self.slice_key = None
+        """(2, M) array: Minimum and maximum values of the M non-displayed dimensions."""
         self._face_vertices = np.empty((0, self.ndisplay))
         self._face_triangles = np.empty((0, 3), dtype=np.uint32)
         self._edge_vertices = np.empty((0, self.ndisplay))

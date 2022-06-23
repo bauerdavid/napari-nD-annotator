@@ -1,4 +1,4 @@
-﻿napari\_nd\_annotator.\_widgets.SliceDisplayWidget
+napari\_nd\_annotator.\_widgets.SliceDisplayWidget
 ==================================================
 
 .. currentmodule:: napari_nd_annotator._widgets

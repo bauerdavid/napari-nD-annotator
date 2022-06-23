@@ -38,6 +38,4 @@
    :template: custom-module-template.rst
    :recursive:
 
-   napari_nd_annotator.boundingbox.bounding_box
-   napari_nd_annotator.boundingbox.bounding_boxes
 

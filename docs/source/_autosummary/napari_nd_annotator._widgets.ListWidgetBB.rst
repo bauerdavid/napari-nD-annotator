@@ -1,4 +1,4 @@
-﻿napari\_nd\_annotator.\_widgets.ListWidgetBB
+napari\_nd\_annotator.\_widgets.ListWidgetBB
 ============================================
 
 .. currentmodule:: napari_nd_annotator._widgets

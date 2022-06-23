@@ -1,4 +1,4 @@
-﻿napari\_nd\_annotator.boundingbox.BoundingBoxLayer
+napari\_nd\_annotator.boundingbox.BoundingBoxLayer
 ==================================================
 
 .. currentmodule:: napari_nd_annotator.boundingbox

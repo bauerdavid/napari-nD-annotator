@@ -36,5 +36,6 @@ napari\_nd\_annotator.boundingbox.BoundingBox
       ~BoundingBox.edge_width
       ~BoundingBox.ndisplay
       ~BoundingBox.z_index
+      ~BoundingBox.slice_key
    
    

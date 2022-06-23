@@ -1,4 +1,4 @@
-﻿napari\_nd\_annotator.\_widgets.InterpolationWidget
+napari\_nd\_annotator.\_widgets.InterpolationWidget
 ===================================================
 
 .. currentmodule:: napari_nd_annotator._widgets

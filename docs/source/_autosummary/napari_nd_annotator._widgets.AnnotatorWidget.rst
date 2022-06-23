@@ -1,4 +1,4 @@
-﻿napari\_nd\_annotator.\_widgets.AnnotatorWidget
+napari\_nd\_annotator.\_widgets.AnnotatorWidget
 ===============================================
 
 .. currentmodule:: napari_nd_annotator._widgets

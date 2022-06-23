@@ -9,7 +9,9 @@
    .. autosummary::
       :toctree:
    {% for item in attributes %}
+      {%- if item not in ignored_members[objname] %}
       {{ item }}
+      {%- endif %}
    {%- endfor %}
    {% endif %}
    {% endblock %}
@@ -21,7 +23,9 @@
    .. autosummary::
       :toctree:
    {% for item in functions %}
+      {%- if item not in ignored_members[objname] %}
       {{ item }}
+      {%- endif %}
    {%- endfor %}
    {% endif %}
    {% endblock %}
@@ -34,7 +38,9 @@
       :toctree:
       :template: custom-class-template.rst
    {% for item in classes %}
+      {%- if item not in ignored_members[objname] %}
       {{ item }}
+      {%- endif %}
    {%- endfor %}
    {% endif %}
    {% endblock %}
@@ -46,7 +52,9 @@
    .. autosummary::
       :toctree:
    {% for item in exceptions %}
+      {%- if item not in ignored_members[objname] %}
       {{ item }}
+      {%- endif %}
    {%- endfor %}
    {% endif %}
    {% endblock %}
@@ -61,7 +69,9 @@
    :template: custom-module-template.rst
    :recursive:
 {% for item in modules %}
+   {%- if item not in ignored_members[objname] %}
    {{ item }}
+   {%- endif %}
 {%- endfor %}
 {% endif %}
 {% endblock %}

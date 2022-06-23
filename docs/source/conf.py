@@ -45,6 +45,16 @@ autosummary_context = \
                 "mouse_wheel_callbacks",
                 "mouse_drag_callbacks",
                 "mouse_double_click_callbacks"
+            ],
+            "boundingbox": [
+                "napari_nd_annotator.boundingbox.bounding_box",
+                "napari_nd_annotator.boundingbox.bounding_boxes"
+            ],
+            "_widgets": [
+                "napari_nd_annotator._widgets.annotator_module",
+                "napari_nd_annotator._widgets.interpolation_widget",
+                "napari_nd_annotator._widgets.object_list",
+                "napari_nd_annotator._widgets.projections"
             ]
         }
     }
