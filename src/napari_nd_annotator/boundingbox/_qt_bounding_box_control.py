@@ -1,7 +1,7 @@
 # A copy of napari._qt.layer_controls.qt_shapes_controls
 from typing import Iterable
 
-from PyQt5.QtWidgets import QCheckBox
+from qtpy.QtWidgets import QCheckBox
 from napari._qt.widgets.qt_color_swatch import QColorSwatchEdit
 from napari.utils.action_manager import action_manager
 from qtpy.QtCore import Qt

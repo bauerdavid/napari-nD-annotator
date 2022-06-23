@@ -1,3 +1,4 @@
+__all__ = ["contour_cv2_mask_uniform", "InterpolationWidget"]
 import numpy as np
 import cv2
 from napari import Viewer
