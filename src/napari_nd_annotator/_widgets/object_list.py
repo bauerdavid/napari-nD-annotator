@@ -1,4 +1,5 @@
 import os.path
+import warnings
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ from napari.layers import Image, Labels
 from napari.layers.labels._labels_constants import Mode
 from scipy.ndimage import find_objects
 
+from ._utils.widget_with_layer_list import WidgetWithLayerList
 from .projections import SliceDisplayWidget
 from ..boundingbox import BoundingBoxLayer
 
@@ -69,9 +71,6 @@ class QObjectWidget(QWidget):
     def setIcon(self, icon):
         self.iconQLabel.setPixmap(icon)
         self.iconQLabel.setFixedSize(icon.size())
-
-    def bounding_box_str(self, bb):
-        pass
 
 
 class QObjectListWidgetItem(QListWidgetItem):
@@ -153,17 +152,25 @@ class QObjectListWidgetItem(QListWidgetItem):
     def name(self, name):
         self.object_item.name = name
 
-    def create_layers(self, colormap):
-        image_layer = Image(self.image_layer.data[self.bbox_idx], name="Cropped Image %d" % self.idx, colormap=colormap,
-                            rgb=self.image_layer.rgb)
-        image_layer.translate = self.bounding_box[0, :]+self.image_layer.translate
-        self.viewer.add_layer(image_layer)
-        mask_layer = Labels(self.mask_layer.data[self.bbox_idx], name="Cropped Mask %d" % self.idx)
-        mask_layer.selected_label = self.idx
-        mask_layer.translate = self.bounding_box[0, :]+self.mask_layer.translate
-        mask_layer.brush_size = 1
-        mask_layer.mode = Mode.PAINT
-        self.viewer.add_layer(mask_layer)
+    def create_layers(self):
+        if self.image_layer is not None:
+            image_layer = Image(self.image_layer.data[self.bbox_idx],
+                                name="Cropped %s %d" % (self.image_layer.name, self.idx),
+                                colormap=self.image_layer.colormap, rgb=self.image_layer.rgb)
+            image_layer.translate = self.bounding_box[0, :]+self.image_layer.translate
+            self.viewer.add_layer(image_layer)
+        else:
+            image_layer = None
+        if self.mask_layer is not None:
+            mask_layer = Labels(self.mask_layer.data[self.bbox_idx],
+                                name="Cropped %s %d" % (self.mask_layer.name, self.idx))
+            mask_layer.selected_label = self.idx
+            mask_layer.translate = self.bounding_box[0, :]+self.mask_layer.translate
+            mask_layer.brush_size = 1
+            mask_layer.mode = Mode.PAINT
+            self.viewer.add_layer(mask_layer)
+        else:
+            mask_layer = None
         return image_layer, mask_layer
 
     def unselect(self):
@@ -179,12 +186,14 @@ class QObjectListWidgetItem(QListWidgetItem):
         if self.parent.projections_widget is not None:
             self.viewer.window.remove_dock_widget(self.parent.projections_widget)
             self.parent.projections_widget = None
-        self.mask_layer.visible = True
-        self.image_layer.visible = True
+        if self.mask_layer is not None:
+            self.mask_layer.visible = True
+        if self.image_layer is not None:
+            self.image_layer.visible = True
 
     def on_select(self):
         self.unselect()
-        self.parent.crop_image_layer, self.parent.crop_mask_layer = self.create_layers(self.image_layer.colormap)
+        self.parent.crop_image_layer, self.parent.crop_mask_layer = self.create_layers()
         self.parent.crop_image_layer.name = self.parent.crop_image_layer.name
         self.parent.crop_mask_layer.name = self.parent.crop_mask_layer.name
         self.parent.crop_mask_layer.events.set_data.connect(self.on_data_change)
@@ -225,14 +234,12 @@ class QObjectListWidgetItem(QListWidgetItem):
         )
         if self.image_layer is None:
             icon = np.zeros([slice_len(bbox_idx[d]) for d in range(len(bbox_idx)) if type(bbox_idx[d]) is slice] + [3])
-        elif self.image_layer.dtype == np.uint16:
-            icon = (self.image_layer.data[bbox_idx] // (2 ** 8)).astype(np.uint8)
         else:
-            icon = self.image_layer.data[bbox_idx].astype(np.uint8)
+            icon = self.image_layer.data[bbox_idx]
         if self.image_layer is not None and not self.image_layer.rgb:
-            max_ = icon.max()
-            min_ = icon.min()
-            icon = (icon-min_)/(max_ - min_)
+            max_ = self.image_layer.contrast_limits[1]
+            min_ = self.image_layer.contrast_limits[0]
+            icon = np.clip((icon.astype(float)-min_)/(max_ - min_), 0, 1)
             icon = (self.image_layer.colormap.map(icon.ravel()).reshape(icon.shape + (4,)) * 255).astype(np.uint8)[..., :3]
         else:
             icon = icon.astype(np.uint8)[..., :3]
@@ -276,7 +283,7 @@ class ObjectListWidget(QListWidget):
         self.update_items()
         self.itemClicked.connect(self.select_item)
         self.installEventFilter(self)
-        self.viewer.bind_key('d')(self.toggle_bb_visibility)
+        self.viewer.bind_key('d', overwrite=True)(self.toggle_bb_visibility)
         # bounding_box_layer.events.set_data.connect(on_data_change)
 
     def __del__(self):
@@ -329,8 +336,6 @@ class ObjectListWidget(QListWidget):
             item = self.item(i)
             item.mask_layer = new_layer
             item.update_icon()
-            if self.currentIndex().row() == i:
-                item.on_select()
         self.update_items()
 
     @property
@@ -356,9 +361,15 @@ class ObjectListWidget(QListWidget):
             self.update_items(True)
 
     def select_item(self, item):
-        item.on_select()
         selected_idx = self.indexFromItem(item).row()
-        if selected_idx == self.selected_idx:
+        if self.mask_layer is not None and self.image_layer is not None:
+            item.on_select()
+        else:
+            self.clearSelection()
+            self.clearFocus()
+            warnings.warn("Image and labels layer should be selected!")
+            return
+        if selected_idx == self.selected_idx or self.mask_layer is None or self.image_layer is None:
             self.selected_idx = None
             item.unselect()
             self.clearSelection()
@@ -392,7 +403,7 @@ class ObjectListWidget(QListWidget):
             menu.addAction("Create layers")
             if menu.exec_(event.globalPos()):
                 item = self.itemAt(event.pos())
-                item.create_layers(self.viewer, self.image_layer.colormap)
+                item.create_layers()
             return True
         elif event.type() == QEvent.Enter and type(source) == QObjectWidget:
             item = source.parent
@@ -513,34 +524,21 @@ class ObjectListWidget(QListWidget):
         self.select_item(item)
 
 
-class ListWidgetBB(QWidget):
+class ListWidgetBB(WidgetWithLayerList):
     def __init__(self, viewer: Viewer):
-        super().__init__()
+        super().__init__(viewer, [("bounding_box", BoundingBoxLayer), ("image", Image), ("labels", Labels)], False)
         layout = QVBoxLayout()
         self.viewer = viewer
         self.prev_n_layers = len(viewer.layers)
         self.channels_dim = None
         self.list_widget = None
-        self.prev_bb_index = 0
-        self.prev_img_index = 0
-        self.prev_mask_index = 0
         self.reset_index()
-        viewer.layers.events.connect(self.update_layers)
-        self.bounding_box_layer_dropdown = QComboBox()
-        self.bounding_box_layer_dropdown.addItem("[Bounding box layer]")
-        self.bounding_box_layer_dropdown.currentIndexChanged.connect(self.bb_index_change)
-        self.image_layer_dropdown = QComboBox()
-        self.image_layer_dropdown.addItem("[Image layer]")
-        self.image_layer_dropdown.setCurrentIndex(0)
-        self.image_layer_dropdown.currentIndexChanged.connect(self.img_index_change)
-        self.mask_layer_dropdown = QComboBox()
-        self.mask_layer_dropdown.addItem("[Label layer]")
-        self.mask_layer_dropdown.setCurrentIndex(0)
-        self.mask_layer_dropdown.currentIndexChanged.connect(self.mask_index_change)
-        self.update_layers()
-        layout.addWidget(self.bounding_box_layer_dropdown)
-        layout.addWidget(self.image_layer_dropdown)
-        layout.addWidget(self.mask_layer_dropdown)
+        self.bounding_box.combobox.currentIndexChanged.connect(self.bb_index_change)
+        self.image.combobox.currentIndexChanged.connect(self.img_index_change)
+        self.labels.combobox.currentIndexChanged.connect(self.mask_index_change)
+        layout.addWidget(self.bounding_box.combobox)
+        layout.addWidget(self.image.combobox)
+        layout.addWidget(self.labels.combobox)
 
         self.list_widget_container = QStackedWidget()
         no_data_widget = QWidget()
@@ -568,126 +566,38 @@ class ListWidgetBB(QWidget):
         layout.addWidget(buttons_widget)
         self.setLayout(layout)
         self.name_template = "Object"
-        self.update_list()
+        self.update_list_widget()
         self.installEventFilter(self)
 
     def bb_index_change(self, index):
-        if index == 0 and self.bounding_box_layer_dropdown.count() > 0:
-            self.bounding_box_layer_dropdown.setCurrentIndex(self.prev_bb_index)
-            return
         if index == -1:
             self.reset_index()
-            self.update_list()
-        elif self.list_widget is not None:
+        self.update_list_widget()
+        if self.list_widget is not None:
             self.list_widget.bounding_box_layer = self.bounding_box_layer
-        else:
-            self.update_list()
-        self.prev_bb_index = index
 
     def mask_index_change(self, index):
-        if index == 0 and self.mask_layer_dropdown.count() > 0:
-            self.mask_layer_dropdown.setCurrentIndex(self.prev_mask_index)
-            return
-        if self.list_widget is not None:
-            self.list_widget.mask_layer = self.mask_layer
-        self.prev_mask_index = index
+        if self.list_widget is not None and self.list_widget.mask_layer is not self.labels.layer:
+            self.list_widget.mask_layer = self.labels.layer
 
     def img_index_change(self, index):
-        if index == 0 and self.image_layer_dropdown.count() > 0:
-            self.image_layer_dropdown.setCurrentIndex(self.prev_img_index)
-            return
-        self.prev_img_index = index
         self.update_channels_dim(index)
-
-    def update_layers(self, event=None):
-        type_ = event.type if event else "reordered"
-        if type_ in ["reordered", "removed"]:
-            bb_idx = 1
-            img_idx = 1
-            mask_idx = 1
-            for layer in self.viewer.layers:
-                if isinstance(layer, BoundingBoxLayer):
-                    if bb_idx >= self.bounding_box_layer_dropdown.count():
-                        self.bounding_box_layer_dropdown.addItem(layer.name)
-                    else:
-                        self.bounding_box_layer_dropdown.setItemText(bb_idx, layer.name)
-                    if self.bounding_box_layer is None\
-                            or self.bounding_box_layer_dropdown.itemText(bb_idx) == self.bounding_box_layer.name:
-                        self.bounding_box_layer_dropdown.setCurrentIndex(bb_idx)
-                    bb_idx += 1
-                elif isinstance(layer, Image):
-                    if img_idx >= self.image_layer_dropdown.count():
-                        self.image_layer_dropdown.addItem(layer.name)
-                    else:
-                        self.image_layer_dropdown.setItemText(img_idx, layer.name)
-                    if self.image_layer is None\
-                            or self.image_layer_dropdown.itemText(img_idx) == self.image_layer.name:
-                        self.image_layer_dropdown.setCurrentIndex(img_idx)
-                    img_idx += 1
-                elif isinstance(layer, Labels):
-                    if mask_idx >=self.mask_layer_dropdown.count():
-                        self.mask_layer_dropdown.addItem(layer.name)
-                    else:
-                        self.mask_layer_dropdown.setItemText(mask_idx, layer.name)
-                    if self.mask_layer is None\
-                            or self.mask_layer_dropdown.itemText(mask_idx) == self.mask_layer.name:
-                        self.mask_layer_dropdown.setCurrentIndex(mask_idx)
-                    mask_idx += 1
-            if type_ == "removed":
-                while bb_idx < self.bounding_box_layer_dropdown.count():
-                    self.bounding_box_layer_dropdown.removeItem(bb_idx)
-                while img_idx < self.image_layer_dropdown.count():
-                    self.image_layer_dropdown.removeItem(img_idx)
-                while mask_idx < self.mask_layer_dropdown.count():
-                    self.mask_layer_dropdown.removeItem(mask_idx)
-        elif type_ == "inserted":
-            layer = self.viewer.layers[-1]
-            if isinstance(layer, BoundingBoxLayer):
-                self.bounding_box_layer_dropdown.addItem(layer.name)
-                if self.bounding_box_layer_dropdown.count() == 2:
-                    self.bounding_box_layer_dropdown.setCurrentIndex(1)
-            elif isinstance(layer, Image):
-                self.image_layer_dropdown.addItem(layer.name)
-                if self.image_layer_dropdown.count() == 2:
-                    self.image_layer_dropdown.setCurrentIndex(1)
-            elif isinstance(layer, Labels):
-                self.mask_layer_dropdown.addItem(layer.name)
-                if self.mask_layer_dropdown.count() == 2:
-                    self.mask_layer_dropdown.setCurrentIndex(1)
-        elif type_ == "name":
-            layer = event.source[event.index]
-            if isinstance(layer, BoundingBoxLayer):
-                self.bounding_box_layer_dropdown.setItemText(event.index+1, layer.name)
-            elif isinstance(layer, Image):
-                self.image_layer_dropdown.setItemText(event.index+1, layer.name)
-            elif isinstance(layer, Labels):
-                self.mask_layer_dropdown.setItemText(event.index+1, layer.name)
 
     @property
     def bounding_box_layer(self):
-        return self.viewer.layers[self.bounding_box_layer_dropdown.currentText()] \
-            if self.bounding_box_layer_dropdown.currentIndex() > 0 else None
+        return self.bounding_box.layer
 
     @bounding_box_layer.setter
     def bounding_box_layer(self, new_layer):
-        if new_layer == self.bounding_box_layer:
-            return
-        if new_layer in self.viewer.layers and isinstance(new_layer, BoundingBoxLayer):
-            for i in range(self.bounding_box_layer_dropdown.count()):
-                layer_name = self.bounding_box_layer_dropdown.itemText(i)
-                if layer_name == new_layer.name:
-                    self.bounding_box_layer_dropdown.setCurrentIndex(i)
-                    break
+        self.bounding_box.layer = new_layer
 
     @property
     def image_layer(self):
-        return self.viewer.layers[self.image_layer_dropdown.currentText()] \
-            if self.image_layer_dropdown.currentIndex() > 0 else None
+        return self.image.layer
 
     @property
     def mask_layer(self):
-        return self.viewer.layers[self.mask_layer_dropdown.currentText()] \
-            if self.mask_layer_dropdown.currentIndex() > 0 else None
+        return self.labels.layer
 
     def create_bb_layer(self, _):
         if self.image_layer is not None:
@@ -706,9 +616,9 @@ class ListWidgetBB(QWidget):
             self.list_widget.image_layer = self.image_layer
             self.list_widget.channels_dim = self.channels_dim
 
-    def update_list(self):
+    def update_list_widget(self):
         if self.bounding_box_layer is not None:
-            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box_layer, self.image_layer, self.mask_layer, self.channels_dim, 1)
+            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box_layer, self.image_layer, self.labels.layer, self.channels_dim, 1)
             self.list_widget_container.addWidget(self.list_widget)
             self.list_widget_container.setCurrentIndex(1)
         else:
@@ -757,12 +667,12 @@ class ListWidgetBB(QWidget):
         self.reset_index(max(idxs) + 1)
 
     def bounding_boxes_from_labels(self):
-        if self.mask_layer is None:
+        if self.labels.layer is None:
             return
         bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
         self.viewer.add_layer(bb_layer)
         self.bounding_box_layer = bb_layer
-        bb_corners = find_objects(self.mask_layer.data)
+        bb_corners = find_objects(self.labels.layer.data)
         ids = []
         bbs = []
         for i, bb in enumerate(bb_corners):
