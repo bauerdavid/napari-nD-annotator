@@ -13,8 +13,8 @@ from qtpy import QtCore
 from matplotlib import colors
 
 class DataProjectionWidget(QLabel):
-    def __init__(self, viewer, image_layer, mask_layer, displayed_axes, image_colormap=None, mask_colormap=None,
-                 slices=None, flip_image=False, crosshair_color=None):
+    def __init__(self, viewer, image_layer, mask_layer, displayed_axes, slices=None,
+                 flip_image=False, crosshair_color=None):
         super().__init__()
         self._crosshair_color = None
         self.viewer = viewer
@@ -26,12 +26,6 @@ class DataProjectionWidget(QLabel):
         self.displayed_axes = displayed_axes
         overlay_shape = [self.image_data.shape[i] for i in range(self.image_data.ndim) if self.im_idx[i] == slice(None)][:2]
         self._overlay = np.zeros(overlay_shape, np.uint8)
-        if image_layer.rgb and image_colormap is not None:
-            warnings.warn("colormap provided for RGB image. Ignoring")
-            self.image_colormap = None
-        else:
-            self.image_colormap = image_colormap
-        self.mask_colormap = mask_colormap
         if crosshair_color is None:
             self.crosshair_color = (255, 0, 0, 160)
         else:
@@ -132,10 +126,14 @@ class DataProjectionWidget(QLabel):
                 im = np.zeros(im_shape + (4,), np.uint8)
                 mask = np.zeros_like(im)
             else:
-                if self.image_colormap is None:
+                if self.image_layer.colormap is None:
                     im = self.image_data[self.im_idx]
                 else:
-                    im = (self.image_colormap[self.image_data[self.im_idx].astype(np.uint16)//256]*255)
+                    im = self.image_data[self.im_idx]
+                    max_ = self.image_layer.contrast_limits[1]
+                    min_ = self.image_layer.contrast_limits[0]
+                    im = np.clip((im-min_)/(max_-min_), 0, 1)
+                    im = (self.image_layer.colormap.map(im.ravel()).reshape(im.shape + (4,))*255).astype(np.uint8)[..., :3]
 
                 mask = (self.mask_data[self.im_idx] > 0).astype(np.uint8)
                 alpha = mask * 180
@@ -228,7 +226,7 @@ class SliceDisplayWidget(QWidget):
             else:
                 flip = False
             slices = [int(viewer.dims.current_step[dim]-image_layer.translate[dim]) if dim in image_layer._dims_not_displayed else 0 for dim in range(viewer.dims.ndim)]
-            projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, image_colormap=image_layer.colormap.colors, mask_colormap=mask_layer.colormap.colors, slices=slices, flip_image=flip, crosshair_color=self.overlay_color)
+            projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, slices=slices, flip_image=flip, crosshair_color=self.overlay_color)
             grid_layout.setRowStretch(len(self.projections)//3, 1)
             grid_layout.setColumnStretch(len(self.projections)%3, 1)
             grid_layout.addWidget(projection, len(self.projections)//3, len(self.projections)%3, QtCore.Qt.AlignmentFlag.AlignCenter)
