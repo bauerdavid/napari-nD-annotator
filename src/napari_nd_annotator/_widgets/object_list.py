@@ -105,6 +105,8 @@ class QObjectListWidgetItem(QListWidgetItem):
 
     @icon.setter
     def icon(self, icon):
+        if len(icon) == 0:
+            return
         self._icon = icon.reshape(icon.shape[0], icon.shape[1], -1)
         if self._icon.shape[-1] == 1:
             self._icon = np.tile(self._icon, (1, 1, 3))
@@ -267,11 +269,8 @@ class ObjectListWidget(QListWidget):
         self.previously_hovered = None
         self.previous_face_color = None
         self.previous_edge_color = None
-        self.bb_was_visible = None
         self._indices = None
         self.indices = indices
-        self.current_index = 0
-        self.object_counter = 0
         self.viewer = viewer
         self.name_template = name_template
         self.channels_dim = channels_dim
@@ -286,25 +285,23 @@ class ObjectListWidget(QListWidget):
         self.viewer.bind_key('d', overwrite=True)(self.toggle_bb_visibility)
         # bounding_box_layer.events.set_data.connect(on_data_change)
 
-    def __del__(self):
-        self._bounding_box_layer.mouse_drag_callbacks.remove(self.bounding_box_change)
-
     @property
     def bounding_box_layer(self):
         return self._bounding_box_layer
 
     @bounding_box_layer.setter
     def bounding_box_layer(self, new_layer):
-        if self._bounding_box_layer:
-            self._bounding_box_layer.mouse_drag_callbacks.remove(self.bounding_box_change)
-            self._bounding_box_layer.mouse_double_click_callbacks.remove(self._on_bb_double_click)
-            self._bounding_box_layer.events.disconnect(self.on_layer_event)
+        if self._bounding_box_layer == new_layer:
+            return
         self._bounding_box_layer = new_layer
         if new_layer is not None:
-            self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
-            self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
-            self._bounding_box_layer.events.connect(self.on_layer_event)
-            self._bounding_box_layer.current_properties |= {"label": self.current_index}
+            if self.bounding_box_change not in self._bounding_box_layer.mouse_drag_callbacks:
+                self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
+            if self._on_bb_double_click not in self._bounding_box_layer.mouse_double_click_callbacks:
+                self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
+            # self._bounding_box_layer.events.connect(self.on_layer_event)
+            if "label" not in self._bounding_box_layer.current_properties:
+                self._bounding_box_layer.current_properties |= {"label": 0}
             self._bounding_box_layer.text = {
                 "text": "{label:d}",
                 "size": 10,
@@ -459,30 +456,11 @@ class ObjectListWidget(QListWidget):
         if np.shape(previous_data) != np.shape(self.bounding_box_layer.data):
             if len(new_data) > len(previous_data):
                 self.bounding_box_layer.data = [np.clip(data, 0, np.asarray(im_size) - 1) for data in new_data]
-            else:
-                removed_idx = np.argwhere(~np.any(np.equal(previous_data[np.newaxis], new_data[:, np.newaxis]), (-2, -1)))
-                self.takeItem(removed_idx)
-            '''if self.crop_mask_layer is not None:
-                self.viewer.layers.remove(self.crop_mask_layer)
-                self.viewer.layers.remove(self.crop_image_layer)
-                self.crop_mask_layer = None
-                self.crop_image_layer = None
-                self.viewer.window.remove_dock_widget(self.projections_widget)'''
-            self.update_items()
-            if self.projections_widget is not None:
-                for p in self.projections_widget.projections:
-                    p.update()
-        elif not np.allclose(previous_data, self.bounding_box_layer.data):
-            idx = int(np.argwhere(~np.all(np.isclose(previous_data, self.bounding_box_layer.data), (1, 2))))
-            item = self.item(idx)
-            if item is None:
-                return
-            self.item(idx).bounding_box = self.bounding_box_corners()[idx]
-            self.item(idx).update_icon()
-            if self.projections_widget is not None:
-                for p in self.projections_widget.projections:
-                    p.update_overlay()
-                    p.update()
+        self.update_items()
+        if self.projections_widget is not None:
+            for p in self.projections_widget.projections:
+                p.update_overlay()
+                p.update()
 
     def update_items(self, update_all_icons=False):
         bounding_boxes = self.bounding_box_corners()
@@ -491,7 +469,11 @@ class ObjectListWidget(QListWidget):
         elif len(bounding_boxes) < self.count():
             previous_data = np.asarray(list(np.unique(self.item(i).bounding_box, axis=0) for i in range(self.count())))
             removed_idx = np.argwhere(np.all(np.any(~np.equal(previous_data[np.newaxis], bounding_boxes[:, np.newaxis]), (-2, -1)), axis=0))
-            self.takeItem(np.squeeze(removed_idx))
+            removed_idx = np.squeeze(removed_idx)
+            if removed_idx.ndim == 0:
+                self.takeItem(removed_idx)
+            else:
+                self.clear()
         for i, bb in enumerate(bounding_boxes):
             curr_item = self.item(i)
             if curr_item is not None:
@@ -501,6 +483,7 @@ class ObjectListWidget(QListWidget):
                     curr_item.image_layer = self.image_layer
                 elif update_all_icons:
                     curr_item.update_icon()
+
             else:
                 new_item = QObjectListWidgetItem(self.name_template, bb, self.bounding_box_layer.features["label"][i], self, self.viewer, self.image_layer, self.mask_layer, self.channels_dim)
                 self.insertItem(i, new_item)
@@ -566,15 +549,21 @@ class ListWidgetBB(WidgetWithLayerList):
         layout.addWidget(buttons_widget)
         self.setLayout(layout)
         self.name_template = "Object"
-        self.update_list_widget()
+        if self.bounding_box.layer is not None:
+            self.create_list_widget()
         self.installEventFilter(self)
 
     def bb_index_change(self, index):
-        if index == -1:
+        if self.bounding_box.layer is None:
             self.reset_index()
-        self.update_list_widget()
-        if self.list_widget is not None:
-            self.list_widget.bounding_box_layer = self.bounding_box_layer
+            self.remove_list_widget()
+            return
+        elif "label" in self.bounding_box.layer.features:
+            self.reset_index(max(self.bounding_box.layer.features["label"])+1)
+        if self.list_widget is None:
+            self.create_list_widget()
+        if self.list_widget.bounding_box_layer is not self.bounding_box.layer:
+            self.list_widget.bounding_box_layer = self.bounding_box.layer
 
     def mask_index_change(self, index):
         if self.list_widget is not None and self.list_widget.mask_layer is not self.labels.layer:
@@ -582,14 +571,6 @@ class ListWidgetBB(WidgetWithLayerList):
 
     def img_index_change(self, index):
         self.update_channels_dim(index)
-
-    @property
-    def bounding_box_layer(self):
-        return self.bounding_box.layer
-
-    @bounding_box_layer.setter
-    def bounding_box_layer(self, new_layer):
-        self.bounding_box.layer = new_layer
 
     @property
     def image_layer(self):
@@ -616,21 +597,22 @@ class ListWidgetBB(WidgetWithLayerList):
             self.list_widget.image_layer = self.image_layer
             self.list_widget.channels_dim = self.channels_dim
 
-    def update_list_widget(self):
-        if self.bounding_box_layer is not None:
-            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box_layer, self.image_layer, self.labels.layer, self.channels_dim, 1)
-            self.list_widget_container.addWidget(self.list_widget)
-            self.list_widget_container.setCurrentIndex(1)
-        else:
+    def create_list_widget(self):
+        self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box.layer, self.image_layer, self.labels.layer, self.channels_dim, 1)
+        self.list_widget_container.addWidget(self.list_widget)
+        self.list_widget_container.setCurrentIndex(1)
+
+    def remove_list_widget(self):
+        while self.list_widget_container.count() > 1:
             self.list_widget_container.removeWidget(self.list_widget_container.widget(1))
-            self.list_widget = None
-            self.list_widget_container.setCurrentIndex(0)
+        self.list_widget_container.setCurrentIndex(0)
+        self.list_widget = None
 
     def export_bounding_boxes(self):
-        if self.bounding_box_layer is None:
+        if self.bounding_box.layer is None:
             return
         filename = QFileDialog.getSaveFileName(self, "Select...", None, "(*.txt)")[0]
-        bboxes = np.asarray(list(map(lambda bb: np.concatenate([bb.min(axis=0), bb.max(axis=0)]), self.bounding_box_layer.data)))
+        bboxes = np.asarray(list(map(lambda bb: np.concatenate([bb.min(axis=0), bb.max(axis=0)]), self.bounding_box.layer.data)))
         with open(filename, "w") as f:
             writer = csv.writer(f)
             for i, bb in enumerate(bboxes):
@@ -658,7 +640,7 @@ class ListWidgetBB(WidgetWithLayerList):
         bounding_boxes = np.asarray([np.where(mask, bbc[1], bbc[0]) for bbc in bounding_box_corners])
         bounding_box_layer = BoundingBoxLayer(bounding_boxes, name=os.path.basename(filename), edge_color="green", face_color="transparent", features={"label": idxs})
         self.viewer.add_layer(bounding_box_layer)
-        self.bounding_box_layer = bounding_box_layer
+        self.bounding_box.layer = bounding_box_layer
 
         for i, (name, idx) in enumerate(zip(names, idxs)):
             item = self.list_widget.item(i)
@@ -671,7 +653,7 @@ class ListWidgetBB(WidgetWithLayerList):
             return
         bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
         self.viewer.add_layer(bb_layer)
-        self.bounding_box_layer = bb_layer
+        self.bounding_box.layer = bb_layer
         bb_corners = find_objects(self.labels.layer.data)
         ids = []
         bbs = []
