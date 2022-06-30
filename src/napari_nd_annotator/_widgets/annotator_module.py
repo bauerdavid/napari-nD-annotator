@@ -124,5 +124,7 @@ class AnnotatorWidget(QWidget):
         cy = np.clip(cy, 0, current_draw.shape[1] - 1)
         current_draw[cx, cy] = True
         binary_fill_holes(current_draw, output=current_draw, structure=s)
+        if layer.preserve_labels:
+            current_draw = current_draw & (layer.data[slice_dims] == 0)
         layer.data[slice_dims][current_draw] = layer.selected_label
         layer.refresh()
