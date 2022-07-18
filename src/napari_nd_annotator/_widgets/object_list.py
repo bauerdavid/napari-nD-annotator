@@ -292,6 +292,7 @@ class ObjectListWidget(QListWidget):
     @bounding_box_layer.setter
     def bounding_box_layer(self, new_layer):
         if self._bounding_box_layer == new_layer:
+            self.update_items()
             return
         self._bounding_box_layer = new_layer
         if new_layer is not None:
@@ -479,9 +480,11 @@ class ObjectListWidget(QListWidget):
             if curr_item is not None:
                 if not np.allclose(curr_item.bounding_box, bb):
                     curr_item.bounding_box = bb
-                elif curr_item.image_layer is not self.image_layer:
+                if curr_item.image_layer is not self.image_layer:
                     curr_item.image_layer = self.image_layer
-                elif update_all_icons:
+                if curr_item.idx != self.bounding_box_layer.features["label"][i]:
+                    curr_item.idx = self.bounding_box_layer.features["label"][i]
+                if update_all_icons:
                     curr_item.update_icon()
 
             else:
@@ -558,12 +561,11 @@ class ListWidgetBB(WidgetWithLayerList):
             self.reset_index()
             self.remove_list_widget()
             return
-        elif "label" in self.bounding_box.layer.features:
-            self.reset_index(max(self.bounding_box.layer.features["label"])+1)
         if self.list_widget is None:
             self.create_list_widget()
-        if self.list_widget.bounding_box_layer is not self.bounding_box.layer:
-            self.list_widget.bounding_box_layer = self.bounding_box.layer
+        self.list_widget.bounding_box_layer = self.bounding_box.layer
+        if "label" in self.bounding_box.layer.features:
+            self.reset_index(max(self.bounding_box.layer.features["label"]) + 1)
 
     def mask_index_change(self, index):
         if self.list_widget is not None and self.list_widget.mask_layer is not self.labels.layer:
@@ -652,8 +654,6 @@ class ListWidgetBB(WidgetWithLayerList):
         if self.labels.layer is None:
             return
         bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
-        self.viewer.add_layer(bb_layer)
-        self.bounding_box.layer = bb_layer
         bb_corners = find_objects(self.labels.layer.data)
         ids = []
         bbs = []
@@ -666,8 +666,10 @@ class ListWidgetBB(WidgetWithLayerList):
             bbs.append(bb)
             ids.append(i+1)
         bb_layer.data = bbs
-        for i, id_ in enumerate(ids):
-            self.list_widget.item(i).idx = id_
+        bb_layer.features["label"] = ids
+        self.viewer.add_layer(bb_layer)
+        self.bounding_box.layer = bb_layer
+
 
     def reset_index(self, starting_index=1):
         if self.list_widget is not None:
