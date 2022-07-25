@@ -1,0 +1,24 @@
+{
+    "general": {
+        "maxIter": 20,
+        "debugMode": false
+    },
+    "contours": {
+        "nPoi": 1000,
+        "resMultiplier": 1000
+    },
+    "reparameterization": {
+        "iterationMultiplier": 10,
+        "smoothReparam": false
+    },
+  "reconstruction": {
+    "reconMethod": "Skip reconstruction",
+    "iterations": 100,
+    "alpha": 0.01,
+    "lambda": 1.0
+  },
+    "export": {
+      "exportCsv": true,
+      "exportName":  "mean_result"
+    }
+}

@@ -84,4 +84,4 @@ venv/
 **/_version.py
 
 # Cython
-mean_contour/*.html
+/src/napari_nd_annotator/mean_contour/*.html
