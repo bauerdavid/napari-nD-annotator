@@ -1,4 +1,5 @@
 # A copy of napari.layers.shapes._shapes_models.shape
+__all__ = ["BoundingBox"]
 from abc import ABC, abstractmethod
 from copy import copy
 
@@ -16,6 +17,7 @@ from ._bounding_box_utils import (
 LOG_DEBUG = True
 class BoundingBox(ABC):
     """Class for a single bounding box
+
     Parameters
     ----------
     data : (N, D) array
@@ -29,25 +31,6 @@ class BoundingBox(ABC):
         Order that the dimensions are to be rendered in.
     ndisplay : int
         Number of displayed dimensions.
-
-    Attributes
-    ----------
-    data : (N, D) array
-        Vertices specifying the bounding box.
-    data_displayed : (N, 2) or (N, 3) array
-        Vertices of the bounding box that are currently displayed.
-    edge_width : float
-        thickness of lines and edges.
-    z_index : int
-        Specifier of z order priority. Bounding boxes with higher z order are displayed
-        ontop of others.
-    dims_order : (D,) list
-        Order that the dimensions are rendered in.
-    ndisplay : int
-        Number of dimensions to be displayed.
-    slice_key : (2, M) array
-        Min and max values of the M non-displayed dimensions, useful for
-        slicing multidimensional bounding boxes.
 
     Notes
     -----
@@ -86,11 +69,21 @@ class BoundingBox(ABC):
         dims_order=None,
         ndisplay=2,
     ):
+        """
 
+        Parameters
+        ----------
+        data : coordinates of the bounding box's corners (in any order)
+        edge_width : the displayed width of the bounding box's edges
+        z_index : determines the order of display
+        dims_order : order of the dimensions
+        ndisplay : number of displayed dimensions. Must be either 2 or 3
+        """
         self._dims_order = dims_order or list(range(2))
         self._ndisplay = ndisplay
-        self.slice_key = None
 
+        self.slice_key = None
+        """(2, M) array: Minimum and maximum values of the M non-displayed dimensions."""
         self._face_vertices = np.empty((0, self.ndisplay))
         self._face_triangles = np.empty((0, 3), dtype=np.uint32)
         self._edge_vertices = np.empty((0, self.ndisplay))
@@ -107,7 +100,7 @@ class BoundingBox(ABC):
 
     @property
     def data(self):
-        # user writes own docstring
+        """The coordinates of the bounding box corners"""
         return self._data
 
     @data.setter
@@ -177,7 +170,7 @@ class BoundingBox(ABC):
 
     @property
     def ndisplay(self):
-        """int: Number of displayed dimensions."""
+        """int : Number of displayed dimensions."""
         return self._ndisplay
 
     @ndisplay.setter

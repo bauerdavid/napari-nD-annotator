@@ -1,3 +1,4 @@
+__all__ = ["SliceDisplayWidget", "DataProjectionWidget"]
 import itertools
 import warnings
 

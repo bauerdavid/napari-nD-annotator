@@ -1,4 +1,6 @@
 # A copy of napari.layers.shapes.shapes
+
+__all__ = ["BoundingBoxLayer"]
 import warnings
 from contextlib import contextmanager
 from copy import deepcopy, copy
@@ -26,13 +28,16 @@ from ._bounding_box_list import BoundingBoxList
 from .bounding_box import BoundingBox
 from ._bounding_box_mouse_bindings import select, highlight, add_bounding_box
 # from ._bounding_boxes_key_bindings import *
-from .qt_bounding_box_control import *
-from .vispy_bounding_box_layer import *
+from ._qt_bounding_box_control import *
+from ._vispy_bounding_box_layer import *
 from ._bounding_box_utils import create_box
 
 DEFAULT_COLOR_CYCLE = np.array([[1, 0, 1, 1], [0, 1, 0, 1]])
 
 class BoundingBoxLayer(Layer):
+    """
+    A napari layer representing bounding boxes
+    """
     _colors = get_color_names()
     _vertex_size = 10
     _rotation_handle_length = 20
@@ -218,8 +223,6 @@ class BoundingBoxLayer(Layer):
         If you need to specifically rely on the pandas API, please coerce this to a
         `pandas.DataFrame` using `features_to_pandas_dataframe`.
 
-        References
-        ----------
         .. [1]: https://data-apis.org/dataframe-protocol/latest/API.html
         """
         return self._feature_table.values
@@ -411,8 +414,8 @@ class BoundingBoxLayer(Layer):
         return extrema
 
     @property
-    def current_edge_width(self):
-        """float: Width of bounding box edges including lines and paths."""
+    def current_edge_width(self) -> float:
+        """Width of bounding box edges including lines and paths."""
         return self._current_edge_width
 
     @current_edge_width.setter
@@ -424,8 +427,8 @@ class BoundingBoxLayer(Layer):
         self.events.edge_width()
 
     @property
-    def selected_data(self):
-        """set: set of currently selected bounding boxes."""
+    def selected_data(self) -> set:
+        """Set of currently selected bounding boxes."""
         return self._selected_data
 
     @selected_data.setter
@@ -476,7 +479,7 @@ class BoundingBoxLayer(Layer):
 
     @property
     def text(self) -> TextManager:
-        """TextManager: The TextManager object containing the text properties"""
+        """The TextManager object containing the text properties"""
         return self._text
 
     @text.setter
@@ -488,8 +491,8 @@ class BoundingBoxLayer(Layer):
         )
 
     @property
-    def edge_color(self):
-        """(N x 4) np.ndarray: Array of RGBA face colors for each bounding box"""
+    def edge_color(self) -> np.ndarray:
+        """(N x 4) array of RGBA face colors for each bounding box"""
         return self._data_view.edge_color
 
     @edge_color.setter
@@ -499,8 +502,8 @@ class BoundingBoxLayer(Layer):
         self._update_thumbnail()
 
     @property
-    def edge_color_cycle(self) -> np.ndarray:
-        """Union[list, np.ndarray] :  Color cycle for edge_color.
+    def edge_color_cycle(self) -> Union[list, np.ndarray]:
+        """Color cycle for edge_color.
 
         Can be a list of colors defined by name, RGB or RGBA
         """
@@ -513,11 +516,6 @@ class BoundingBoxLayer(Layer):
     @property
     def edge_colormap(self) -> Tuple[str, Colormap]:
         """Return the colormap to be applied to a property to get the edge color.
-
-        Returns
-        -------
-        colormap : napari.utils.Colormap
-            The Colormap object.
         """
         return self._edge_colormap
 
@@ -580,8 +578,6 @@ class BoundingBoxLayer(Layer):
     def face_colormap(self) -> Tuple[str, Colormap]:
         """Return the colormap to be applied to a property to get the face color.
 
-        Returns
-        -------
         colormap : napari.utils.Colormap
             The Colormap object.
         """
@@ -768,8 +764,6 @@ class BoundingBoxLayer(Layer):
 
         When list of int is provided, must be of equal length to n bounding boxes.
 
-        Parameters
-        ----------
         z_index : int or list of int
             z-index of bounding boxes
         """
@@ -797,8 +791,6 @@ class BoundingBoxLayer(Layer):
 
         If list of float, must be of equal length to n bounding boxes
 
-        Parameters
-        ----------
         width : float or list of float
             width of all bounding boxes, or each bounding box if list
         """
@@ -815,8 +807,9 @@ class BoundingBoxLayer(Layer):
         for i, width in enumerate(widths):
             self._data_view.update_edge_width(i, width)
 
-    def _finish_drawing(self, event=None):
-        """Reset properties used in bounding box drawing."""
+    def _finish_drawing(self, _=None):
+        """Reset properties used in bounding box drawing.
+        """
         index = copy(self._moving_value[0])
         self._is_moving = False
         self.selected_data = set()
@@ -970,8 +963,18 @@ class BoundingBoxLayer(Layer):
         """
         self.text.refresh_text(self.properties)
 
-    def _is_color_mapped(self, color):
-        """determines if the new color argument is for directly setting or cycle/colormap"""
+    def _is_color_mapped(self, color: Union[str, list, np.ndarray]) -> bool:
+        """Determines if the new color argument is for directly setting or cycle/colormap
+
+        Parameters
+        ----------
+        color : The color to check
+
+        Returns
+        -------
+        bool
+            True if color is the name of a property, False otherwise (if it is a valid colormap).
+        """
         if isinstance(color, str):
             if color in self.properties:
                 return True
@@ -1000,8 +1003,8 @@ class BoundingBoxLayer(Layer):
 
         Returns
         -------
-        init_colors : (N, 4) array or str
-            The calculated values for setting edge or face_color
+        (N, 4) array or str
+            the calculated values for setting edge or face_color
         """
         if self._is_color_mapped(color):
             if guess_continuous(self.properties[color]):
@@ -1570,7 +1573,7 @@ class BoundingBoxLayer(Layer):
         self.selected_data = set()
         self._finish_drawing()
 
-    def interaction_box(self, index):
+    def interaction_box(self, index) -> np.ndarray:
         """Create the interaction box around a bounding box or list of bounding boxes.
         If a single index is passed then the boudning box will be inherited
         from that bounding boxes interaction box. If list of indices is passed it will
@@ -1584,12 +1587,12 @@ class BoundingBoxLayer(Layer):
 
         Returns
         -------
-        box : np.ndarray
-            10x2 array of vertices of the interaction box. The first 8 points
-            are the corners and midpoints of the box in clockwise order
-            starting in the upper-left corner. The 9th point is the center of
-            the box, and the last point is the location of the rotation handle
-            that can be used to rotate the box
+        10x2 array
+            Vertices of the interaction box.
+            The first 8 points are the corners and midpoints of the box in
+            clockwise order starting in the upper-left corner. The 9th point
+            is the center of the box, and the last point is the location of
+            the rotation handle that can be used to rotate the box
         """
         if isinstance(index, (list, np.ndarray, set)):
             if len(index) == 0:
@@ -1811,7 +1814,7 @@ class BoundingBoxLayer(Layer):
 
         Parameters
         ----------
-        force : bool
+        force: bool
             Bool that forces a redraw to occur when `True`
         """
         # Check if any bounding box or vertex ids have changed since last call
@@ -1834,13 +1837,10 @@ class BoundingBoxLayer(Layer):
             ndim = self.data[0].shape[1]
         return ndim
 
-    def _get_state(self):
+    def _get_state(self) -> dict:
         """Get dictionary of layer state.
 
-        Returns
-        -------
-        state : dict
-            Dictionary of layer state.
+        returns: Dictionary of layer state.
         """
         state = self._get_base_state()
         state.update(
@@ -1869,8 +1869,6 @@ class BoundingBoxLayer(Layer):
     def _view_text(self) -> np.ndarray:
         """Get the values of the text elements in view
 
-        Returns
-        -------
         text : (N x 1) np.ndarray
             Array of text strings for the N text elements in view
         """
@@ -1880,8 +1878,6 @@ class BoundingBoxLayer(Layer):
     def _view_text_coords(self) -> np.ndarray:
         """Get the coordinates of the text elements in view
 
-        Returns
-        -------
         text_coords : (N x D) np.ndarray
             Array of coordindates for the N text elements in view
         """

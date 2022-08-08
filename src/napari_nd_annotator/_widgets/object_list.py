@@ -1,3 +1,4 @@
+__all__ = ["ListWidgetBB", "QObjectWidget", "QObjectListWidgetItem", "ObjectListWidget"]
 import os.path
 import warnings
 
