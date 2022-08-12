@@ -1,4 +1,4 @@
-# cython: language_level=3
+# cython: language_level=3, language = c++
 cimport cython
 from cython.parallel cimport prange
 import numpy as np
@@ -6,6 +6,7 @@ cimport numpy as np
 np.import_array()
 from libc.math cimport fabs, sqrt
 import cEssentialscy as cEssentials
+from cEssentialscy cimport dt
 from cEssentialscy import ReconstructionMethods
 from scipy.sparse.linalg import svds
 from scipy.sparse import csc_matrix
@@ -21,6 +22,7 @@ Qdot_interp = InterpHelper()
 theta_interp = InterpHelper()
 thetadot_interp = InterpHelper()
 thetaddot_interp = InterpHelper()
+
 
 # function that is called from the main executor
 def reconstruct(np.ndarray[np.double_t, ndim=2] q_mean, np.ndarray[np.double_t, ndim=1] guessRayLengths, settings, signal):
@@ -122,7 +124,6 @@ def reconstruct_gradient(q_mean, guessRayLengths, multiplier, debug, plotSignal)
         energy *= energy
         energy = np.sum(energy, axis=0)
         costs.append(energy)
-        #print("energy = "+str(energy))
 
         rayDiff = qraylengths-(guessRayLengths*srv)
 
@@ -176,12 +177,10 @@ def reconstruct_newton(q_mean, guessRayLengths, debug, plotSignal):
     lrate = 0.01#/guessRayLengths.shape[0]
     nIter = 10*10
     stopCriterion = False
-    print("x max before:"+str(np.max(np.abs(guessRayLengths))))
     xmaxglob = 0
     for i in range(nIter):
         if stopCriterion is True:
             break
-        #print("nt "+str(i))
         dirNext = np.roll(dirs, -1, axis=0)
         dirPrev = np.roll(dirs, 1, axis=0)
         dirNextUnit = np.roll(dirs, -1, axis=0)
@@ -203,7 +202,6 @@ def reconstruct_newton(q_mean, guessRayLengths, debug, plotSignal):
         energy = qraylengths-guessRayLengths*np.sqrt(norm_velo)
         energy *= energy
         energy = np.sqrt(np.sum(energy, axis=0))
-        print("energy = "+str(energy))
  
         dirnext_velo_prod = dirNextUnit[:,0]*e[:,0]+dirNextUnit[:,1]*e[:,1]
         dirprev_velo_prod = dirPrevUnit[:,0]*e[:,0]+dirPrevUnit[:,1]*e[:,1]
@@ -237,10 +235,7 @@ def reconstruct_newton(q_mean, guessRayLengths, debug, plotSignal):
             print("min denominator in A: "+str(np.min(norm_velo))+", max denominator in A: "+str(np.max(norm_velo)))
             print('-----------------------')
         A = csc_matrix(A)
-        #x, inform = cg(A,b)
-        #print("info: "+str(inform))
-        #print("x = "+str(x))
-        #x = spsolve(A,b)
+
         
         u, s, v = svds(A)
         sm = np.zeros((s.shape[0], s.shape[0]))
@@ -248,7 +243,6 @@ def reconstruct_newton(q_mean, guessRayLengths, debug, plotSignal):
         x = np.matrix.transpose(v) @ np.linalg.inv(sm) @ np.matrix.transpose(u) @ b
         
         #x = np.linalg.solve(A,b)
-        #print("x = "+str(x))
         
         # smoothing
         #xn = np.roll(x, -1)
@@ -404,15 +398,11 @@ cpdef reconstruct_iterate_implicit(np.ndarray[np.double_t, ndim=2] q_mean, np.nd
     cdef double loop_len = 0
     cdef double r_abs_, u_, r_dot_abs_, e1_, e2_, q_abs_, diffs_
     for i in range(100):
-        #print("u[0] = "+str(u[0])+", e[0] = "+str(e[0]))
-        #print("inner prod: "+str(innerProduct(u[0].reshape(1,2),e[0].reshape(1,2))))
         q_abs_sq_ue_sum = 0
-
-        start = time.time()
         for j in prange(r_abs.shape[0], nogil=True):
             r[j, 0] = u[j, 0] * r_abs[j]
             r[j, 1] = u[j, 1] * r_abs[j]
-        r_dot = cEssentials.dt(r, 1)
+        r_dot = dt(r, 1)
         for j in prange(r_abs.shape[0], nogil=True):
             r_dot_abs_ = sqrt(r_dot[j, 0]*r_dot[j, 0] + r_dot[j, 1]*r_dot[j, 1])
             e1_ = r_dot[j, 0]/r_dot_abs_
@@ -421,8 +411,6 @@ cpdef reconstruct_iterate_implicit(np.ndarray[np.double_t, ndim=2] q_mean, np.nd
             q_abs_sq_ue[j] = q_abs[j]*q_abs[j]*ue_inner[j]
             q_abs_sq_ue_sum += q_abs_sq_ue[j]
         q_abs_sq_ue_cumsum = np.cumsum(q_abs_sq_ue)
-        init_len += time.time()-start
-        start = time.time()
         for t in prange(q_abs.shape[0], nogil=True):
         # for t in range(q_abs.shape[0]):
             first = 3.0*q_abs_sq_ue_cumsum[t]
@@ -433,14 +421,12 @@ cpdef reconstruct_iterate_implicit(np.ndarray[np.double_t, ndim=2] q_mean, np.nd
             # print("msg3")
             diffs[t] = (fabs(cbrt(first+second+third)) -r_abs[t])
             # print("msg4")
-        loop_len += time.time() - start
         maxdiff = np.max(diffs)
         if maxdiff>1:
             diffnorm = diffs/maxdiff
         else:
             diffnorm = diffs
         r_abs += diffnorm*0.01
-    print("init:", init_len, "loop:", loop_len)
 
     return r_abs, []
 
