@@ -1,9 +1,16 @@
+import time
+
+import napari
 import numpy as np
 import cv2
 from napari import Viewer
 from napari.layers import Labels
 from scipy.interpolate import interp1d
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton, QComboBox
+
+from ..mean_contour import settings
+from ..mean_contour.meanContour import MeanThread
+
 
 def contour_cv2_mask_uniform(mask, contoursize_max):
     mask = mask.astype(np.uint8)
@@ -51,12 +58,34 @@ class InterpolationWidget(QWidget):
         self.dimension_dropdown.setMaximum(0)
         layout.addWidget(self.dimension_dropdown)
 
+        layout.addWidget(QLabel("Method"))
+        self.method_dropdown = QComboBox()
+        self.method_dropdown.addItem("Geometric mean")
+        self.method_dropdown.addItem("RPSV")
+        self.method_dropdown.currentTextChanged.connect(lambda _: self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV"))
+        layout.addWidget(self.method_dropdown)
+
         layout.addWidget(QLabel("# contour points"))
         self.n_points = QSpinBox()
         self.n_points.setMinimum(10)
         self.n_points.setMaximum(1000)
         self.n_points.setValue(300)
         layout.addWidget(self.n_points)
+
+        self.rpsv_widget = QWidget()
+        rpsv_layout = QVBoxLayout()
+        rpsv_layout.addWidget(QLabel("max iterations"))
+        self.rpsv_iterations_spinbox = QSpinBox()
+        self.rpsv_iterations_spinbox.setMaximum(100)
+        self.rpsv_iterations_spinbox.setMinimum(1)
+        self.rpsv_iterations_spinbox.setValue(20)
+        rpsv_layout.addWidget(self.rpsv_iterations_spinbox)
+        self.rpsv_widget.setLayout(rpsv_layout)
+        self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV")
+        rpsv_layout.setContentsMargins(0, 0, 0, 0)
+        self.rpsv_widget.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.rpsv_widget)
+
 
         self.interpolate_button = QPushButton("Interpolate")
         self.interpolate_button.clicked.connect(self.interpolate)
@@ -94,6 +123,7 @@ class InterpolationWidget(QWidget):
         dimension = self.dimension_dropdown.value()
         n_contour_points = self.n_points.value()
         data = self.active_labels_layer.data
+        use_rpsv = self.method_dropdown.currentText() == "RPSV"
         layer_slice_template = [
             slice(None) if d in self.viewer.dims.displayed
                 else None if d == dimension
@@ -101,6 +131,7 @@ class InterpolationWidget(QWidget):
             for d in range(self.active_labels_layer.ndim)]
         prev_cnt = None
         prev_layer = None
+        start = time.time()
         for i in range(data.shape[dimension]):
             layer_slice = layer_slice_template.copy()
             layer_slice[dimension] = i
@@ -118,7 +149,17 @@ class InterpolationWidget(QWidget):
                     inter_layer_slice[dimension] = j
                     prev_w = i - j
                     cur_w = j - prev_layer
-                    mean_cnt = (prev_w * prev_cnt + cur_w * cnt)/(prev_w + cur_w)
+                    if use_rpsv:
+                        mean_cnt = [None]
+                        stgs = settings.Settings(max_iterations=self.rpsv_iterations_spinbox.value(), n_points=n_contour_points)
+                        rpsv_thread = MeanThread([prev_cnt, cnt], stgs, weights=[prev_w, cur_w])
+                        def set_mean_cnt(cnt):
+                            mean_cnt[0] = cnt
+                        rpsv_thread.doneSignal.connect(set_mean_cnt)
+                        rpsv_thread.run()
+                        mean_cnt = mean_cnt[0]
+                    else:
+                        mean_cnt = (prev_w * prev_cnt + cur_w * cnt)/(prev_w + cur_w)
                     mean_cnt = mean_cnt.astype(np.int32)
                     mask = np.zeros_like(data[tuple(inter_layer_slice)])
                     cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.active_labels_layer.selected_label, -1)
@@ -127,3 +168,4 @@ class InterpolationWidget(QWidget):
             prev_cnt = cnt
             prev_layer = i
             self.active_labels_layer.refresh()
+        napari.notification_manager.receive_info("Done in %.4f s" % (time.time() - start))
