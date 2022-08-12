@@ -7,13 +7,13 @@ import numpy as np
 import time
 
 # determine the initial centroid, just sum up the coordinates and take their average
-def initCentroid(contours):
+def initCentroid(contours, weights = None):
     r = np.zeros((1,2))
+    weights = np.ones(len(contours)) if weights is None else weights
     for i in range(len(contours)):
         lut = contours[i].lookup[contours[i].parameterization]
-        r += np.sum(lut, axis=0)
-    r /= (len(contours)*lut.shape[0])
-    print(r)
+        r += np.sum(lut, axis=0) * weights[i]
+    r /= (np.sum(weights)*lut.shape[0])
     return r
 
 def isDifferenceSmallEnough(currVelo, prevVelo):
@@ -161,7 +161,7 @@ def calcRpsvInterpolation(contours, weights):
     # take the average in q-space: interp
     for i in range(len(contours)):
         r = contours[i].getRPSV()
-        #r *= weights[i]
+        r *= weights[i]
         interp += r
     #interp /= np.sum(weights, axis=0)
     interp /= len(contours)

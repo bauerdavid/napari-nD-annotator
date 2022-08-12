@@ -1,6 +1,6 @@
 import pyximport
 import numpy as np
-pyximport.install(setup_args={'include_dirs': np.get_include()})
+pyximport.install(setup_args={'include_dirs': np.get_include(), "script_args": ["--cython-cplus"]})
 # from contour import *
 from contourcy import initCentroid, calcRpsvInterpolation, delta_d
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -8,7 +8,7 @@ import sys
 import numpy as np
 import time
 import os
-import settings
+from settings import Settings
 import reconstructioncy as reconstruction
 # import reconstruction
 import cEssentialscy as cEssentials
@@ -24,12 +24,13 @@ class MeanThread(QThread):
     rpSignal = pyqtSignal(object)
     reconSignal = pyqtSignal(object)
 
-    def __init__(self, contours, settings):
+    def __init__(self, contours, settings=None, weights=None):
+        self.settings = settings if settings else Settings()
         self.contours = contours if isinstance(contours[0], cEssentials.Contour)\
-            else list(cEssentials.Contour(c.copy(), settings.nPoi, settings.resMultiplier) for c in contours)
+            else list(cEssentials.Contour(c.copy(), self.settings.nPoi, self.settings.resMultiplier) for c in contours)
         QThread.__init__(self)
-        self.settings = settings
-        self.iterations = settings.maxIter
+        self.iterations = self.settings.maxIter
+        self.weights = weights
     
     def __del__(self):
         self.wait()
@@ -40,52 +41,53 @@ class MeanThread(QThread):
 
         # settings for the algorithm
         settings = self.settings
+        weights = np.ones(len(self.contours)) if self.weights is None else self.weights
 
         for i in range(len(self.contours)):
             self.contours[i].setStartingPointToLowestY()
 
         # init centroid at first (take average)
-        startCentroid = initCentroid(self.contours)
+        startCentroid = initCentroid(self.contours, weights)
 
         # translate every contour
         for i_contour in range(len(self.contours)):
             self.contours[i_contour].lookup -= startCentroid
         
         # weights for interpolation
-        weights = np.ones(len(self.contours))
 
         properCentroid = startCentroid.copy()
         deltaPrev = np.zeros((1,2))
-        deltaSum = np.zeros((1,2))
 
         # calculate initial mean
         imean = np.zeros((self.contours[0].parameterization.shape[0], 2))
         for i in range(len(self.contours)):
+            # TODO weighting (?)
             if not self.contours[i].isClockwise():
                 # if the orientation of the polygon is cclockwise, revert it
                 self.contours[i].lookup = self.contours[i].lookup[::-1]
-            imean += self.contours[i].lookup[self.contours[i].parameterization,:]
-        imean /= len(self.contours)
+            imean += self.contours[i].lookup[self.contours[i].parameterization,:]*weights[i]
+        imean /= np.sum(weights)
 
         # go for the maximum number of iterations (general > maxIter in settings)
         c = 0
         for i in range(self.iterations):
-
-            print("iteration#"+str(i))
             iternum = i
-
-            regularMean = (self.contours[0].lookup[self.contours[0].parameterization,:]+self.contours[1].lookup[self.contours[1].parameterization,:])/2
-            start = time.time()
+            print("iteration #%d" % i)
+            timestamp = time.time()
+            regularMean = np.zeros_like(self.contours[0].lookup[self.contours[0].parameterization, :])
+            for j in range(len(self.contours)):
+                regularMean += self.contours[j].lookup[self.contours[j].parameterization, :]*weights[j]
+            regularMean /= np.sum(weights)
             self.contours[1].calcParams()
             # calculate the mean in RPSV space
             q_mean = calcRpsvInterpolation(self.contours, weights)
             # here we initialize the ray lengths for the reconstruction: just take the original averages
             guessRayLengths = np.zeros(self.contours[0].lookup[self.contours[0].parameterization].shape[0])
             for i_contour in range(len(self.contours)):
-                contourtmp = self.contours[i_contour].lookup[self.contours[i_contour].parameterization].copy()
+                contourtmp = self.contours[i_contour].lookup[self.contours[i_contour].parameterization]
                 contourlengths = cEssentials.magnitude(contourtmp)
-                guessRayLengths += contourlengths
-            guessRayLengths /= np.sum(weights, axis=0)
+                guessRayLengths += contourlengths * weights[i_contour]
+            guessRayLengths /= np.sum(weights)
             guessRayLengths = cEssentials.magnitude(regularMean)
 
             # lengths of the q space mean
@@ -93,37 +95,29 @@ class MeanThread(QThread):
             qraylengths[qraylengths<1e-99] = 1e-99
 
             # unit direction vectors
-            dirs = q_mean/qraylengths.reshape(qraylengths.shape[0],1) # unit direction of the mean contour points
-
+            dirs = q_mean/qraylengths.reshape(qraylengths.shape[0], 1) # unit direction of the mean contour points
+            print("timestamp 1", (time.time()-timestamp))
+            timestamp = time.time()
             # do the reconstruction
             r_mean_lengths, costs = reconstruction.reconstruct(q_mean, guessRayLengths.copy(), settings, self.rpSignal)
             # ----------------------------
 
             # THE mean contour in r space
-            r_mean = dirs*r_mean_lengths.reshape(r_mean_lengths.shape[0],1)
+            r_mean = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
 
-            rsqrts = qraylengths/r_mean_lengths 
-            timestamp = time.time_ns()
+            rsqrts = qraylengths/r_mean_lengths
 
             # calculate delta_d displacement
             delta = delta_d(self.contours, q_mean, rsqrts)
-            print("delta:", time.time_ns()-timestamp)
 
             # calculate the differences between the current and previous displacements
-            deltaDiff = np.sqrt((deltaPrev[0,0]-delta[0,0])*(deltaPrev[0,0]-delta[0,0])+(deltaPrev[0,1]-delta[0,1])*(deltaPrev[0,1]-delta[0,1]))
+            deltaDiff = deltaPrev-delta
+            deltaDiff = np.sqrt(np.sum(deltaDiff*deltaDiff))
 
             deltaPrev = delta.copy()
+            print("timestamp 2", (time.time() - timestamp))
 
-            #original mean
-            om = np.ndarray(r_mean.shape)
-            om[:,0] = dirs[:,0]*guessRayLengths
-            om[:,1] = dirs[:,1]*guessRayLengths
-            omVelo = cEssentials.magnitude(cEssentials.dt(om,1))
-            omSrv = np.sqrt(omVelo)
-            om[:,0]*=omSrv
-            om[:,1]*=omSrv
-
-            if 0.5*deltaDiff<0.5:
+            if deltaDiff<1.:
                 print("centroid converged")
                 self.updateSignal.emit(100)
                 break
@@ -132,11 +126,6 @@ class MeanThread(QThread):
         
             for i_contour in range(len(self.contours)):
                 self.contours[i_contour].lookup -= delta
-                
-            deltaSum += delta
-
-            end = time.time()
-            print("time spent on reconstruction: "+str(end-start))
             
             properCentroid += delta[0,:]
             self.updateSignal.emit(100*(iternum+1)/self.iterations)
@@ -144,8 +133,6 @@ class MeanThread(QThread):
         for i_contour in range(len(self.contours)):
             self.contours[i_contour].lookup += properCentroid
         r_mean += properCentroid
-        #self.clearPlotSignal.emit()
-
         self.doneSignal.emit(r_mean)
 
 
@@ -169,8 +156,8 @@ if __name__ == '__main__':
             if not os.path.exists("settings.json"):
                 print("no settings.json found. Aborting...")
             else:
-                settings = settings.Settings("settings.json")
-                runCommandLine(sys.argv, settings)
+                stgs = Settings("settings.json")
+                runCommandLine(sys.argv, stgs)
         else:
             print("number of arguments not OK. Try calling the script like \"python meanContour.py cont1.csv cont2.csv ... cont_n.csv meanName\"")
             
