@@ -145,7 +145,6 @@ class Contour:
         self.contourLength = self.getContourLength()
         self.centroid = self.getCentroid()
         self.lookup, self.parameterization = self.getLookupTables()
-        print(self.parameterization.shape)
         self.smoothLookupTable()
         self.diffs = np.empty(self.cPoints)
         self.calcParams()
@@ -273,7 +272,6 @@ class Contour:
         nextArr = np.roll(self.pointArray, -1, axis=0)
 
         cLength = np.sum(np.sqrt((nextArr[:,0]-self.pointArray[:,0])*(nextArr[:,0]-self.pointArray[:,0])+(nextArr[:,1]-self.pointArray[:,1])*(nextArr[:,1]-self.pointArray[:,1])))
-        print("contour length: "+str(cLength))
         return cLength
     
 
@@ -281,10 +279,8 @@ class Contour:
         nextLook = np.roll(self.lookup, -1, axis=0)
         edges = self.lookup[self.parameterization,0]*nextLook[self.parameterization,1]-nextLook[self.parameterization,0]*self.lookup[self.parameterization,1]
         if np.sum(edges)>0:
-            print("TRUE")
             return True
         else:
-            print("FALSE")
             return False
 
     def setStartingPointToLowestY(self):
@@ -295,7 +291,6 @@ class Contour:
         start = time.time()
         # length of one step if we want to achieve self.resolution:
         unitLength = self.contourLength/self.resolution
-        #print("unit length: "+str(unitLength))
         # lookup table
         lut = np.empty((2*self.resolution,2))
         # shifted point arrays
@@ -309,7 +304,6 @@ class Contour:
             nextPoint = nextArray[i]
             direction = nextPoint-startPoint
             dirLen = np.sqrt(direction[0]*direction[0]+direction[1]*direction[1])
-            #print("dirlen: "+str(dirLen))
             direction /= dirLen # normalized direction between 2 points
             reqUnits = int(np.round(dirLen/unitLength))
             xcoords = np.linspace(startPoint[0], nextPoint[0], num=reqUnits)
@@ -330,8 +324,6 @@ class Contour:
         for i in range(0, self.resolution, int(self.resolution/self.cPoints)):
             lut_idx[j] = i
             j += 1
-        #print(xcoords)
-        #print(j)
         return lut_res, lut_idx
     
     def export(self, filename):
