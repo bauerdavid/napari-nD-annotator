@@ -5,15 +5,13 @@ import numpy as np
 cimport numpy as np
 np.import_array()
 from libc.math cimport fabs, sqrt
-import cEssentialscy as cEssentials
-from cEssentialscy cimport dt
-from cEssentialscy import ReconstructionMethods
+from ._essentials import dt, magnitude, innerProduct, ReconstructionMethods
 from scipy.sparse.linalg import svds
 from scipy.sparse import csc_matrix
 from scipy.optimize import minimize
 from scipy.integrate import solve_bvp
-from rk import rk4
-from interpHelper import *
+from .rk import rk4
+from .interpHelper import *
 from scipy.special.cython_special cimport cbrt
 import time
 import matplotlib.pyplot as plt
@@ -42,8 +40,8 @@ def reconstruct(np.ndarray[np.double_t, ndim=2] q_mean, np.ndarray[np.double_t, 
 # cost function for gradient descent, x: |r|, qraylengths: |q|, dirs are the unit direction vectors for q and r.
 def cost(x, qraylengths, dirs):
     rguess = dirs*x.reshape(x.shape[0],1)
-    rdot = cEssentials.dt(rguess,1)
-    rdot_abs = cEssentials.magnitude(rdot)
+    rdot = dt(rguess,1)
+    rdot_abs = magnitude(rdot)
     srv = np.sqrt(rdot_abs)
     return (qraylengths-x*srv)**2
 
@@ -52,14 +50,14 @@ def dcost(x, qraylengths, dirs):
     rguess = dirs*x.reshape(x.shape[0],1) # r
     q = dirs*qraylengths.reshape(qraylengths.shape[0],1) # q
 
-    rdot = cEssentials.dt(rguess,1)
-    rdotdot = cEssentials.dt(rguess,2)
-    rdot_abs = cEssentials.magnitude(rdot)
-    qdot = cEssentials.dt(q,1)
+    rdot = dt(rguess,1)
+    rdotdot = dt(rguess,2)
+    rdot_abs = magnitude(rdot)
+    qdot = dt(q,1)
     srv = np.sqrt(rdot_abs)
 
-    nominator = cEssentials.innerProduct(q,qdot)/qraylengths - ( (cEssentials.innerProduct(rguess,rdot)/x)*srv + (x/(2*srv))*(cEssentials.innerProduct(rdot,rdotdot)/rdot_abs) )
-    denominator = cEssentials.innerProduct(rguess,rdot)
+    nominator = innerProduct(q,qdot)/qraylengths - ( (innerProduct(rguess,rdot)/x)*srv + (x/(2*srv))*(innerProduct(rdot,rdotdot)/rdot_abs) )
+    denominator = innerProduct(rguess,rdot)
 
     gradients = x*(nominator/denominator)
     gradients *= 2*(qraylengths-x*srv)
@@ -68,7 +66,7 @@ def dcost(x, qraylengths, dirs):
 
 # gradient descent algorithm
 def gDescent(q, guessRayLengths, settings):
-    qraylengths = np.sqrt(cEssentials.innerProduct(q,q))
+    qraylengths = np.sqrt(innerProduct(q,q))
     dirs = q/qraylengths.reshape(qraylengths.shape[0],1)
     alpha = settings.alpha
     iters = settings.gradientIterations
@@ -116,8 +114,8 @@ def reconstruct_gradient(q_mean, guessRayLengths, multiplier, debug, plotSignal)
     costs = []
     for i in range(nIter):
         rguess = dirs*guessRayLengths.reshape(guessRayLengths.shape[0],1)
-        rdot = cEssentials.dt(rguess,1)
-        rdot_abs = cEssentials.magnitude(rdot)
+        rdot = dt(rguess,1)
+        rdot_abs = magnitude(rdot)
         srv = np.sqrt(rdot_abs)
 
         energy = qraylengths-guessRayLengths*srv
@@ -295,10 +293,10 @@ def reconstruct_newton(q_mean, guessRayLengths, debug, plotSignal):
 def energyfunc(x, qraylengths, dirs, lambd):
 
     rguess = dirs*x.reshape(x.shape[0],1)
-    velo = cEssentials.magnitude(cEssentials.dt(rguess,1))
-    curvature = cEssentials.magnitude(cEssentials.dt(rguess,2))
-    kappanom = np.abs(cEssentials.dt(rguess[:,0],1)*cEssentials.dt(rguess[:,1],2)-cEssentials.dt(rguess[:,1],1)*cEssentials.dt(rguess[:,0],2))
-    kappadenom = (cEssentials.dt(rguess[:,0],1)**2 + cEssentials.dt(rguess[:,1],1)**2)**(3/2)
+    velo = magnitude(dt(rguess,1))
+    curvature = magnitude(dt(rguess,2))
+    kappanom = np.abs(dt(rguess[:,0],1)*dt(rguess[:,1],2)-dt(rguess[:,1],1)*dt(rguess[:,0],2))
+    kappadenom = (dt(rguess[:,0],1)**2 + dt(rguess[:,1],1)**2)**(3/2)
     kappa = kappanom/kappadenom
     energy = qraylengths-x*np.sqrt(velo)
     energy *= energy
@@ -330,17 +328,17 @@ def reconstruct_cgradient(q_mean, guessRayLengths, settings, plotSignal=None):
 
 # for R-K reconstruction
 def getPotentialZeroPoints(q, guessRayLengths):
-    q_abs = cEssentials.magnitude(q)
-    q_abs_dot = cEssentials.dt(q_abs,1)
+    q_abs = magnitude(q)
+    q_abs_dot = dt(q_abs,1)
     q_x = q[:,0]
     q_y = q[:,1]
-    q_x_dot = cEssentials.dt(q_x, 1)
-    q_y_dot = cEssentials.dt(q_y, 1)
-    q_x_ddot = cEssentials.dt(q_x, 2)
-    q_y_ddot = cEssentials.dt(q_y, 2)
+    q_x_dot = dt(q_x, 1)
+    q_y_dot = dt(q_y, 1)
+    q_x_ddot = dt(q_x, 2)
+    q_y_ddot = dt(q_y, 2)
     theta = np.arctan2(q_y,q_x)
-    theta_dot = cEssentials.dt(theta, 1)#(q_y_dot*q_x - q_y*q_x_dot)/(q_x*q_x+q_y*q_y)
-    theta_ddot = cEssentials.dt(theta, 2)#(q_x*q_y_ddot - q_y*q_x_ddot)/(q_x*q_x+q_y*q_y) -2*((q_x*q_y_dot-q_y*q_x_dot)*(q_y*q_y_dot+q_x*q_x_dot))/(q_x*q_x+q_y*q_y)**2
+    theta_dot = dt(theta, 1)#(q_y_dot*q_x - q_y*q_x_dot)/(q_x*q_x+q_y*q_y)
+    theta_ddot = dt(theta, 2)#(q_x*q_y_ddot - q_y*q_x_ddot)/(q_x*q_x+q_y*q_y) -2*((q_x*q_y_dot-q_y*q_x_dot)*(q_y*q_y_dot+q_x*q_x_dot))/(q_x*q_x+q_y*q_y)**2
 
     diffs = 2*q_abs_dot*theta_dot - q_abs*theta_ddot
     pointnum = q_abs.shape[0]
@@ -357,8 +355,8 @@ def getPotentialZeroPoints(q, guessRayLengths):
     plt.legend()
     f.savefig("candidates.png", dpi=300)
 
-    r_abs_dot = cEssentials.dt(guessRayLengths,1)
-    r_abs_ddot = cEssentials.dt(guessRayLengths,2)
+    r_abs_dot = dt(guessRayLengths,1)
+    r_abs_ddot = dt(guessRayLengths,2)
     t = np.linspace(0,len(guessRayLengths)-1,len(guessRayLengths))
     f = plt.figure()
     plt.subplot(1,2,1)
@@ -382,12 +380,12 @@ def getPotentialZeroPoints(q, guessRayLengths):
 @cython.cdivision(True)
 cpdef reconstruct_iterate_implicit(np.ndarray[np.double_t, ndim=2] q_mean, np.ndarray[np.double_t, ndim=1] guessRayLengths):
     cdef np.ndarray[np.double_t, ndim=1] r_abs = guessRayLengths.copy()
-    cdef np.ndarray[np.double_t, ndim=2] u = q_mean/cEssentials.magnitude(q_mean).reshape(q_mean.shape[0],1)
+    cdef np.ndarray[np.double_t, ndim=2] u = q_mean/magnitude(q_mean).reshape(q_mean.shape[0],1)
     cdef np.ndarray[np.double_t, ndim=2] r = np.empty_like(q_mean)
     cdef np.ndarray[np.double_t, ndim=2] r_dot
     cdef np.ndarray[np.double_t, ndim=1] r_dot_abs
     cdef np.ndarray[np.double_t, ndim=2] e
-    cdef np.ndarray[np.double_t, ndim=1] q_abs = cEssentials.magnitude(q_mean)
+    cdef np.ndarray[np.double_t, ndim=1] q_abs = magnitude(q_mean)
     cdef np.ndarray[np.double_t, ndim=1] diffs = np.empty_like(q_abs)
     cdef np.ndarray[np.double_t, ndim=1] ue_inner = np.empty_like(q_abs)
     cdef np.ndarray[np.double_t, ndim=1] q_abs_sq_ue = np.empty_like(q_abs)  # = q_abs**2 * ue_inner
@@ -434,20 +432,20 @@ cpdef reconstruct_iterate_implicit(np.ndarray[np.double_t, ndim=2] q_mean, np.nd
 def rk_f(t, y, Q,Q_dot,theta,theta_dot):
     #print("t = "+str(t))
     # (np.sign(theta_dot[t])*dt(theta,2)[t])/np.abs(theta_dot[t])
-    theta_ddot = cEssentials.dt(theta,2)
+    theta_ddot = dt(theta,2)
 
     return 3*np.abs(theta_dot[t])+np.tan(y)*( theta_ddot[t]/theta_dot[t] - (2*Q_dot[t]/Q[t]))
 
 def reconstruct_rk(q_mean, guessRayLengths):
-    dirs = q_mean/cEssentials.magnitude(q_mean).reshape(q_mean.shape[0],1)
-    Q = cEssentials.magnitude(q_mean)
-    Q_dot = cEssentials.dt(Q,1)
+    dirs = q_mean/magnitude(q_mean).reshape(q_mean.shape[0],1)
+    Q = magnitude(q_mean)
+    Q_dot = dt(Q,1)
     theta = np.arctan2(q_mean[:,1],q_mean[:,0])
-    theta_dot = cEssentials.dt(theta,1)
-    theta_ddot = cEssentials.dt(theta,2)
+    theta_dot = dt(theta,1)
+    theta_ddot = dt(theta,2)
     r_guess = dirs*guessRayLengths.reshape(guessRayLengths.shape[0],1)
-    r_guess_dot = cEssentials.dt(r_guess,1)
-    velo_guess = cEssentials.magnitude(r_guess_dot)
+    r_guess_dot = dt(r_guess,1)
+    velo_guess = magnitude(r_guess_dot)
 
 
     t = np.linspace(0,Q.shape[0], num=Q.shape[0])
@@ -463,7 +461,7 @@ def reconstruct_rk(q_mean, guessRayLengths):
     plt.legend()
     plt.show()'''
 
-    v_guess = np.arccos(np.sign(theta_dot) * cEssentials.innerProduct(r_guess,r_guess_dot)/(guessRayLengths*velo_guess))
+    v_guess = np.arccos(np.sign(theta_dot) * innerProduct(r_guess,r_guess_dot)/(guessRayLengths*velo_guess))
 
     '''plt.close('all')
     plt.plot(t,v_guess, label="v guess")
@@ -521,16 +519,16 @@ def bc(ya,yb):
     return ya-yb
 
 def reconstruct_bvp(q_mean, guessRayLengths):
-    dirs = q_mean/cEssentials.magnitude(q_mean).reshape(q_mean.shape[0],1)
-    Q = cEssentials.magnitude(q_mean)
-    Q_dot = cEssentials.dt(Q,1)
+    dirs = q_mean/magnitude(q_mean).reshape(q_mean.shape[0],1)
+    Q = magnitude(q_mean)
+    Q_dot = dt(Q,1)
     theta = np.arctan2(q_mean[:,1],q_mean[:,0])
-    theta_dot = cEssentials.dt(theta,1)
-    theta_ddot = cEssentials.dt(theta,2)
+    theta_dot = dt(theta,1)
+    theta_ddot = dt(theta,2)
     r_guess = dirs*guessRayLengths.reshape(guessRayLengths.shape[0],1)
-    r_guess_dot = cEssentials.dt(r_guess,1)
-    velo_guess = cEssentials.magnitude(r_guess_dot)
-    v_guess = np.arccos(np.sign(theta_dot) * cEssentials.innerProduct(r_guess,r_guess_dot)/(guessRayLengths*velo_guess))
+    r_guess_dot = dt(r_guess,1)
+    velo_guess = magnitude(r_guess_dot)
+    v_guess = np.arccos(np.sign(theta_dot) * innerProduct(r_guess,r_guess_dot)/(guessRayLengths*velo_guess))
 
     Q = makePeriodic(Q)
     Q_dot = makePeriodic(Q_dot)

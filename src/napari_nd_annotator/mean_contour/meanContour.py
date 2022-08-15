@@ -1,20 +1,14 @@
-import pyximport
-import numpy as np
-pyximport.install(setup_args={'include_dirs': np.get_include(), "script_args": ["--cython-cplus"]})
 # from contour import *
-from contourcy import initCentroid, calcRpsvInterpolation, delta_d
 from PyQt5.QtCore import QThread, pyqtSignal
 import sys
 import numpy as np
 import time
 import os
-from settings import Settings
-import reconstructioncy as reconstruction
-# import reconstruction
-import cEssentialscy as cEssentials
-# import cEssentials
-# import reconstruction
-import util
+from .settings import Settings
+from ._reconstruction import reconstruct
+from ._contour import initCentroid, delta_d, calcRpsvInterpolation
+from ._essentials import magnitude, Contour
+from .util import loadContour
 
 class MeanThread(QThread):
 
@@ -26,8 +20,8 @@ class MeanThread(QThread):
 
     def __init__(self, contours, settings=None, weights=None):
         self.settings = settings if settings else Settings()
-        self.contours = contours if isinstance(contours[0], cEssentials.Contour)\
-            else list(cEssentials.Contour(c.copy(), self.settings.nPoi, self.settings.resMultiplier) for c in contours)
+        self.contours = contours if isinstance(contours[0], Contour)\
+            else list(Contour(c.copy(), self.settings.nPoi, self.settings.resMultiplier) for c in contours)
         QThread.__init__(self)
         self.iterations = self.settings.maxIter
         self.weights = weights
@@ -85,13 +79,13 @@ class MeanThread(QThread):
             guessRayLengths = np.zeros(self.contours[0].lookup[self.contours[0].parameterization].shape[0])
             for i_contour in range(len(self.contours)):
                 contourtmp = self.contours[i_contour].lookup[self.contours[i_contour].parameterization]
-                contourlengths = cEssentials.magnitude(contourtmp)
+                contourlengths = magnitude(contourtmp)
                 guessRayLengths += contourlengths * weights[i_contour]
             guessRayLengths /= np.sum(weights)
-            guessRayLengths = cEssentials.magnitude(regularMean)
+            guessRayLengths = magnitude(regularMean)
 
             # lengths of the q space mean
-            qraylengths = cEssentials.magnitude(q_mean)
+            qraylengths = magnitude(q_mean)
             qraylengths[qraylengths<1e-99] = 1e-99
 
             # unit direction vectors
@@ -99,7 +93,7 @@ class MeanThread(QThread):
             print("timestamp 1", (time.time()-timestamp))
             timestamp = time.time()
             # do the reconstruction
-            r_mean_lengths, costs = reconstruction.reconstruct(q_mean, guessRayLengths.copy(), settings, self.rpSignal)
+            r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), settings, self.rpSignal)
             # ----------------------------
 
             # THE mean contour in r space
@@ -139,7 +133,7 @@ class MeanThread(QThread):
 def runCommandLine(args, settings):
     contours = []
     for argind in range(1,len(args)-1):
-        contours.append(util.loadContour(args[argind], settings.nPoi, settings.resMultiplier))
+        contours.append(loadContour(args[argind], settings.nPoi, settings.resMultiplier))
     settings.update("export", "exportName", args[len(args)-1])
     settings.updateVariables()
     meanThread = MeanThread(contours.copy(), settings)

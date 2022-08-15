@@ -1,5 +1,5 @@
 import json
-import util
+from .util import getReconMethod
 
 class Settings:
 
@@ -25,7 +25,7 @@ class Settings:
 
             # reconstrutcion settings
             self.reconText = (data['reconstruction'])['reconMethod']
-            self.reconMethod = util.getReconMethod((data['reconstruction'])['reconMethod'])
+            self.reconMethod = getReconMethod((data['reconstruction'])['reconMethod'])
             self.gradientIterations = (data['reconstruction'])['iterations']
             self.alpha = (data['reconstruction'])['alpha']
             self.lambd = (data['reconstruction'])['lambda']
@@ -48,7 +48,7 @@ class Settings:
 
             # reconstrutcion settings
             self.reconText = reconstruction_method
-            self.reconMethod = util.getReconMethod(reconstruction_method)
+            self.reconMethod = getReconMethod(reconstruction_method)
             self.gradientIterations = gradient_iterations
             self.alpha = alpha
             self.lambd = lambd
@@ -76,7 +76,7 @@ class Settings:
 
         # reconstrutcion settings
         self.reconText = (data['reconstruction'])['reconMethod']
-        self.reconMethod = util.getReconMethod((data['reconstruction'])['reconMethod'])
+        self.reconMethod = getReconMethod((data['reconstruction'])['reconMethod'])
         self.gradientIterations = (data['reconstruction'])['iterations']
         self.alpha = (data['reconstruction'])['alpha']
         self.lambd = (data['reconstruction'])['lambda']

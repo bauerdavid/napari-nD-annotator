@@ -1,5 +1,5 @@
 import numpy as np
-from cEssentialscy import ReconstructionMethods, Contour
+from ._essentials import ReconstructionMethods, Contour
 import matplotlib.pyplot as plt
 
 # loads a contour from file contName with nPoi points and a resolution of nPoi*resMultiplier

@@ -1,5 +1,5 @@
 # from cEssentials import *
-from cEssentialscy import magnitude, innerProduct
+from ._essentials import magnitude, innerProduct
 cimport numpy as np
 cimport cython
 from cython.parallel cimport prange
