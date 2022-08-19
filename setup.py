@@ -29,12 +29,7 @@ extra_compile_args = ["/std:c++17", "/openmp"] if sys.platform == "win32" else [
 extensions = [
     Extension(
         "napari_nd_annotator.minimal_contour._eikonal_wrapper",
-        ["src/napari_minimal_contour/_eikonal_wrapper.pyx"],
-        extra_compile_args=extra_compile_args, language="c++", include_dirs=[np.get_include()]
-    ),
-    Extension(
-        "napari_nd_annotator.minimal_contour._eikonalpy",
-        ["src/napari_minimal_contour/eikonalpy.pyx"],
+        ["src/napari_nd_annotator/minimal_contour/_eikonal_wrapper.pyx"],
         extra_compile_args=extra_compile_args, language="c++", include_dirs=[np.get_include()]
     )
 ]
