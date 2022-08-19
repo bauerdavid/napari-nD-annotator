@@ -178,8 +178,6 @@ cdef class MinimalContourCalculator:
                     segment[j, Y] = poly[j].y
                 out_list.append(segment)
             return out_list
-        else:
-            print("no return segment list")
         cdef vector[int] offsets
         offsets.reserve(polys.size())
         offsets[0] = 0
