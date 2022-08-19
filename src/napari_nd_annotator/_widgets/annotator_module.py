@@ -8,6 +8,7 @@ from scipy.ndimage import binary_fill_holes
 import math
 
 from .interpolation_widget import InterpolationWidget
+from .minimal_contour_widget import MinimalContourWidget
 
 
 class AnnotatorWidget(QWidget):
@@ -21,9 +22,13 @@ class AnnotatorWidget(QWidget):
         self.viewer.layers.selection.events.connect(self.on_layer_selection_change)
         self.fill_objects_checkbox.clicked.connect(self.set_fill_objects)
         layout.addWidget(self.fill_objects_checkbox)
+
         tabs_widget = QTabWidget()
         interpolation_widget = InterpolationWidget(viewer)
         tabs_widget.addTab(interpolation_widget, "Interpolation")
+
+        tabs_widget.addTab(MinimalContourWidget(viewer), "Minimal Contour")
+
         layout.addWidget(tabs_widget)
         self.setLayout(layout)
         self.installEventFilter(self)
