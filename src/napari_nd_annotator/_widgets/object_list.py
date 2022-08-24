@@ -22,6 +22,8 @@ import csv
 
 import PIL.Image as PilImage
 
+import time
+
 
 def slice_len(slice_, count=None):
     if count is None:
@@ -266,8 +268,6 @@ class ObjectListWidget(QListWidget):
         self.projections_widget = None
         self._mouse_down = False
         self.selected_idx = None
-        self.previously_hovered = None
-        self.previous_face_color = None
         self.previous_edge_color = None
         self._indices = None
         self.indices = indices
@@ -408,17 +408,12 @@ class ObjectListWidget(QListWidget):
             if item is None:
                 return False
             idx = self.indexFromItem(item).row()
-            self.previously_hovered = idx
-            self.previous_face_color = self.bounding_box_layer.face_color[idx].copy()
-            self.bounding_box_layer.face_color[idx] = (1., 1.0, 1.0, 0.5)
-            self.bounding_box_layer.data = self.bounding_box_layer.data
+            self.bounding_box_layer._value = (idx, None)
+            self.bounding_box_layer._set_highlight()
             return True
         elif event.type() == QEvent.Leave and type(source) == QObjectWidget:
-            if self.previous_face_color is not None:
-                self.bounding_box_layer.face_color[self.previously_hovered] = self.previous_face_color
-                self.bounding_box_layer.data = self.bounding_box_layer.data
-                self.previously_hovered = None
-                self.previous_face_color = None
+            self.bounding_box_layer._value = (None, None)
+            self.bounding_box_layer._set_highlight()
             return True
         return super().eventFilter(source, event)
 
