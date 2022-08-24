@@ -253,13 +253,17 @@ struct SDisImg
                 return;
             }
         }
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] = 0;
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] = 0;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] = 0;
+//            }
+//        }
     }
     void Set(int x, int y, byte* buf, int mod = 0, int pitch = 0)
     {
@@ -360,9 +364,13 @@ struct SDisImg
         }
         if(mi > avg)
         {
-            for(int q = 0; q < ys; ++q)
-                for(int p = 0; p < xs; ++p)
-                    dat[q * xs + p] = 255 - dat[q * xs + p];
+#pragma omp parallel for
+            for(int qp =0; qp < ys*xs; qp++){
+                dat[qp] = 255 - dat[qp];
+            }
+//            for(int q = 0; q < ys; ++q)
+//                for(int p = 0; p < xs; ++p)
+//                    dat[q * xs + p] = 255 - dat[q * xs + p];
         }
 
 
@@ -432,14 +440,19 @@ struct SDisImg
                 return;
             }
         }
-
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] = tc[q][p];
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            int p = qp % xs;
+            int q = qp / xs;
+            dat[qp] = tc[q][p];
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] = tc[q][p];
+//            }
+//        }
 
     }
     unsigned long* dat;
@@ -505,13 +518,17 @@ template <class T> struct SWorkImg
             }
         }
         maxval = minval = avgval = 0;
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] = (T)0;
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] = (T)0;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] = (T)0;
+//            }
+//        }
     }
     void Set(int x, int y, T fill)
     {
@@ -529,13 +546,17 @@ template <class T> struct SWorkImg
             }
         }
         maxval = minval = avgval = 0;
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] = fill;
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] = fill;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] = fill;
+//            }
+//        }
     }
     void Set(int x, int y, byte* buf)
     {
@@ -555,17 +576,36 @@ template <class T> struct SWorkImg
         maxval = 0;
         minval = (T)10000;
         avgval = 0;
-        for(int q = 0; q < ys; ++q)
+#pragma omp parallel reduction(+: avgval)
         {
-            for(int p = 0; p < xs; ++p)
-            {
-                T t = (T)*buf++;
-                dat[q * xs + p] = t;
-                if(maxval < t) maxval = t;
-                if(minval > t) minval = t;
+            T temp_maxval = (T)0;
+            T temp_minval = (T)10000;
+#pragma omp for
+            for(int qp =0; qp < ys*xs; qp++){
+                T t = (T)*buf[qp];
+                dat[qp] = t;
+                if(temp_maxval < t) temp_maxval = t;
+                if(temp_minval > t) temp_minval = t;
                 avgval += t;
             }
+#pragma omp critical(minval_maxval)
+            {
+                if(temp_maxval > maxval) maxval = temp_maxval;
+                if(temp_minval < minval) minval = temp_minval;
+            }
         }
+
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                T t = (T)*buf++;
+//                dat[q * xs + p] = t;
+//                if(maxval < t) maxval = t;
+//                if(minval > t) minval = t;
+//                avgval += t;
+//            }
+//        }
         avgval /= xs * ys;
         Norm();
     }
@@ -575,16 +615,33 @@ template <class T> struct SWorkImg
         maxval = (T)-1e11;
         minval = (T)1e11;
         avgval = 0;
-        for(int q = 0; q < ys; ++q)
+#pragma omp parallel reduction(+: avgval)
         {
-            for(int p = 0; p < xs; ++p)
-            {
-                T t = dat[q * xs + p];
-                if(maxval < t) maxval = t;
-                if(minval > t) minval = t;
+            T temp_maxval = (T)0;
+            T temp_minval = (T)10000;
+#pragma omp for
+            for(int qp =0; qp < ys*xs; qp++){
+                T t = dat[qp];
+                if(temp_maxval < t) temp_maxval = t;
+                if(temp_minval > t) temp_minval = t;
                 avgval += t;
             }
+#pragma omp critical(minval_maxval)
+            {
+                if(temp_maxval > maxval) maxval = temp_maxval;
+                if(temp_minval < minval) minval = temp_minval;
+            }
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                T t = dat[q * xs + p];
+//                if(maxval < t) maxval = t;
+//                if(minval > t) minval = t;
+//                avgval += t;
+//            }
+//        }
         avgval /= xs * ys;
     }
     void Clean()
@@ -633,13 +690,19 @@ template <class T> struct SWorkImg
         maxval = tc.maxval;
         minval = tc.minval;
         avgval = tc.avgval;
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] = tc[q][p];
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            int p = qp % xs;
+            int q = qp / xs;
+            dat[qp] = tc[q][p];
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] = tc[q][p];
+//            }
+//        }
         return *this;
     }
     void operator=(SDisImg& tc)
@@ -660,19 +723,41 @@ template <class T> struct SWorkImg
         maxval = 0;
         minval = (T)10000;
         avgval = 0;
-        for(int q = 0; q < ys; ++q)
+#pragma omp parallel reduction(+: avgval)
         {
-            for(int p = 0; p < xs; ++p)
-            {
+            T temp_maxval = (T)0;
+            T temp_minval = (T)10000;
+#pragma omp for
+            for(int qp =0; qp < ys*xs; qp++){
+                int p = qp % xs;
+                int q = qp / xs;
                 T t;
                 t = (T)(tc[q][p] & 0xff);
 
-                dat[q * xs + p] = t;
-                if(maxval < t) maxval = t;
-                if(minval > t) minval = t;
+                dat[qp] = t;
+                if(temp_maxval < t) temp_maxval = t;
+                if(temp_minval > t) temp_minval = t;
                 avgval += t;
             }
+#pragma omp critical(minval_maxval)
+            {
+                if(temp_maxval > maxval) maxval = temp_maxval;
+                if(temp_minval < minval) minval = temp_minval;
+            }
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                T t;
+//                t = (T)(tc[q][p] & 0xff);
+//
+//                dat[q * xs + p] = t;
+//                if(maxval < t) maxval = t;
+//                if(minval > t) minval = t;
+//                avgval += t;
+//            }
+//        }
         avgval /= xs * ys;
         Norm();
     }
@@ -699,10 +784,14 @@ template <class T> struct SWorkImg
         minval = (T)10000;
         avgval = 0;
         modxs >>= 1; modys >>= 1;
-        for(int q = 0; q < ys; ++q)
+#pragma omp parallel reduction(+: avgval)
         {
-            for(int p = 0; p < xs; ++p)
-            {
+            T temp_maxval = (T)0;
+            T temp_minval = (T)10000;
+#pragma omp for
+            for(int qp =0; qp < ys*xs; qp++){
+                int p = qp % xs;
+                int q = qp / xs;
                 T t;
                 if(!channel)
                     t = (T)(tc[q + modys][p + modxs] & 0xff);
@@ -710,12 +799,34 @@ template <class T> struct SWorkImg
                     t = (T)((tc[q + modys][p + modxs] & 0xff00) >> 8);
                 else
                     t = (T)((tc[q + modys][p + modxs] & 0xff0000) >> 16);
-                dat[q * xs + p] = t;
-                if(maxval < t) maxval = t;
-                if(minval > t) minval = t;
+                dat[qp] = t;
+                if(temp_maxval < t) temp_maxval = t;
+                if(temp_minval > t) temp_minval = t;
                 avgval += t;
             }
+#pragma omp critical(minval_maxval)
+            {
+                if(temp_maxval > maxval) maxval = temp_maxval;
+                if(temp_minval < minval) minval = temp_minval;
+            }
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                T t;
+//                if(!channel)
+//                    t = (T)(tc[q + modys][p + modxs] & 0xff);
+//                else if(channel == 1)
+//                    t = (T)((tc[q + modys][p + modxs] & 0xff00) >> 8);
+//                else
+//                    t = (T)((tc[q + modys][p + modxs] & 0xff0000) >> 16);
+//                dat[q * xs + p] = t;
+//                if(maxval < t) maxval = t;
+//                if(minval > t) minval = t;
+//                avgval += t;
+//            }
+//        }
         avgval /= xs * ys;
         Norm();
         return true;
@@ -744,17 +855,37 @@ template <class T> struct SWorkImg
         avgval = 0;
 
         modxs >>= 1; modys >>= 1;
-        for(int q = 0; q < ys; ++q)
+#pragma omp parallel reduction(+: avgval)
         {
-            for(int p = 0; p < xs; ++p)
-            {
+            T temp_maxval = (T)0;
+            T temp_minval = (T)10000;
+#pragma omp for
+            for(int qp =0; qp < ys*xs; qp++){
+                int p = qp % xs;
+                int q = qp / xs;
                 T t = (T)(tc[q + modys][p + modxs]);
-                    dat[q * xs + p] = t;
-                if(maxval < t) maxval = t;
-                if(minval > t) minval = t;
+                dat[qp] = t;
+                if(temp_maxval < t) temp_maxval = t;
+                if(temp_minval > t) temp_minval = t;
                 avgval += t;
             }
+#pragma omp critical(minval_maxval)
+            {
+                if(temp_maxval > maxval) maxval = temp_maxval;
+                if(temp_minval < minval) minval = temp_minval;
+            }
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                T t = (T)(tc[q + modys][p + modxs]);
+//                    dat[q * xs + p] = t;
+//                if(maxval < t) maxval = t;
+//                if(minval > t) minval = t;
+//                avgval += t;
+//            }
+//        }
         avgval /= xs * ys;
         Norm();
         return true;
@@ -780,18 +911,39 @@ template <class T> struct SWorkImg
         maxval = 0;
         minval = (T)10000;
         avgval = 0;
-        for(int q = 0; q < ys; ++q)
+#pragma omp parallel reduction(+: avgval)
         {
-            for(int p = 0; p < xs; ++p)
-            {
+            T temp_maxval = (T)0;
+            T temp_minval = (T)10000;
+#pragma omp for
+            for(int qp =0; qp < ys*xs; qp++){
+                int p = qp % xs;
+                int q = qp / xs;
                 T t;
                 t = (T)(tc[q][p] & 0xff);
-                dat[q * xs + p] = t;
-                if(maxval < t) maxval = t;
-                if(minval > t) minval = t;
+                dat[qp] = t;
+                if(temp_maxval < t) temp_maxval = t;
+                if(temp_minval > t) temp_minval = t;
                 avgval += t;
             }
+#pragma omp critical(minval_maxval)
+            {
+                if(temp_maxval > maxval) maxval = temp_maxval;
+                if(temp_minval < minval) minval = temp_minval;
+            }
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                T t;
+//                t = (T)(tc[q][p] & 0xff);
+//                dat[q * xs + p] = t;
+//                if(maxval < t) maxval = t;
+//                if(minval > t) minval = t;
+//                avgval += t;
+//            }
+//        }
         avgval /= xs * ys;
         Renorm();
         return true;
@@ -802,47 +954,75 @@ template <class T> struct SWorkImg
         if(maxval <= 0) return;
         T recip = ((T)1.0) / ((T)maxval);
         //T recip = ((T)1.0)/((T)255);
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] *= recip;
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] *= recip;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] *= recip;
+//            }
+//        }
     }
     void Renorm()
     {
         T min = (T)1e11f, max = (T)-1e11f;
-        for(int q = 0; q < ys; ++q)
-            for(int p = 0; p < xs; ++p)
-            {
-                T v = dat[q * xs + p];
-                if(v < min) min = v;
-                if(v > max) max = v;
-            }
-
-        if(abs((T)(max - min)) < ((T)1e-11f)) return;
-
-        for(int q = 0; q < ys; ++q)
+#pragma omp parallel
         {
-            for(int p = 0; p < xs; ++p)
+            T temp_max = (T)-1e11f;
+            T temp_min = (T)1e11f;
+#pragma omp for
+            for(int qp =0; qp < ys*xs; qp++){
+                T v = dat[qp];
+                if(temp_max < v) temp_max = v;
+                if(temp_min > v) temp_min = v;
+            }
+#pragma omp critical(minval_maxval)
             {
-                dat[q * xs + p] -= (T)min;
-                dat[q * xs + p] /= (T)(max - min);
+                if(temp_max > max) max = temp_max;
+                if(temp_min < min) min = temp_min;
             }
         }
+//        for(int q = 0; q < ys; ++q)
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                T v = dat[q * xs + p];
+//                if(v < min) min = v;
+//                if(v > max) max = v;
+//            }
+
+        if(abs((T)(max - min)) < ((T)1e-11f)) return;
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] -= (T)min;
+            dat[qp] /= (T)(max - min);
+        }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] -= (T)min;
+//                dat[q * xs + p] /= (T)(max - min);
+//            }
+//        }
         SetBound();
 
     }
     void Invert()
     {
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] = ((T)1.0) - dat[q * xs + p];
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] = ((T)1.0) - dat[qp];
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] = ((T)1.0) - dat[q * xs + p];
+//            }
+//        }
     }
     void GetReduced2(SWorkImg& r)
     {
@@ -1260,12 +1440,18 @@ template <class T> struct SWorkImg
             gy.xs = xs;
             gy.ys = ys;
         }
-
-        for(int q = 0; q < ys; ++q)
-            for(int p = 0; p < xs - 1; ++p)
-                gx[q][p] = dat[q * xs + p + 1] - dat[q * xs + p];
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            int p = qp % xs;
+            int q = qp / xs;
+            gx[q][p] = dat[qp + 1] - dat[qp];
+        }
+//        for(int q = 0; q < ys; ++q)
+//            for(int p = 0; p < xs - 1; ++p)
+//                gx[q][p] = dat[q * xs + p + 1] - dat[q * xs + p];
         if(bZeroBound)
         {
+#pragma omp parallel for
             for(int q = 0; q < ys; ++q)
             {
                 gx[q][xs - 1] = 0;
@@ -1274,15 +1460,22 @@ template <class T> struct SWorkImg
         }
         else
         {
+#pragma omp parallel for
             for(int q = 0; q < ys; ++q)
                 gx[q][xs - 1] = gx[q][xs - 2];
         }
-
-        for(int q = 0; q < ys - 1; ++q)
-            for(int p = 0; p < xs; ++p)
-                gy[q][p] = dat[(q + 1) * xs + p] - dat[q * xs + p];
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            int p = qp % xs;
+            int q = qp / xs;
+            gy[q][p] = dat[(q + 1) * xs + p] - dat[qp];
+        }
+//        for(int q = 0; q < ys - 1; ++q)
+//            for(int p = 0; p < xs; ++p)
+//                gy[q][p] = dat[(q + 1) * xs + p] - dat[q * xs + p];
         if(bZeroBound)
         {
+#pragma omp parallel for
             for(int p = 0; p < xs; ++p)
             {
                 gy[ys - 1][p] = 0;
@@ -1291,6 +1484,7 @@ template <class T> struct SWorkImg
         }
         else
         {
+#pragma omp parallel for
             for(int p = 0; p < xs; ++p)
                 gy[ys - 1][p] = gy[ys - 2][p];
         }
@@ -1539,46 +1733,62 @@ template <class T> struct SWorkImg
 
     SWorkImg& operator= (T r)
     {
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] = r;
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] = r;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] = r;
+//            }
+//        }
         return *this;
     }
     SWorkImg& operator*= (T r)
     {
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] *= r;
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] *= r;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] *= r;
+//            }
+//        }
         return *this;
     }
     SWorkImg& operator+= (T r)
     {
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] += r;
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] += r;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] += r;
+//            }
+//        }
         return *this;
     }
     SWorkImg& operator-= (T r)
     {
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] -= r;
-            }
+        #pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            dat[qp] -= r;
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] -= r;
+//            }
+//        }
         return *this;
     }
     SWorkImg& operator+= (SWorkImg& tc)
@@ -1587,14 +1797,19 @@ template <class T> struct SWorkImg
         {
             return *this;
         }
-
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] += tc[q][p];
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            int p = qp % xs;
+            int q = qp / xs;
+            dat[qp] += tc[q][p];
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] += tc[q][p];
+//            }
+//        }
         return *this;
     }
     SWorkImg& operator-= (SWorkImg& tc)
@@ -1603,14 +1818,19 @@ template <class T> struct SWorkImg
         {
             return *this;
         }
-
-        for(int q = 0; q < ys; ++q)
-        {
-            for(int p = 0; p < xs; ++p)
-            {
-                dat[q * xs + p] -= tc[q][p];
-            }
+#pragma omp parallel for
+        for(int qp =0; qp < ys*xs; qp++){
+            int p = qp % xs;
+            int q = qp / xs;
+            dat[qp] -= tc[q][p];
         }
+//        for(int q = 0; q < ys; ++q)
+//        {
+//            for(int p = 0; p < xs; ++p)
+//            {
+//                dat[q * xs + p] -= tc[q][p];
+//            }
+//        }
         return *this;
     }
 

@@ -10,6 +10,7 @@
 struct SVeloData
 {
 	SVeloData(int ix, int iy, double rv):x(ix),y(iy),v(rv) { }
+	SVeloData():x(0),y(0),v(0) { }
 	int x;
 	int y;
 	double v;

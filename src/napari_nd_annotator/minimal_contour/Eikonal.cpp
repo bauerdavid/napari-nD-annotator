@@ -43,22 +43,38 @@ void CEikonal::SetStartStop(const CVec2 &reference,const CVec2 &target)
 	int cx = (int)m_reference.x, cy = (int)m_reference.y;
 
 	m_currentdistance = 3.0f;
-	for (int yy = 0; yy < m_spacey; ++yy) {
-		for (int xx = 0; xx < m_spacex; ++xx) {
-			int dx = xx-cx, dy = yy-cy;
-			double dd = sqrt((double)(dx*dx+dy*dy));
-			
-			if (dd < m_currentdistance) {
-				m_field[yy][xx] = 1.0-2.0f*dd/m_currentdistance;
-				m_distance[yy][xx] = dd;
-			}
-			else {
-				m_field[yy][xx] = -1;
-				m_distance[yy][xx] = -1;
-			}
+#pragma omp parallel for
+    for(int yx =0; yx < m_spacex*m_spacey; yx++){
+        int xx = yx % m_spacex;
+        int yy = yx / m_spacex;
+        int dx = xx-cx, dy = yy-cy;
+        double dd = sqrt((double)(dx*dx+dy*dy));
 
-		}
-	}
+        if (dd < m_currentdistance) {
+            m_field[yy][xx] = 1.0-2.0f*dd/m_currentdistance;
+            m_distance[yy][xx] = dd;
+        }
+        else {
+            m_field[yy][xx] = -1;
+            m_distance[yy][xx] = -1;
+        }
+    }
+//	for (int yy = 0; yy < m_spacey; ++yy) {
+//		for (int xx = 0; xx < m_spacex; ++xx) {
+//			int dx = xx-cx, dy = yy-cy;
+//			double dd = sqrt((double)(dx*dx+dy*dy));
+//
+//			if (dd < m_currentdistance) {
+//				m_field[yy][xx] = 1.0-2.0f*dd/m_currentdistance;
+//				m_distance[yy][xx] = dd;
+//			}
+//			else {
+//				m_field[yy][xx] = -1;
+//				m_distance[yy][xx] = -1;
+//			}
+//
+//		}
+//	}
 
 	m_boundary.clear();
 
@@ -92,12 +108,26 @@ void CEikonal::GetMaxAuxGrad()
 {
 	int ys = m_aux[0].ys, xs = m_aux[0].xs;
 	m_maxauxgrad = 0;
-	for (int yy = 0; yy < ys; ++yy) {
-		for (int xx = 0; xx < xs; ++xx) {
-			double sq = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
-			if (sq > m_maxauxgrad) m_maxauxgrad = sq;
-		}
-	}
+#pragma omp parallel
+    {
+        double temp_max = 0;
+#pragma omp for
+        for(int yx =0; yx < xs*ys; yx++){
+            int xx = yx % xs;
+            int yy = yx / xs;
+            double sq = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
+            if(sq > temp_max) temp_max = sq;
+        }
+#pragma omp critical(maxauxgrad)
+    if(temp_max > m_maxauxgrad) m_maxauxgrad = temp_max;
+    }
+
+//	for (int yy = 0; yy < ys; ++yy) {
+//		for (int xx = 0; xx < xs; ++xx) {
+//			double sq = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
+//			if (sq > m_maxauxgrad) m_maxauxgrad = sq;
+//		}
+//	}
 	m_maxauxgrad = sqrt(m_maxauxgrad);
 }
 
@@ -119,19 +149,33 @@ void CEikonal::InitImageQuant0(SWorkImg<double> &red, SWorkImg<double> &green, S
 	InitEnvironment(xs,ys);
 	red.GetImgGrad(m_aux[1],m_aux[0]);
 	green.GetImgGrad(m_temp[1],m_temp[0]);
-	for (int yy = 0; yy < ys; ++yy) {
-		for (int xx = 0; xx < xs; ++xx) {
-			m_aux[0][yy][xx] += m_temp[0][yy][xx];
-			m_aux[1][yy][xx] += m_temp[1][yy][xx];
-		}
-	}
+#pragma omp parallel for
+    for(int yx =0; yx < xs*ys; yx++){
+        int xx = yx % xs;
+        int yy = yx / xs;
+        m_aux[0][yy][xx] += m_temp[0][yy][xx];
+        m_aux[1][yy][xx] += m_temp[1][yy][xx];
+    }
+//	for (int yy = 0; yy < ys; ++yy) {
+//		for (int xx = 0; xx < xs; ++xx) {
+//			m_aux[0][yy][xx] += m_temp[0][yy][xx];
+//			m_aux[1][yy][xx] += m_temp[1][yy][xx];
+//		}
+//	}
 	blue.GetImgGrad(m_temp[1],m_temp[0]);
-	for (int yy = 0; yy < ys; ++yy) {
-		for (int xx = 0; xx < xs; ++xx) {
-			m_aux[0][yy][xx] += m_temp[0][yy][xx];
-			m_aux[1][yy][xx] += m_temp[1][yy][xx];
-		}
-	}
+#pragma omp parallel for
+    for(int yx =0; yx < xs*ys; yx++){
+        int xx = yx % xs;
+        int yy = yx / xs;
+        m_aux[0][yy][xx] += m_temp[0][yy][xx];
+        m_aux[1][yy][xx] += m_temp[1][yy][xx];
+    }
+//	for (int yy = 0; yy < ys; ++yy) {
+//		for (int xx = 0; xx < xs; ++xx) {
+//			m_aux[0][yy][xx] += m_temp[0][yy][xx];
+//			m_aux[1][yy][xx] += m_temp[1][yy][xx];
+//		}
+//	}
 
 	m_aux[1] *= -1;
 	GetMaxAuxGrad();
@@ -391,6 +435,40 @@ void CRanders::DistanceCalculator()
 	m_velo.clear();
 
 	auto bsi = m_boundary.size();
+	m_velo.resize(bsi);
+#pragma omp parallel
+    {
+        double temp_maxv(0);
+#pragma omp for
+        for (int ii = 0; ii < bsi ; ++ii) {
+
+            unsigned long cxy = m_boundary[ii];
+            int xx = cxy & 0xffff, yy = cxy >> 16;
+
+            double nx = 0.5f * (m_field[yy][xx + 1] - m_field[yy][xx - 1]);
+            double ny = 0.5f * (m_field[yy + 1][xx] - m_field[yy - 1][xx]);
+            double gradlen = sqrt(nx * nx + ny * ny);
+            if (gradlen < 1e-11) gradlen = 1e-11;
+            double igradlen = 1.0 / gradlen;
+            nx *= igradlen; ny *= igradlen;
+
+            double Qn = tangx[yy][xx] * nx + tangy[yy][xx] * ny;
+            double Qt2 = -tangx[yy][xx] * ny + tangy[yy][xx] * nx;
+            Qt2 *= Qt2;
+            double eikon(1 - Qt2);
+            if (eikon < 0) eikon = 0;
+            eikon = Qn + sqrt(eikon);
+            double vnormed = gradlen / eikon;
+
+            if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
+            SVeloData sv(xx, yy, vnormed);
+
+            if (temp_maxv < vnormed) temp_maxv = vnormed;
+            m_velo[ii] = sv;
+        }
+#pragma omp critical(maxv)
+        if(temp_maxv > maxv) maxv = temp_maxv;
+    }
 	for (int ii = 0; ii < bsi ; ++ii) {
 
 		unsigned long cxy = m_boundary[ii];
@@ -415,7 +493,7 @@ void CRanders::DistanceCalculator()
 		SVeloData sv(xx, yy, vnormed);
 
 		if (maxv < vnormed) maxv = vnormed;
-		m_velo.push_back(sv);		
+		m_velo[ii] = sv;
 	}
 
 
@@ -446,22 +524,37 @@ void CRanders::CalcImageQuant()
 	SWorkImg<double> &tang1 = *(m_pTang[1]);
 
 	maxgrab = m_expfac/m_maxauxgrad; // 0 - 8
-
-	for (int yy = 0; yy < ys; ++yy) {
-		for (int xx = 0; xx < xs; ++xx) {
-			double q = tang0[yy][xx]*tang0[yy][xx]+tang1[yy][xx]*tang1[yy][xx];
-			q = sqrt(q);
-			if (q > 1e-11) {
-				tang0[yy][xx] /= q; tang1[yy][xx] /= q;
-				q *= maxgrab;
-				q = 1.0-((double)exp(-q));	// ~ 0 - 0.632
-				tang0[yy][xx] *= q; tang1[yy][xx] *= q;
-			}
-			else {
-				tang0[yy][xx] = tang1[yy][xx] = 0;
-			}
-		}
-	}
+#pragma omp parallel for
+    for(int yx =0; yx < xs*ys; yx++){
+        int xx = yx % xs;
+        int yy = yx / xs;
+        double q = tang0[yy][xx]*tang0[yy][xx]+tang1[yy][xx]*tang1[yy][xx];
+        q = sqrt(q);
+        if (q > 1e-11) {
+            tang0[yy][xx] /= q; tang1[yy][xx] /= q;
+            q *= maxgrab;
+            q = 1.0-((double)exp(-q));	// ~ 0 - 0.632
+            tang0[yy][xx] *= q; tang1[yy][xx] *= q;
+        }
+        else {
+            tang0[yy][xx] = tang1[yy][xx] = 0;
+        }
+    }
+//	for (int yy = 0; yy < ys; ++yy) {
+//		for (int xx = 0; xx < xs; ++xx) {
+//			double q = tang0[yy][xx]*tang0[yy][xx]+tang1[yy][xx]*tang1[yy][xx];
+//			q = sqrt(q);
+//			if (q > 1e-11) {
+//				tang0[yy][xx] /= q; tang1[yy][xx] /= q;
+//				q *= maxgrab;
+//				q = 1.0-((double)exp(-q));	// ~ 0 - 0.632
+//				tang0[yy][xx] *= q; tang1[yy][xx] *= q;
+//			}
+//			else {
+//				tang0[yy][xx] = tang1[yy][xx] = 0;
+//			}
+//		}
+//	}
 
 }
 
@@ -493,39 +586,80 @@ void CSplitter::DistanceCalculator()
 	int tx = m_xdisto, ty = m_ydisto;
 
 	auto bsi = m_boundary.size();
-	for (int ii = 0; ii < bsi; ++ii) {
+	m_velo.resize(bsi);
+#pragma omp parallel
+    {
+        double temp_maxv(0);
+#pragma omp for
+        for (int ii = 0; ii < bsi; ++ii) {
 
-		unsigned long cxy = m_boundary[ii];
-		int xx = cxy & 0xffff, yy = cxy >> 16;
+            unsigned long cxy = m_boundary[ii];
+            int xx = cxy & 0xffff, yy = cxy >> 16;
 
-		double nx = 0.5f*(m_field[yy][xx+1]-m_field[yy][xx-1]);
-		double ny = 0.5f*(m_field[yy+1][xx]-m_field[yy-1][xx]);
-		double gradlen = sqrt(nx*nx+ny*ny);
-		if (gradlen < 1e-11) gradlen = 1e-11;
-		double igradlen = 1.0/gradlen;
-		nx *= igradlen; ny *= igradlen;
+            double nx = 0.5f*(m_field[yy][xx+1]-m_field[yy][xx-1]);
+            double ny = 0.5f*(m_field[yy+1][xx]-m_field[yy-1][xx]);
+            double gradlen = sqrt(nx*nx+ny*ny);
+            if (gradlen < 1e-11) gradlen = 1e-11;
+            double igradlen = 1.0/gradlen;
+            nx *= igradlen; ny *= igradlen;
 
-		/**/
-		double driftx = (double)(tx-xx), drifty = (double)(ty-yy);
-		double dn = 1.0/sqrt(driftx*driftx+drifty*drifty+1e-11);
-		driftx *= dn; drifty *= dn;
-		double Qn = driftx*nx+drifty*ny;
-		/**/
-		/*double Qn = m_drift.x*nx+m_drift.y*ny;*/
+            /**/
+            double driftx = (double)(tx-xx), drifty = (double)(ty-yy);
+            double dn = 1.0/sqrt(driftx*driftx+drifty*drifty+1e-11);
+            driftx *= dn; drifty *= dn;
+            double Qn = driftx*nx+drifty*ny;
+            /**/
+            /*double Qn = m_drift.x*nx+m_drift.y*ny;*/
 
-		double eikon = Qn*Qn+data[yy][xx]; 
-		if (eikon < 0) eikon = 0;
-		eikon = Qn+sqrt(eikon);
-					
-		double vnormed = gradlen/eikon;
-		if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
-					
-		SVeloData sv(xx,yy,vnormed);
+            double eikon = Qn*Qn+data[yy][xx];
+            if (eikon < 0) eikon = 0;
+            eikon = Qn+sqrt(eikon);
 
-		if (maxv < vnormed) maxv = vnormed;
-		m_velo.push_back(sv);
+            double vnormed = gradlen/eikon;
+            if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
 
-	}
+            SVeloData sv(xx,yy,vnormed);
+
+            if (temp_maxv < vnormed) temp_maxv = vnormed;
+            m_velo[ii] = sv;
+
+        }
+#pragma omp critical(temp_maxv)
+        if(temp_maxv>maxv) maxv = temp_maxv;
+    }
+//	for (int ii = 0; ii < bsi; ++ii) {
+//
+//		unsigned long cxy = m_boundary[ii];
+//		int xx = cxy & 0xffff, yy = cxy >> 16;
+//
+//		double nx = 0.5f*(m_field[yy][xx+1]-m_field[yy][xx-1]);
+//		double ny = 0.5f*(m_field[yy+1][xx]-m_field[yy-1][xx]);
+//		double gradlen = sqrt(nx*nx+ny*ny);
+//		if (gradlen < 1e-11) gradlen = 1e-11;
+//		double igradlen = 1.0/gradlen;
+//		nx *= igradlen; ny *= igradlen;
+//
+//		/**/
+//		double driftx = (double)(tx-xx), drifty = (double)(ty-yy);
+//		double dn = 1.0/sqrt(driftx*driftx+drifty*drifty+1e-11);
+//		driftx *= dn; drifty *= dn;
+//		double Qn = driftx*nx+drifty*ny;
+//		/**/
+//		/*double Qn = m_drift.x*nx+m_drift.y*ny;*/
+//
+//		double eikon = Qn*Qn+data[yy][xx];
+//		if (eikon < 0) eikon = 0;
+//		eikon = Qn+sqrt(eikon);
+//
+//		double vnormed = gradlen/eikon;
+//		if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
+//
+//		SVeloData sv(xx,yy,vnormed);
+//
+//		if (maxv < vnormed) maxv = vnormed;
+//		m_velo.push_back(sv);
+//
+//	}
 
 
 	// update distance map
@@ -548,17 +682,27 @@ void CSplitter::CalcImageQuant()
 	if (!m_pData) return;	
 	m_pData->Set(xs,ys); // check
 	SWorkImg<double> &data = *m_pData;
-
-	for (int yy = 0; yy < ys; ++yy) {
-		for (int xx = 0; xx < xs; ++xx) {
-			double q = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
-			q = sqrt(q)/maxgrab; // 0-1
-			// edge data
-			double dat = m_relweight+(1.0-m_relweight)*((double)exp(-m_expfac*q));
-			// use of data for prepared data FI*FI-Q*Q; |Q| := alpha
-			data[yy][xx] = dat*dat-m_relweight*m_relweight;
-		}
-	}
+#pragma omp parallel for
+    for(int yx =0; yx < xs*ys; yx++){
+        int xx = yx % xs;
+        int yy = yx / xs;
+        double q = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
+        q = sqrt(q)/maxgrab; // 0-1
+        // edge data
+        double dat = m_relweight+(1.0-m_relweight)*((double)exp(-m_expfac*q));
+        // use of data for prepared data FI*FI-Q*Q; |Q| := alpha
+        data[yy][xx] = dat*dat-m_relweight*m_relweight;
+    }
+//	for (int yy = 0; yy < ys; ++yy) {
+//		for (int xx = 0; xx < xs; ++xx) {
+//			double q = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
+//			q = sqrt(q)/maxgrab; // 0-1
+//			// edge data
+//			double dat = m_relweight+(1.0-m_relweight)*((double)exp(-m_expfac*q));
+//			// use of data for prepared data FI*FI-Q*Q; |Q| := alpha
+//			data[yy][xx] = dat*dat-m_relweight*m_relweight;
+//		}
+//	}
 
 }
 
