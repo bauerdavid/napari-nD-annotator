@@ -70,9 +70,25 @@ class MinimalContourWidget(WidgetWithLayerList):
             return change_layer
         for i in range(1, 10):
             viewer.bind_key("Control-%d" % i, overwrite=True)(change_layer_callback(i))
-        self.from_e_points_layer = viewer.add_points(ndim=2, name="from E [DO NOT TOUCH] <hidden>", size=self.point_size_spinbox.value(), face_color="red", edge_color="red")
-        self.to_s_points_layer = viewer.add_points(ndim=2, name="to S [DO NOT TOUCH] <hidden>", size=self.point_size_spinbox.value(), face_color="gray", edge_color="gray")
-        self.output = viewer.add_points(ndim=2, name="temp [DO NOT TOUCH] <hidden>", size=self.point_size_spinbox.value())
+        self.from_e_points_layer = viewer.add_points(
+            ndim=2,
+            name="from E [DO NOT TOUCH] <hidden>",
+            size=self.point_size_spinbox.value(),
+            face_color="red",
+            edge_color="red"
+        )
+        self.to_s_points_layer = viewer.add_points(
+            ndim=2,
+            name="to S [DO NOT TOUCH] <hidden>",
+            size=self.point_size_spinbox.value(),
+            face_color="gray",
+            edge_color="gray"
+        )
+        self.output = viewer.add_points(
+            ndim=2,
+            name="temp [DO NOT TOUCH] <hidden>",
+            size=self.point_size_spinbox.value()
+        )
         self.shift_down = False
         self.ctrl_down = False
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
@@ -101,7 +117,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         def filter_func(row, parent):
             return row < len(self.viewer.layers) and "<hidden>" not in self.viewer.layers[row].name
         with warnings.catch_warnings():
-            # warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.layers.model().filterAcceptsRow = filter_func
 
     def change_point_size(self, size):
