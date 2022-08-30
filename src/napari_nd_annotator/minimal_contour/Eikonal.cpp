@@ -1,3 +1,4 @@
+// Minimal contour method and implementation by Jozsef Molnar
 #include "Eikonal.h"
 #include <vector>
 #include <atomic>

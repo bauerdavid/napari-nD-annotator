@@ -1,3 +1,4 @@
+// Minimal contour method and implementation by Jozsef Molnar
 #pragma once
 #include "commontype.h"
 #include <vector>
