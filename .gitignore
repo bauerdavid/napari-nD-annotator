@@ -85,3 +85,5 @@ venv/
 
 # Cython
 /src/napari_nd_annotator/mean_contour/*.html
+/src/napari_nd_annotator/mean_contour/*.c
+/src/napari_nd_annotator/mean_contour/*.cpp
