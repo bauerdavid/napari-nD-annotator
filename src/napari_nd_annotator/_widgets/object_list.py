@@ -2,6 +2,7 @@ import os.path
 import warnings
 
 import cv2
+import napari
 import numpy as np
 
 from qtpy.QtCore import QEvent, Qt, QObject
@@ -408,12 +409,16 @@ class ObjectListWidget(QListWidget):
             if item is None:
                 return False
             idx = self.indexFromItem(item).row()
-            self.bounding_box_layer._value = (idx, None)
-            self.bounding_box_layer._set_highlight()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.bounding_box_layer._value = (idx, None)
+                self.bounding_box_layer._set_highlight()
             return True
         elif event.type() == QEvent.Leave and type(source) == QObjectWidget:
-            self.bounding_box_layer._value = (None, None)
-            self.bounding_box_layer._set_highlight()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.bounding_box_layer._value = (None, None)
+                self.bounding_box_layer._set_highlight()
             return True
         return super().eventFilter(source, event)
 
@@ -436,7 +441,8 @@ class ObjectListWidget(QListWidget):
         if len(layer.data)>len(previous_data):
             self.bounding_box_layer.features["label"].iat[-1] = self.next_index()
             text = dict(self.bounding_box_layer.text)
-            del text["values"]
+            if napari.__version__ == "0.4.15":
+                del text["values"]
             text["text"] = "{label:d}"
             self.bounding_box_layer.text = text
         while event.type == "mouse_move":
