@@ -1,5 +1,5 @@
 # from contour import *
-from PyQt5.QtCore import QThread, pyqtSignal
+from qtpy.QtCore import QThread, pyqtSignal
 import sys
 import numpy as np
 import time
