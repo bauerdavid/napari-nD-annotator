@@ -84,6 +84,11 @@ venv/
 **/_version.py
 
 # Cython
+
 /src/napari_nd_annotator/mean_contour/*.html
 /src/napari_nd_annotator/mean_contour/*.c
 /src/napari_nd_annotator/mean_contour/*.cpp
+/src/napari_nd_annotator/minimal_contour/*.html
+/src/napari_nd_annotator/minimal_contour/*.c
+/src/napari_nd_annotator/minimal_contour/*.cpp
+!/src/napari_nd_annotator/minimal_contour/Eikonal.cpp

@@ -57,7 +57,8 @@ class WidgetWithLayerList(QWidget):
 
         @property
         def layer(self):
-            return self.viewer.layers[self._layer_name] if self._layer_name else None
+            return self.viewer.layers[self._layer_name] if self._layer_name and self._layer_name in self.viewer.layers\
+                else None
 
         @layer.setter
         def layer(self, layer):

@@ -195,12 +195,17 @@ class BoundingBoxLayer(Layer):
                 default="black",
             )
             self.current_properties = {}
-
-        self._text = TextManager._from_layer(
-            text=text,
-            n_text=self.nbounding_boxes,
-            properties=self.properties,
-        )
+        if napari.__version__ == "0.4.15":
+            self._text = TextManager._from_layer(
+                text=text,
+                n_text=self.nbounding_boxes,
+                properties=self.properties,
+            )
+        else:
+            self._text = TextManager._from_layer(
+                text=text,
+                features=self.features
+            )
 
         # Trigger generation of view slice and thumbnail
         self._update_dims()
@@ -481,11 +486,17 @@ class BoundingBoxLayer(Layer):
 
     @text.setter
     def text(self, text):
-        self._text._update_from_layer(
-            text=text,
-            n_text=self.nbounding_boxes,
-            properties=self.properties,
-        )
+        if napari.__version__ == "0.4.15":
+            self._text._update_from_layer(
+                text=text,
+                n_text=self.nbounding_boxes,
+                properties=self.properties,
+            )
+        else:
+            self._text._update_from_layer(
+                text=text,
+                features=self.features,
+            )
 
     @property
     def edge_color(self):

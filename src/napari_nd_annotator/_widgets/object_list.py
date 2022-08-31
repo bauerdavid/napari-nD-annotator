@@ -2,6 +2,7 @@ import os.path
 import warnings
 
 import cv2
+import napari
 import numpy as np
 
 from qtpy.QtCore import QEvent, Qt, QObject
@@ -21,6 +22,8 @@ import itertools
 import csv
 
 import PIL.Image as PilImage
+
+import time
 
 
 def slice_len(slice_, count=None):
@@ -170,6 +173,7 @@ class QObjectListWidgetItem(QListWidgetItem):
             mask_layer.translate = self.bounding_box[0, :]+self.mask_layer.translate
             mask_layer.brush_size = 1
             mask_layer.mode = Mode.PAINT
+            self.mask_layer.events.data.connect(mask_layer.refresh)
             self.viewer.add_layer(mask_layer)
         else:
             mask_layer = None
@@ -183,6 +187,8 @@ class QObjectListWidgetItem(QListWidgetItem):
         if self.parent.crop_mask_layer is not None:
             if self.parent.crop_mask_layer in self.viewer.layers:
                 self.viewer.layers.remove(self.parent.crop_mask_layer)
+            if self.mask_layer is not None:
+                self.mask_layer.events.data.disconnect(self.parent.crop_mask_layer.refresh)
             self.parent.crop_mask_layer.mouse_drag_callbacks.remove(QObjectListWidgetItem.update_layer)
             self.parent.crop_mask_layer = None
         if self.parent.projections_widget is not None:
@@ -204,6 +210,7 @@ class QObjectListWidgetItem(QListWidgetItem):
             self.viewer.window.add_dock_widget(self.parent.projections_widget)
         self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
         self.viewer.layers.selection.select_only(self.parent.crop_mask_layer)
+        self.mask_layer.selected_label = self.idx
         self.mask_layer.visible = False
         self.image_layer.visible = False
 
@@ -266,8 +273,6 @@ class ObjectListWidget(QListWidget):
         self.projections_widget = None
         self._mouse_down = False
         self.selected_idx = None
-        self.previously_hovered = None
-        self.previous_face_color = None
         self.previous_edge_color = None
         self._indices = None
         self.indices = indices
@@ -408,17 +413,16 @@ class ObjectListWidget(QListWidget):
             if item is None:
                 return False
             idx = self.indexFromItem(item).row()
-            self.previously_hovered = idx
-            self.previous_face_color = self.bounding_box_layer.face_color[idx].copy()
-            self.bounding_box_layer.face_color[idx] = (1., 1.0, 1.0, 0.5)
-            self.bounding_box_layer.data = self.bounding_box_layer.data
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.bounding_box_layer._value = (idx, None)
+                self.bounding_box_layer._set_highlight()
             return True
         elif event.type() == QEvent.Leave and type(source) == QObjectWidget:
-            if self.previous_face_color is not None:
-                self.bounding_box_layer.face_color[self.previously_hovered] = self.previous_face_color
-                self.bounding_box_layer.data = self.bounding_box_layer.data
-                self.previously_hovered = None
-                self.previous_face_color = None
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.bounding_box_layer._value = (None, None)
+                self.bounding_box_layer._set_highlight()
             return True
         return super().eventFilter(source, event)
 
@@ -441,7 +445,8 @@ class ObjectListWidget(QListWidget):
         if len(layer.data)>len(previous_data):
             self.bounding_box_layer.features["label"].iat[-1] = self.next_index()
             text = dict(self.bounding_box_layer.text)
-            del text["values"]
+            if napari.__version__ == "0.4.15":
+                del text["values"]
             text["text"] = "{label:d}"
             self.bounding_box_layer.text = text
         while event.type == "mouse_move":
@@ -662,7 +667,7 @@ class ListWidgetBB(WidgetWithLayerList):
                 continue
             min_ = [slice_.start for slice_ in bb]
             max_ = [slice_.stop - 1 for slice_ in bb]
-            bb = np.asarray(np.where(list(itertools.product((False, True), repeat=3)), max_, min_))
+            bb = np.asarray(np.where(list(itertools.product((False, True), repeat=self.image_layer.ndim)), max_, min_))
             bbs.append(bb)
             ids.append(i+1)
         bb_layer.data = bbs

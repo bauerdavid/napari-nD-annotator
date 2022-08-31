@@ -24,7 +24,13 @@ def no_cythonize(extensions, **_ignore):
         extension.sources[:] = sources
     return extensions
 
+extra_compile_args = ["/std:c++17", "/openmp"] if sys.platform == "win32" else ["-std=c++17", "-fopenmp"]
 extensions = [
+    Extension(
+        "napari_nd_annotator.minimal_contour._eikonal_wrapper",
+        ["src/napari_nd_annotator/minimal_contour/_eikonal_wrapper.pyx"],
+        extra_compile_args=extra_compile_args, language="c++", include_dirs=[np.get_include()]
+    ),
     Extension(
         "napari_nd_annotator.mean_contour._essentials",
         ["src/napari_nd_annotator/mean_contour/cEssentialscy.pyx"],
@@ -51,9 +57,6 @@ else:
     extensions = no_cythonize(extensions)
 
 setup(
-    name="napari-nD-annotator",
-    author="Jozsef Molnar, David Bauer",
-    author_email="dbauer@brc.hu",
     ext_modules=extensions,
     include_dirs=[np.get_include()]
 )

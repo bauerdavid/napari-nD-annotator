@@ -1,6 +1,7 @@
 # A copy of napari._qt.layer_controls.qt_shapes_controls
 from typing import Iterable
 
+import napari
 from PyQt5.QtWidgets import QCheckBox
 from napari._qt.widgets.qt_color_swatch import QColorSwatchEdit
 from napari.utils.action_manager import action_manager
@@ -222,29 +223,39 @@ class QtBoundingBoxControls(QtLayerControls):
         text_disp_cb.stateChanged.connect(self.change_text_visibility)
         self.textDispCheckBox = text_disp_cb
 
-
-        # grid_layout created in QtLayerControls
-        # addWidget(widget, row, column, [row_span, column_span])
-        self.grid_layout.addLayout(button_row, 0, 1)
-        self.grid_layout.addWidget(QLabel(trans._('opacity:')), 1, 0)
-        self.grid_layout.addWidget(self.opacitySlider, 1, 1)
-        self.grid_layout.addWidget(QLabel(trans._('edge width:')), 2, 0)
-        self.grid_layout.addWidget(self.widthSlider, 2, 1)
-        self.grid_layout.addWidget(QLabel(trans._('blending:')), 3, 0)
-        self.grid_layout.addWidget(self.blendComboBox, 3, 1)
-        self.grid_layout.addWidget(QLabel(trans._('face color:')), 4, 0)
-        self.grid_layout.addWidget(self.faceColorEdit, 4, 1)
-        self.grid_layout.addWidget(QLabel(trans._('edge color:')), 5, 0)
-        self.grid_layout.addWidget(self.edgeColorEdit, 5, 1)
-        self.grid_layout.addWidget(QLabel(trans._('display text:')), 6, 0)
-        self.grid_layout.addWidget(self.textDispCheckBox, 6, 1)
-        self.grid_layout.addWidget(QLabel(trans._('text color:')), 7, 0)
-        self.grid_layout.addWidget(self.textColorEdit, 7, 1)
-        self.grid_layout.addWidget(QLabel(trans._('text size:')), 8, 0)
-        self.grid_layout.addWidget(self.textSlider, 8, 1)
-        self.grid_layout.setRowStretch(9, 1)
-        self.grid_layout.setColumnStretch(1, 1)
-        self.grid_layout.setSpacing(4)
+        if napari.__version__ == "0.4.15":
+            # grid_layout created in QtLayerControls
+            # addWidget(widget, row, column, [row_span, column_span])
+            self.grid_layout.addLayout(button_row, 0, 1)
+            self.grid_layout.addWidget(QLabel(trans._('opacity:')), 1, 0)
+            self.grid_layout.addWidget(self.opacitySlider, 1, 1)
+            self.grid_layout.addWidget(QLabel(trans._('edge width:')), 2, 0)
+            self.grid_layout.addWidget(self.widthSlider, 2, 1)
+            self.grid_layout.addWidget(QLabel(trans._('blending:')), 3, 0)
+            self.grid_layout.addWidget(self.blendComboBox, 3, 1)
+            self.grid_layout.addWidget(QLabel(trans._('face color:')), 4, 0)
+            self.grid_layout.addWidget(self.faceColorEdit, 4, 1)
+            self.grid_layout.addWidget(QLabel(trans._('edge color:')), 5, 0)
+            self.grid_layout.addWidget(self.edgeColorEdit, 5, 1)
+            self.grid_layout.addWidget(QLabel(trans._('display text:')), 6, 0)
+            self.grid_layout.addWidget(self.textDispCheckBox, 6, 1)
+            self.grid_layout.addWidget(QLabel(trans._('text color:')), 7, 0)
+            self.grid_layout.addWidget(self.textColorEdit, 7, 1)
+            self.grid_layout.addWidget(QLabel(trans._('text size:')), 8, 0)
+            self.grid_layout.addWidget(self.textSlider, 8, 1)
+            self.grid_layout.setRowStretch(9, 1)
+            self.grid_layout.setColumnStretch(1, 1)
+            self.grid_layout.setSpacing(4)
+        else:
+            self.layout().addRow(button_row)
+            self.layout().addRow(trans._('opacity:'), self.opacitySlider)
+            self.layout().addRow(trans._('edge width:'), self.widthSlider)
+            self.layout().addRow(trans._('blending:'), self.blendComboBox)
+            self.layout().addRow(trans._('face color:'), self.faceColorEdit)
+            self.layout().addRow(trans._('edge color:'), self.edgeColorEdit)
+            self.layout().addRow(trans._('display text:'), self.textDispCheckBox)
+            self.layout().addRow(trans._('text color:'), self.textColorEdit)
+            self.layout().addRow(trans._('text size:'), self.textSlider)
 
     def _on_mode_change(self, event):
         """Update ticks in checkbox widgets when bounding boxes layer mode changed.
