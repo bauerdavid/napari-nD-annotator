@@ -254,7 +254,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.anchor_points.layer.bind_key("Control-Shift", overwrite=True)(self.ctrl_shift_pressed)
         self.anchor_points.layer.bind_key("Shift-Control", overwrite=True)(self.shift_ctrl_pressed)
         self.anchor_points.layer.bind_key("Escape", overwrite=True)(self.esc_callback)
-        self.anchor_points.layer.mouse_double_click_callbacks.append(self.on_double_click)
+        if self.on_double_click not in self.anchor_points.layer.mouse_double_click_callbacks:
+            self.anchor_points.layer.mouse_double_click_callbacks.append(self.on_double_click)
         if self.on_mouse_move not in self.anchor_points.layer.mouse_move_callbacks:
             self.anchor_points.layer.mouse_move_callbacks.append(self.on_mouse_move)
 
