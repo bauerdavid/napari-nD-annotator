@@ -664,7 +664,7 @@ class ListWidgetBB(WidgetWithLayerList):
                 continue
             min_ = [slice_.start for slice_ in bb]
             max_ = [slice_.stop - 1 for slice_ in bb]
-            bb = np.asarray(np.where(list(itertools.product((False, True), repeat=3)), max_, min_))
+            bb = np.asarray(np.where(list(itertools.product((False, True), repeat=self.image_layer.ndim)), max_, min_))
             bbs.append(bb)
             ids.append(i+1)
         bb_layer.data = bbs
