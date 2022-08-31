@@ -300,7 +300,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         if self.shift_down and len(self.from_e_points_layer.data):
             self.output.data = np.concatenate([self.output.data, self.from_e_points_layer.data], 0)
         elif not self.shift_down and len(self.to_s_points_layer.data):
-                self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
+            self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
         self.points_to_mask()
         self.clear_all()
         if self.labels.layer and self.autoincrease_label_id_checkbox.isChecked():
@@ -318,4 +318,5 @@ class MinimalContourWidget(WidgetWithLayerList):
         image_shape = self._img.shape[:2]
         mask = skimage.draw.polygon2mask(image_shape, contour)
         self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
+        self.labels.layer.events.data()
         self.labels.layer.refresh()
