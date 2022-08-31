@@ -1,5 +1,5 @@
 # from contour import *
-from qtpy.QtCore import QThread, pyqtSignal
+from qtpy.QtCore import QThread, Signal
 import sys
 import numpy as np
 import time
@@ -12,11 +12,11 @@ from .util import loadContour
 
 class MeanThread(QThread):
 
-    doneSignal = pyqtSignal(object)
-    clearPlotSignal = pyqtSignal()
-    updateSignal = pyqtSignal(float)
-    rpSignal = pyqtSignal(object)
-    reconSignal = pyqtSignal(object)
+    doneSignal = Signal(object)
+    clearPlotSignal = Signal()
+    updateSignal = Signal(float)
+    rpSignal = Signal(object)
+    reconSignal = Signal(object)
 
     def __init__(self, contours, settings=None, weights=None):
         self.settings = settings if settings else Settings()
