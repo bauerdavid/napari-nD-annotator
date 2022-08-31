@@ -173,6 +173,7 @@ class QObjectListWidgetItem(QListWidgetItem):
             mask_layer.translate = self.bounding_box[0, :]+self.mask_layer.translate
             mask_layer.brush_size = 1
             mask_layer.mode = Mode.PAINT
+            self.mask_layer.events.data.connect(mask_layer.refresh)
             self.viewer.add_layer(mask_layer)
         else:
             mask_layer = None
@@ -186,6 +187,8 @@ class QObjectListWidgetItem(QListWidgetItem):
         if self.parent.crop_mask_layer is not None:
             if self.parent.crop_mask_layer in self.viewer.layers:
                 self.viewer.layers.remove(self.parent.crop_mask_layer)
+            if self.mask_layer is not None:
+                self.mask_layer.events.data.disconnect(self.parent.crop_mask_layer.refresh)
             self.parent.crop_mask_layer.mouse_drag_callbacks.remove(QObjectListWidgetItem.update_layer)
             self.parent.crop_mask_layer = None
         if self.parent.projections_widget is not None:
@@ -207,6 +210,7 @@ class QObjectListWidgetItem(QListWidgetItem):
             self.viewer.window.add_dock_widget(self.parent.projections_widget)
         self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
         self.viewer.layers.selection.select_only(self.parent.crop_mask_layer)
+        self.mask_layer.selected_label = self.idx
         self.mask_layer.visible = False
         self.image_layer.visible = False
 

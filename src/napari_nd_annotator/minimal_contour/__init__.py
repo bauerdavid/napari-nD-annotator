@@ -1,0 +1,1 @@
+from ._eikonal_wrapper import MinimalContourCalculator
