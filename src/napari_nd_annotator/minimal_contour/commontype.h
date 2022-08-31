@@ -1444,6 +1444,8 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             int p = qp % xs;
             int q = qp / xs;
+            if(p >=xs - 1)
+                continue;
             gx[q][p] = dat[qp + 1] - dat[qp];
         }
 //        for(int q = 0; q < ys; ++q)
@@ -1468,6 +1470,8 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             int p = qp % xs;
             int q = qp / xs;
+            if(q >= ys - 1)
+                continue;
             gy[q][p] = dat[(q + 1) * xs + p] - dat[qp];
         }
 //        for(int q = 0; q < ys - 1; ++q)
