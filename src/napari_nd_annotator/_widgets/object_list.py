@@ -207,6 +207,7 @@ class QObjectListWidgetItem(QListWidgetItem):
             self.viewer.window.add_dock_widget(self.parent.projections_widget)
         self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
         self.viewer.layers.selection.select_only(self.parent.crop_mask_layer)
+        self.mask_layer.selected_label = self.idx
         self.mask_layer.visible = False
         self.image_layer.visible = False
 
