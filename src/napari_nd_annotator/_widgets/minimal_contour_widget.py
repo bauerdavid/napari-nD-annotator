@@ -263,6 +263,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         if image_layer is None:
             self._img = None
             return
+        if not image_layer.visible:
+            image_layer.set_view_slice()
         self.autoincrease_label_id_checkbox.setChecked(image_layer.ndim == 2)
         image = image_layer._data_view.astype(float)
         image = gaussian(image, channel_axis=3 if image.ndim == 3 else None)
@@ -309,6 +311,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         elif self.labels.layer is None:
             warnings.warn("Missing output labels layer.")
             return
+        if not self.labels.layer.visible:
+            self.labels.layer.set_view_slice()
         contour = self.output.data
         image_shape = self._img.shape[:2]
         mask = skimage.draw.polygon2mask(image_shape, contour)
