@@ -163,8 +163,7 @@ def calcRpsvInterpolation(contours, weights):
         r = contours[i].getRPSV()
         r *= weights[i]
         interp += r
-    interp /= np.sum(weights, axis=0)
-    interp /= len(contours)
+    interp /= np.sum(weights)
     return interp
 
 def calcMean(contours):

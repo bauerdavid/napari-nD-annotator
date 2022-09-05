@@ -10,6 +10,9 @@ from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton, 
 
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
+from ..mean_contour._contour import calcRpsvInterpolation
+from ..mean_contour._reconstruction import reconstruct
+from ..mean_contour._essentials import magnitude
 
 
 def contour_cv2_mask_uniform(mask, contoursize_max):
@@ -144,20 +147,39 @@ class InterpolationWidget(QWidget):
             start_index = np.argmin(np.abs(np.arctan2(*(cnt - centroid).T)))
             cnt = np.roll(cnt, -start_index, 0)
             if prev_cnt is not None:
+                if use_rpsv:
+                    stgs = settings.Settings(max_iterations=self.rpsv_iterations_spinbox.value(),
+                                             n_points=n_contour_points)
+                    rpsv_thread = MeanThread([prev_cnt, cnt], stgs)
+                    rpsv_thread.run()
                 for j in range(prev_layer + 1, i):
                     inter_layer_slice = layer_slice_template.copy()
                     inter_layer_slice[dimension] = j
                     prev_w = i - j
                     cur_w = j - prev_layer
+                    weights = [prev_w, cur_w]
                     if use_rpsv:
-                        mean_cnt = [None]
-                        stgs = settings.Settings(max_iterations=self.rpsv_iterations_spinbox.value(), n_points=n_contour_points)
-                        rpsv_thread = MeanThread([prev_cnt, cnt], stgs, weights=[prev_w, cur_w])
-                        def set_mean_cnt(cnt):
-                            mean_cnt[0] = cnt
-                        rpsv_thread.doneSignal.connect(set_mean_cnt)
-                        rpsv_thread.run()
-                        mean_cnt = mean_cnt[0]
+                        contours = rpsv_thread.contours
+                        regularMean = np.zeros_like(contours[0].lookup[contours[0].parameterization, :])
+                        for j in range(2):
+                            regularMean += contours[j].lookup[contours[j].parameterization, :] * weights[j]
+                        regularMean /= np.sum(weights)
+                        q_mean = calcRpsvInterpolation(contours, weights)
+                        guessRayLengths = np.zeros(contours[0].lookup[contours[0].parameterization].shape[0])
+                        for i_contour in range(2):
+                            contourtmp = contours[i_contour].lookup[contours[i_contour].parameterization]
+                            contourlengths = magnitude(contourtmp)
+                            guessRayLengths += contourlengths * weights[i_contour]
+                        guessRayLengths /= np.sum(weights)
+                        guessRayLengths = magnitude(regularMean)
+
+                        qraylengths = magnitude(q_mean)
+                        qraylengths[qraylengths < 1e-99] = 1e-99
+
+                        dirs = q_mean / qraylengths.reshape(qraylengths.shape[0], 1)
+                        r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), stgs, rpsv_thread.rpSignal)
+                        mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
+                        print(mean_cnt.shape, mean_cnt.min(), mean_cnt.max())
                     else:
                         mean_cnt = (prev_w * prev_cnt + cur_w * cnt)/(prev_w + cur_w)
                     mean_cnt = mean_cnt.astype(np.int32)
