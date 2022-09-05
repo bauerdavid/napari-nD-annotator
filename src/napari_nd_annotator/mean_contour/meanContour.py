@@ -65,7 +65,6 @@ class MeanThread(QThread):
         # go for the maximum number of iterations (general > maxIter in settings)
         c = 0
         for i in range(self.iterations):
-            iternum = i
             print("iteration #%d" % i)
             timestamp = time.time()
             regularMean = np.zeros_like(self.contours[0].lookup[self.contours[0].parameterization, :])
@@ -122,7 +121,7 @@ class MeanThread(QThread):
                 self.contours[i_contour].lookup -= delta
             
             properCentroid += delta[0,:]
-            self.updateSignal.emit(100*(iternum+1)/self.iterations)
+            self.updateSignal.emit(100*(i+1)/self.iterations)
 
         for i_contour in range(len(self.contours)):
             self.contours[i_contour].lookup += properCentroid
