@@ -4,8 +4,6 @@ import math
 import time
 from enum import Enum
 from scipy.interpolate import splprep, splev
-from numba import jit, njit
-import cython
 class ReconstructionMethods(Enum):
     NEWTON = 1
     GRADIENT_DESCENT = 2
@@ -53,7 +51,6 @@ def dt(points, order):
     #d_abs = magnitude(d).reshape(d.shape[0],1)
     #e_abs = magnitude(e).reshape(e.shape[0],1)
 
-    print("[dt, py] prev: %f, %f, %f, %f, %f, %f, %f, %f" % (pNext4[0, 0], pNext3[0, 0], pNext2[0, 0], pNext[0, 0], pPrev4[0, 1], pPrev3[0, 1], pPrev2[0, 1], pNext[0, 1]))
     if order==1:
         prevFactors = (1/280)*pPrev4-(4/105)*pPrev3+(1/5)*pPrev2-(4/5)*pPrev
         nextFactors = -(1/280)*pNext4+(4/105)*pNext3-(1/5)*pNext2+(4/5)*pNext
@@ -98,7 +95,6 @@ class Contour:
         self.contourLength = self.getContourLength()
         self.centroid = self.getCentroid()
         self.lookup, self.parameterization = self.getLookupTables()
-        print(self.parameterization.shape)
         self.smoothLookupTable()
         self.diffs = np.empty(self.cPoints)
         self.calcParams()
@@ -226,7 +222,6 @@ class Contour:
         nextArr = np.roll(self.pointArray, -1, axis=0)
 
         cLength = np.sum(np.sqrt((nextArr[:,0]-self.pointArray[:,0])*(nextArr[:,0]-self.pointArray[:,0])+(nextArr[:,1]-self.pointArray[:,1])*(nextArr[:,1]-self.pointArray[:,1])))
-        print("contour length: "+str(cLength))
         return cLength
     
 
@@ -234,10 +229,8 @@ class Contour:
         nextLook = np.roll(self.lookup, -1, axis=0)
         edges = self.lookup[self.parameterization,0]*nextLook[self.parameterization,1]-nextLook[self.parameterization,0]*self.lookup[self.parameterization,1]
         if np.sum(edges)>0:
-            print("TRUE")
             return True
         else:
-            print("FALSE")
             return False
 
     def setStartingPointToLowestY(self):
