@@ -679,9 +679,3 @@ class ListWidgetBB(WidgetWithLayerList):
     def reset_index(self, starting_index=1):
         if self.list_widget is not None:
             self.list_widget.indices = starting_index
-
-    def eventFilter(self, a0: 'QObject', a1: 'QEvent') -> bool:
-        if a0 == self and a1.type() == QEvent.Show:
-            self.parent().setAllowedAreas(Qt.LeftDockWidgetArea)
-            return True
-        return super().eventFilter(a0, a1)
