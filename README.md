@@ -15,12 +15,8 @@ Main features:
  * object list from bounding boxes
  * visualizing selected objects from different projections
  * auto-filling labels
- * label slice interpolation
-
-The main idea is to create bounding boxes around objects we want to annotate, crop them, and annotate them one by one. This has mainly two advantages when visualizing in 3D:
-
-1. We don't have to load the whole data into memory
-2. The surrounding objects won't occlude the annotated ones, making it easier to check the annotation.
+ * label slice interpolation (geometric mean, RSPV representation)
+ * minimal contour segmentation
 
 ----------------------------------
 
@@ -48,6 +44,15 @@ You can start napari with the plugin's widgets already opened as:
 
     napari -w napari-nD-annotator "Object List" "Annotation Toolbox"
 
+
+### Bounding boxes
+The main idea is to create bounding boxes around objects we want to annotate, crop them, and annotate them one by one. This has mainly two advantages when visualizing in 3D:
+
+1. We don't have to load the whole data into memory
+2. The surrounding objects won't occlude the annotated ones, making it easier to check the annotation.
+
+Bounding boxes can be created from the `Object list` widget. The dimensionality of the bounding box layer will be determined from the image layer. As bounding boxes are created, a small thumbnail will be displayed.
+
 The proposed pipeline goes as follows:
 
  1. Create a bounding box layer
@@ -56,18 +61,30 @@ The proposed pipeline goes as follows:
  4. Annotate the object
  5. Repeat from 3.
 
-## Example
+### Slice interpolation
+The `Interpolation` tab contains tools for estimating missing annotation slices from existing ones. Two methods are implemented:
+ * Geometric: the interpolation will be determined by calculating the average of the corresponding contour points.
+ * RSPV: A more sophisticated average contour calculation, see the preprint [here](https://arxiv.org/pdf/1901.02823.pdf).
 
-    import napari
-    from skimage.data import cells3d
-    import numpy as np
-    viewer = napari.Viewer()
-    nuclei = cells3d()[:, 1]
-    viewer.add_image(nuclei, colormap="magma")
-    viewer.add_labels(np.zeros_like(nuclei))
-    napari.run()
+https://user-images.githubusercontent.com/36735863/188876826-1771acee-93ba-4905-982e-bfb459329659.mp4
 
-![](https://i.imgur.com/xZxdvEQ.gif)
+### Minimal contour
+This plugin can estimate a minimal contour, which is calculated from a point set on the edges of the object, which are provided by the user. This contour will prefer pixels with high gradient (edges).
+Features:
+ * With a single click a new point can be added to the set. This will also extend the contour with the curve shown in red
+ * A double click will close the curve by adding both the red and gray curves to the minimal contour
+ * When holding `Shift`, the gray and red highlight will be swapped, so the other curve can be added to the contour
+ * With the `Ctrl` button down a straight line can be added instead of the minimal path
+ * If the anchor points were misplaced, the point set can be cleared by pressing `Esc`
+ * The `Param` value at the widget will decide, how strongly should the contour follow edges on the image. Higher value means higher sensitivity to image data, while a lower value will be closer to straight lines.
+
+This functionality can be used by selecting the `Minimal Contour` tab in the `Annotation Toolbox` widget, which will create a new layer called `Anchors`.
+
+**Important note: Do not remove or modify this layer directly!**
+
+*Note: if any layer is created before opening the `Annotation Toolbox` widget, some "temporary" layers appear in the layer list. This is not intended, but currently there is no way to hide these. __Do not remove or modify these, as this could break the plugin!__ Whenever possible, open the toolbox first, in order to prevent these from appearing.*
+
+https://user-images.githubusercontent.com/36735863/188877621-88aa6cdc-cad0-4a87-97a6-4ca0bcdd5ace.mp4
 
 ## License
 
@@ -75,6 +92,12 @@ Distributed under the terms of the [BSD-3] license,
 "napari-nD-annotator" is free and open source software
 
 ## Issues
+
+### Known issues
+ * When using the `Annotation Toolbox`:
+   * When deleting a single layer from the layer list, some other layers' names might be overwritten by some "invisible" utility layers. Selecting and unselecting these will restore the original layer.
+   * When deleting multiple layers, some strange behavior can happen (layer duplicates appear, only in the layer list; napari breaks etc.). Until fixed, layers should be removed one by one.
+   * If any layer is created before opening the `Annotation Toolbox` widget, some "temporary" layers appear in the layer list. For further information see the [Minimal contour](https://github.com/bauerdavid/napari-nD-annotator/edit/mean_contour/README.md#minimal-contour) section
 
 If you encounter any problems, please [file an issue] along with a detailed description.
 
