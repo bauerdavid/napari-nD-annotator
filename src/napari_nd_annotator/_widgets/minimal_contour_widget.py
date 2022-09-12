@@ -2,7 +2,7 @@ import warnings
 
 import napari
 import skimage.draw
-from qtpy.QtWidgets import QSpinBox, QVBoxLayout, QCheckBox, QLabel
+from qtpy.QtWidgets import QSpinBox, QVBoxLayout, QCheckBox, QLabel, QComboBox
 from qtpy.QtCore import QMutex
 
 from ._utils.widget_with_layer_list import WidgetWithLayerList
@@ -11,6 +11,9 @@ import numpy as np
 from napari.layers import Points, Image, Labels
 from napari.layers.points._points_constants import Mode
 from skimage.filters import gaussian
+
+GRADIENT_BASED = 0
+INTENSITY_BASED = 2
 
 
 def bbox_around_points(pts):
@@ -29,8 +32,15 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.calculator = MinimalContourCalculator()
         self.anchor_points.combobox.currentIndexChanged.connect(self.set_callbacks)
         self.image.combobox.currentIndexChanged.connect(self.set_image)
-
+        self.feature_inverted = False
         layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("Used feature"))
+        self.feature_dropdown = QComboBox()
+        self.feature_dropdown.addItems(["High gradient", "High intensity", "Low intensity"])
+        self.feature_dropdown.currentIndexChanged.connect(self.on_feature_change)
+        layout.addWidget(self.feature_dropdown)
+
         layout.addWidget(QLabel("Param"))
         self.param_spinbox = QSpinBox()
         self.param_spinbox.setMinimum(1)
@@ -203,11 +213,24 @@ class MinimalContourWidget(WidgetWithLayerList):
         from_i, to_i = bbox_around_points(self.point_triangle)
         from_i = np.clip(from_i, 0, np.asarray(image.shape[:2])).astype(int)
         to_i = np.clip(to_i, 0, np.asarray(image.shape[:2])).astype(int)
-        results = self.calculator.run(image[from_i[0]:to_i[0], from_i[1]:to_i[1]], self.point_triangle-from_i, param, True, True, True)
+        results = self.calculator.run(
+            image[from_i[0]:to_i[0], from_i[1]:to_i[1]],
+            self.point_triangle-from_i,
+            GRADIENT_BASED if self.feature_dropdown.currentText().endswith("gradient") else INTENSITY_BASED,
+            param,
+            True,
+            True,
+            True
+        )
         if results is not None:
             for path in results:
                 path += from_i
         return results
+
+    def on_feature_change(self, _):
+        if self.feature_dropdown.currentText().startswith("Low") != self.feature_inverted:
+            self.feature_inverted = self.feature_dropdown.currentText().startswith("Low")
+            self.set_image()
 
     def on_mouse_move(self, layer, event):
         if not self.move_mutex.tryLock():
@@ -272,6 +295,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         if image.ndim == 2:
             image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
         image = (image - image.min()) / (image.max() - image.min())
+        if self.feature_inverted:
+            image = 1 - image
         self._img = image
 
     def data_event(self, event):

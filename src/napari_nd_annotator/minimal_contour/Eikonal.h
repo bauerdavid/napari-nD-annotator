@@ -233,6 +233,66 @@ protected:
 
 };
 
+
+class CInhomog :
+	public CEikonal
+{
+public:
+	CInhomog(void);
+	virtual ~CInhomog(void);
+
+	void DistanceCalculator();
+	void InitImageQuant(SWorkImg<double>& red, SWorkImg<double>& green, SWorkImg<double>& blue) {
+		if (m_iDataPrepared == Prep_No) {
+            m_aux[0] = red;	m_aux[0] += green; m_aux[0] += blue; m_aux[0] *= 0.333f;
+            InitEnvironment(m_aux[0].xs, m_aux[0].ys);
+            CalcImageQuant();
+			m_iDataPrepared = Prep_Own;
+		}
+	}
+	void InitImageQuant(SWorkImg<double>& img) {
+		if (m_iDataPrepared == Prep_No) {
+            m_aux[0] = img;
+            InitEnvironment(m_aux[0].xs, m_aux[0].ys);
+            CalcImageQuant();
+			m_iDataPrepared = Prep_Own;
+		}
+	}
+
+	virtual void GetDataTerm(SWorkImg<double>** p) {
+		*p = m_pData;
+	}
+	void SetDataTerm(SWorkImg<double>* p) {
+		if (!p) return;
+		Clean();
+		m_pData = p;
+		InitEnvironment(p->xs, p->ys);
+		m_iDataPrepared = Prep_Ext;
+	}
+
+	static const int m_expfacini = 8;
+	// edge tracking parameter expfac: higher is stronger
+	int SetParam(int expfac = m_expfacini) {
+		if (m_expfac == expfac) return 0;
+		m_expfac = expfac;
+		return 1;
+	}
+	void Clean() {
+		if (m_iDataPrepared == Prep_Own) {
+			if (m_pData) delete m_pData;
+		}
+		m_pData = 0;
+		m_iDataPrepared = Prep_No;
+	}
+protected:
+	SWorkImg<double>* m_pData;
+	int m_expfac;
+
+	void CalcImageQuant();
+	void GradientCorrection(CVec2& dir, int x, int y) { }
+
+};
+
 /////////////////////////////////////////////////////
 // Control structure (wrapper class for simple use)
 /////////////////////////////////////////////////////
@@ -242,6 +302,7 @@ struct SControl
 	SControl() {
 		m_pMethods[0] = &m_Randers;
 		m_pMethods[1] = &m_Splitter;
+		m_pMethods[2] = &m_Inhomog;
 		m_pCurrentMethod = 0;
 		m_iParaToUpdate = 0;
 		m_pdats = m_pdatr[0] = m_pdatr[1] = 0;
@@ -258,12 +319,14 @@ struct SControl
 		SetParAll();
 		m_Randers.InitImageQuant(red,green,blue);
 		m_Splitter.InitImageQuant(red,green,blue);
+		m_Inhomog.InitImageQuant(red, green, blue);
 	}
 	// Prepare all data terms from grayscale image (for sequential use)
 	void InitEnvironmentAllMethods(SWorkImg<double> &img) {
 		SetParAll();
 		m_Randers.InitImageQuant(img);
 		m_Splitter.InitImageQuant(img);
+		m_Inhomog.InitImageQuant(img);
 	}
 	// Prepare data term from color image (parallel use)
 	void InitEnvironment(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {
@@ -324,6 +387,9 @@ struct SControl
 		}
 		else if (&m_Splitter == m_pCurrentMethod) {
 			m_Splitter.DistanceCalculator();
+		}
+		else {
+		    m_Inhomog.DistanceCalculator();
 		}
 		m_resolvready = m_pCurrentMethod->m_resolvready;
 	}
@@ -386,6 +452,8 @@ private:
 			m_iParaToUpdate &= ~1;
 			if (m_Randers.SetParam(m_rp))
 				m_Randers.Clean();
+            if (m_Inhomog.SetParam(m_rp))
+				m_Inhomog.Clean();
 		}
 		if (m_iParaToUpdate&2) {
 			m_iParaToUpdate &= ~2;
@@ -409,7 +477,7 @@ private:
 				m_pCurrentMethod->Clean();
 		}
 	}
-	static const int m_nimplenented = 2; // # of implemented methods
+	static const int m_nimplenented = 3; // # of implemented methods
 
 	std::vector<CVec2> m_minpath;
 	int m_resolvready;
@@ -417,6 +485,7 @@ private:
 	CEikonal *m_pCurrentMethod;
 	CRanders m_Randers;
 	CSplitter m_Splitter;
+	CInhomog m_Inhomog;
 
 	std::vector<CVec2> m_inputset;
 	std::vector<CEikonal *> m_pEikonal;

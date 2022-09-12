@@ -604,13 +604,10 @@ void CSplitter::DistanceCalculator()
             double igradlen = 1.0/gradlen;
             nx *= igradlen; ny *= igradlen;
 
-            /**/
             double driftx = (double)(tx-xx), drifty = (double)(ty-yy);
             double dn = 1.0/sqrt(driftx*driftx+drifty*drifty+1e-11);
             driftx *= dn; drifty *= dn;
             double Qn = driftx*nx+drifty*ny;
-            /**/
-            /*double Qn = m_drift.x*nx+m_drift.y*ny;*/
 
             double eikon = Qn*Qn+data[yy][xx];
             if (eikon < 0) eikon = 0;
@@ -628,45 +625,7 @@ void CSplitter::DistanceCalculator()
 #pragma omp critical(temp_maxv)
         if(temp_maxv>maxv) maxv = temp_maxv;
     }
-//	for (int ii = 0; ii < bsi; ++ii) {
-//
-//		unsigned long cxy = m_boundary[ii];
-//		int xx = cxy & 0xffff, yy = cxy >> 16;
-//
-//		double nx = 0.5f*(m_field[yy][xx+1]-m_field[yy][xx-1]);
-//		double ny = 0.5f*(m_field[yy+1][xx]-m_field[yy-1][xx]);
-//		double gradlen = sqrt(nx*nx+ny*ny);
-//		if (gradlen < 1e-11) gradlen = 1e-11;
-//		double igradlen = 1.0/gradlen;
-//		nx *= igradlen; ny *= igradlen;
-//
-//		/**/
-//		double driftx = (double)(tx-xx), drifty = (double)(ty-yy);
-//		double dn = 1.0/sqrt(driftx*driftx+drifty*drifty+1e-11);
-//		driftx *= dn; drifty *= dn;
-//		double Qn = driftx*nx+drifty*ny;
-//		/**/
-//		/*double Qn = m_drift.x*nx+m_drift.y*ny;*/
-//
-//		double eikon = Qn*Qn+data[yy][xx];
-//		if (eikon < 0) eikon = 0;
-//		eikon = Qn+sqrt(eikon);
-//
-//		double vnormed = gradlen/eikon;
-//		if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
-//
-//		SVeloData sv(xx,yy,vnormed);
-//
-//		if (maxv < vnormed) maxv = vnormed;
-//		m_velo.push_back(sv);
-//
-//	}
-
-
-	// update distance map
-
 	UpdateDistanceMap(maxv);
-	
 }
 
 ////////////////////////////////////////////////////
@@ -694,16 +653,69 @@ void CSplitter::CalcImageQuant()
         // use of data for prepared data FI*FI-Q*Q; |Q| := alpha
         data[yy][xx] = dat*dat-m_relweight*m_relweight;
     }
-//	for (int yy = 0; yy < ys; ++yy) {
-//		for (int xx = 0; xx < xs; ++xx) {
-//			double q = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
-//			q = sqrt(q)/maxgrab; // 0-1
-//			// edge data
-//			double dat = m_relweight+(1.0-m_relweight)*((double)exp(-m_expfac*q));
-//			// use of data for prepared data FI*FI-Q*Q; |Q| := alpha
-//			data[yy][xx] = dat*dat-m_relweight*m_relweight;
-//		}
-//	}
+}
+
+CInhomog::CInhomog(void)
+{
+	m_pData = 0;
+	SetParam();
+}
+
+CInhomog::~CInhomog(void)
+{
+	Clean();
+}
+
+void CInhomog::DistanceCalculator()
+{
+
+	SWorkImg<double>& data = *(m_pData);
+
+	int xs = m_field.xs, ys = m_field.ys;
+
+	// evolution logic
+
+	double maxv(0);
+	m_velo.clear();
+
+	int bsi = m_boundary.size();
+	for (int ii = 0; ii < bsi; ++ii) {
+
+		unsigned long cxy = m_boundary[ii];
+		int xx = cxy & 0xffff, yy = cxy >> 16;
+
+		double nx = 0.5f * (m_field[yy][xx + 1] - m_field[yy][xx - 1]);
+		double ny = 0.5f * (m_field[yy + 1][xx] - m_field[yy - 1][xx]);
+		double gradlen = sqrtf(nx * nx + ny * ny);
+
+		double vnormed = gradlen * data[yy][xx];
+		if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
+		if (maxv < vnormed) maxv = vnormed;
+
+		m_velo.emplace_back(SVeloData(xx, yy, vnormed));
+	}
+
+	// update distance map
+
+	UpdateDistanceMap(maxv);
 
 }
 
+void CInhomog::CalcImageQuant()
+{
+
+	int xs = m_aux[0].xs, ys = m_aux[0].ys;
+	if (!m_pData) m_pData = new SWorkImg<double>;
+	if (!m_pData) return;
+	m_pData->Set(xs, ys); // check
+	SWorkImg<double>& data = *m_pData;
+
+	for (int yy = 0; yy < ys; ++yy) {
+		for (int xx = 0; xx < xs; ++xx) {
+			double q = m_aux[0][yy][xx];
+			// intensity data
+			double dat = 0.01f + (1.0f - 0.01f) * ((double)exp(-m_expfac * q));
+			data[yy][xx] = 1.0f / dat;
+		}
+	}
+}

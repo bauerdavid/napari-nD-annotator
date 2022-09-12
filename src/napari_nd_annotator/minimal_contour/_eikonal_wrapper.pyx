@@ -9,6 +9,10 @@ from cython.operator cimport preincrement as inc
 from cython.parallel cimport prange
 np.import_array()
 
+GRADIENT_BASED = 0
+INTENSITY_BASED = 2
+CUSTOM_FEATURE = 3
+
 cdef extern from "Eikonal.cpp":
     pass
 
@@ -42,7 +46,16 @@ cdef class MinimalContourCalculator:
     # points are as [x, y]
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cpdef run(self, np.ndarray[np.float_t, ndim=3] image, np.ndarray[np.double_t, ndim=2] points, int param=5, reverse_coordinates=False, close_path=True, return_segment_list=False):
+    cpdef run(
+            self,
+            np.ndarray[np.float_t, ndim=3] image,
+            np.ndarray[np.double_t, ndim=2] points,
+            int method = GRADIENT_BASED,
+            int param=5,
+            reverse_coordinates=False,
+            close_path=True,
+            return_segment_list=False
+    ):
         if image.shape[2] != 3:
             print("image should have 3 channels")
             return
@@ -60,8 +73,6 @@ cdef class MinimalContourCalculator:
 
         cdef vector[CVec2] epoints
         epoints.reserve(point_count)
-        cdef vector[int] emethods
-        emethods.reserve(point_count)
         cdef int idx = 0
         cdef int i, j
         cdef int X, Y
@@ -74,7 +85,6 @@ cdef class MinimalContourCalculator:
         for i in range(point_count):
             # TODO Check if point is out of bounds
             epoints.push_back(CVec2(points[i, X], points[i, Y]))
-            emethods.push_back(0)
             inc(idx)
         cdef int w = image.shape[1]
         cdef int h = image.shape[0]
@@ -110,8 +120,11 @@ cdef class MinimalContourCalculator:
         cdef vector[int] method_pair
         cdef CVec2 point1
         cdef CVec2 point2
-        cdef int method1
-        cdef int method2
+        method_pair = vector[int](2)
+        if method == GRADIENT_BASED:
+            method_pair[0] = method_pair[1] = 0
+        else:
+            method_pair[0] = method_pair[1] = 2
         cdef int progress
         cdef SControl* eikonal
         # cdef vector[CVec2] path
@@ -126,21 +139,13 @@ cdef class MinimalContourCalculator:
                     continue
                 point1 = epoints[point_count - 1]
                 point2 = epoints[0]
-
-                method1 = emethods[point_count - 1]
-                method2 = emethods[0]
             else:
                 point1 = epoints[i]
                 point2 = epoints[i+1]
-
-                method1 = emethods[i]
-                method2 = emethods[i+1]
             point_pair = vector[CVec2](2)
             point_pair[0] = point1
             point_pair[1] = point2
-            method_pair = vector[int](2)
-            method_pair[0] = method1
-            method_pair[1] = method2
+
             eikonal = eikonals[i]
             eikonal.SetParam(param)
             eikonal.SetParam(0, 0)
