@@ -6,6 +6,7 @@ from qtpy.QtWidgets import QSpinBox, QVBoxLayout, QCheckBox, QLabel, QComboBox
 from qtpy.QtCore import QMutex
 
 from ._utils.widget_with_layer_list import WidgetWithLayerList
+from .image_processing_widget import ImageProcessingWidget
 from ..minimal_contour import MinimalContourCalculator
 import numpy as np
 from napari.layers import Points, Image, Labels
@@ -30,6 +31,10 @@ class MinimalContourWidget(WidgetWithLayerList):
         super().__init__(viewer, [("image", Image), ("labels", Labels), ("anchor_points", Points)])
         self.viewer = viewer
         self.calculator = MinimalContourCalculator()
+        self.move_mutex = QMutex()
+        self._img = None
+        self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
+
         self.anchor_points.combobox.currentIndexChanged.connect(self.set_callbacks)
         self.image.combobox.currentIndexChanged.connect(self.set_image)
         self.feature_inverted = False
@@ -37,9 +42,13 @@ class MinimalContourWidget(WidgetWithLayerList):
 
         layout.addWidget(QLabel("Used feature"))
         self.feature_dropdown = QComboBox()
-        self.feature_dropdown.addItems(["High gradient", "High intensity", "Low intensity"])
+        self.feature_dropdown.addItems(["High gradient", "High intensity", "Low intensity", "Custom"])
         self.feature_dropdown.currentIndexChanged.connect(self.on_feature_change)
         layout.addWidget(self.feature_dropdown)
+
+        self.feature_editor = ImageProcessingWidget(self._img, viewer)
+        self.feature_editor.setVisible(self.feature_dropdown.currentText() == "Custom")
+        layout.addWidget(self.feature_editor)
 
         layout.addWidget(QLabel("Param"))
         self.param_spinbox = QSpinBox()
@@ -62,9 +71,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         layout.addStretch()
         self.setLayout(layout)
 
-        self._img = None
-        self.move_mutex = QMutex()
-        self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
         self.set_filter_func()
 
         viewer.layers.events.connect(self.invalidate_filter)
@@ -228,9 +234,11 @@ class MinimalContourWidget(WidgetWithLayerList):
         return results
 
     def on_feature_change(self, _):
-        if self.feature_dropdown.currentText().startswith("Low") != self.feature_inverted:
-            self.feature_inverted = self.feature_dropdown.currentText().startswith("Low")
-            self.set_image()
+        current_text = self.feature_dropdown.currentText()
+        self.feature_editor.setVisible(current_text == "Custom")
+        if current_text.startswith("Low") != self.feature_inverted:
+            self.feature_inverted = current_text.startswith("Low")
+        self.set_image()
 
     def on_mouse_move(self, layer, event):
         if not self.move_mutex.tryLock():
@@ -244,7 +252,10 @@ class MinimalContourWidget(WidgetWithLayerList):
             if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= self._img.shape[:2]):
                 return
             if not self.ctrl_down:
-                results = self.estimate(self._img, self.param_spinbox.value())
+                if self.feature_editor.isVisible():
+                    results = self.estimate(self.feature_editor.features, self.param_spinbox.value())
+                else:
+                    results = self.estimate(self._img, self.param_spinbox.value())
             else:
                 results = [
                     np.vstack(skimage.draw.line(
@@ -286,6 +297,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         image_layer: Image = self.image.layer
         if image_layer is None:
             self._img = None
+            self.feature_editor.image = None
+            self.feature_editor.features = None
             return
         if not image_layer.visible:
             image_layer.set_view_slice()
@@ -297,6 +310,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         image = (image - image.min()) / (image.max() - image.min())
         if self.feature_inverted:
             image = 1 - image
+        if self.feature_editor.isVisible():
+            self.feature_editor.image = image
+            self.feature_editor.execute()
         self._img = image
 
     def data_event(self, event):
