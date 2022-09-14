@@ -1,11 +1,13 @@
+import sys
+
 import napari
+from napari.utils.notifications import ErrorNotification, notification_manager
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QAction, QPlainTextEdit
 from qtpy.QtCore import QRegularExpression, Qt
 from qtpy.QtGui import QTextCharFormat, QFont, QSyntaxHighlighter, QColor
 from qtpy import QtCore, QtGui
 import numpy as np
 import skimage
-import traceback
 import warnings
 import keyword
 
@@ -149,8 +151,9 @@ class ImageProcessingWidget(QWidget):
             else:
                 warnings.warn("The output should be stored in a variable called 'features'")
                 return None
-        except:
-            traceback.print_exc()
+        except :
+            etype, value, tb = sys.exc_info()
+            notification_manager.receive_error(etype, value, tb)
 
     def execute(self):
         self.features = self.get_features()
