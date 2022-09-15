@@ -1,15 +1,41 @@
 import sys
 
 import napari
-from napari.utils.notifications import ErrorNotification, notification_manager
+from napari.utils.notifications import notification_manager
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QAction, QPlainTextEdit
-from qtpy.QtCore import QRegularExpression, Qt
+from qtpy.QtCore import QRegularExpression, Qt, Signal, QObject, QThread
 from qtpy.QtGui import QTextCharFormat, QFont, QSyntaxHighlighter, QColor
 from qtpy import QtCore, QtGui
 import numpy as np
 import skimage
 import warnings
 import keyword
+
+from ._utils.progress_widget import ProgressWidget
+
+
+class ScriptWorker(QObject):
+    done = Signal("PyQt_PyObject")
+    script = None
+    image = None
+
+    def run(self):
+        if self.script is None:
+            raise ValueError("No script was set!")
+        if self.image is None:
+            raise ValueError("'image' was None!")
+        locals = {"image": self.image}
+        try:
+            exec(self.script, {"np": np, "skimage": skimage}, locals)
+            if "features" in locals:
+                self.done.emit(locals["features"])
+            else:
+                warnings.warn("The output should be stored in a variable called 'features'")
+                self.done.emit(None)
+        except Exception as e:
+            raise e
+        finally:
+            self.done.emit(None)
 
 
 class PythonHighlighter(QSyntaxHighlighter):
@@ -91,6 +117,15 @@ class ImageProcessingWidget(QWidget):
     def __init__(self, image, viewer: napari.Viewer):
         super().__init__()
         self.viewer = viewer
+        self.progress_dialog = ProgressWidget(message="Calculating feature, please wait...")
+        viewer.window.qt_viewer.window().destroyed.connect(lambda: self.progress_dialog.close())
+        self.script_thread = QThread()
+        self.script_worker = ScriptWorker()
+        self.script_worker.moveToThread(self.script_thread)
+        self.script_worker.done.connect(self.script_thread.quit)
+        self.script_worker.done.connect(lambda _: self.progress_dialog.setVisible(False))
+        self.script_thread.started.connect(self.script_worker.run)
+        self.script_thread.finished.connect(lambda: self.progress_dialog.setVisible(False))
         layout = QVBoxLayout()
         self.text_settings = QtCore.QSettings()
         self.text_edit = CodeEditor()
@@ -136,44 +171,44 @@ class ImageProcessingWidget(QWidget):
         self.image = image
         self.features = image
 
-    def get_features(self):
+    def run_script(self):
         script = self.text_edit.document().toPlainText()
-        with open("Y:/BIOMAG/napari/script_backup.txt", "w") as f:
-            f.write(script)
         self.text_settings.setValue("img_proc_script", script)
         if self.image is None:
             warnings.warn("image is None")
-        locals = {"image": self.image.copy() if self.image is not None else None}
-        try:
-            exec(script, {"np": np, "skimage": skimage}, locals)
-            if "features" in locals:
-                return locals["features"]
-            else:
-                warnings.warn("The output should be stored in a variable called 'features'")
-                return None
-        except :
-            etype, value, tb = sys.exc_info()
-            notification_manager.receive_error(etype, value, tb)
+            return None
+        self.script_worker.script = script
+        self.script_worker.image = self.image.copy() if self.image is not None else None
+        self.progress_dialog.setVisible(True)
+        self.script_thread.start()
 
-    def execute(self):
-        self.features = self.get_features()
-        if self.features is None:
+    def set_features(self, features):
+        if features is None:
             return
-        self.features = self.features.astype(float)
+        self.features = features.astype(float)
         if self.features.ndim == 2:
             self.features = np.concatenate([self.features[..., np.newaxis]]*3, -1)
+        self.script_worker.done.disconnect(self.set_features)
 
-    def try_code(self):
-        feature_map = self.get_features()
-        if feature_map is not None:
+    def execute(self):
+        self.script_worker.done.connect(self.set_features)
+        self.run_script()
+
+    def display_features(self, features):
+        if features is not None:
             if "Feature map" not in self.viewer.layers:
                 self.viewer.add_image(
-                    feature_map,
+                    features,
                     name="Feature map",
-                    rgb=feature_map.ndim == 3 and feature_map.shape[2] == 3
+                    rgb=features.ndim == 3 and features.shape[2] == 3
                 )
             else:
-                self.viewer.layers["Feature map"].data = feature_map
+                self.viewer.layers["Feature map"].data = features
+        self.script_worker.done.disconnect(self.display_features)
+
+    def try_code(self):
+        self.script_worker.done.connect(self.display_features)
+        self.run_script()
 
     def increase_font_size(self):
         font = self.text_edit.font()
