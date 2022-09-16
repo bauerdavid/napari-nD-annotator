@@ -124,6 +124,8 @@ class ImageProcessingWidget(QWidget):
         self.script_worker.moveToThread(self.script_thread)
         self.script_worker.done.connect(self.script_thread.quit)
         self.script_worker.done.connect(lambda _: self.progress_dialog.setVisible(False))
+        self.script_worker.done.connect(lambda: self.run_button.setEnabled(True))
+        self.script_worker.done.connect(lambda: self.try_button.setEnabled(True))
         self.script_thread.started.connect(self.script_worker.run)
         self.script_thread.finished.connect(lambda: self.progress_dialog.setVisible(False))
         layout = QVBoxLayout()
@@ -172,6 +174,8 @@ class ImageProcessingWidget(QWidget):
         self.features = image
 
     def run_script(self):
+        self.run_button.setEnabled(False)
+        self.try_button.setEnabled(False)
         script = self.text_edit.document().toPlainText()
         self.text_settings.setValue("img_proc_script", script)
         if self.image is None:
