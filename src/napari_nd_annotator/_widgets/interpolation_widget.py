@@ -67,7 +67,7 @@ class InterpolationWorker(QObject):
         try:
             dimension = self.dimension
             n_contour_points = self.n_contour_points
-            data = self.data
+            data = self.data.copy()
             use_rpsv = self.use_rpsv
             layer_slice_template = [
                 slice(None) if d in self.dims_displayed
@@ -132,7 +132,7 @@ class InterpolationWorker(QObject):
                 prev_cnt = cnt
                 prev_layer = i
             napari.notification_manager.receive_info("Done in %.4f s" % (time.time() - start))
-            self.done.emit(mask)
+            self.done.emit(data)
         except Exception as e:
             self.done.emit(None)
             raise e
@@ -151,6 +151,7 @@ class InterpolationWidget(QWidget):
         self.interpolation_worker.moveToThread(self.interpolation_thread)
         self.interpolation_worker.done.connect(self.interpolation_thread.quit)
         self.interpolation_worker.done.connect(lambda _: self.progress_dialog.setVisible(False))
+        self.interpolation_worker.done.connect(self.set_labels)
         self.interpolation_worker.progress.connect(self.progress_dialog.setValue)
         self.interpolation_thread.started.connect(self.interpolation_worker.run)
         layout.addWidget(QLabel("dimension"))
