@@ -69,14 +69,16 @@ The `Interpolation` tab contains tools for estimating missing annotation slices 
 https://user-images.githubusercontent.com/36735863/188876826-1771acee-93ba-4905-982e-bfb459329659.mp4
 
 ### Minimal contour
-This plugin can estimate a minimal contour, which is calculated from a point set on the edges of the object, which are provided by the user. This contour will prefer pixels with high gradient (edges).
+This plugin can estimate a minimal contour, which is calculated from a point set on the edges of the object, which are provided by the user. This contour will follow some image feature (pixels with high gradient or high/low intensity).
 Features:
  * With a single click a new point can be added to the set. This will also extend the contour with the curve shown in red
  * A double click will close the curve by adding both the red and gray curves to the minimal contour
  * When holding `Shift`, the gray and red highlight will be swapped, so the other curve can be added to the contour
  * With the `Ctrl` button down a straight line can be added instead of the minimal path
- * If the anchor points were misplaced, the point set can be cleared by pressing `Esc`
+ * If the anchor points were misplaced, the last point can be removed by right-clicking, or the whole point set can be cleared by pressing `Esc`
  * The `Param` value at the widget will decide, how strongly should the contour follow edges on the image. Higher value means higher sensitivity to image data, while a lower value will be closer to straight lines.
+ * Different features can be used, like image gradient or pixel intensities, and also user-defined features (using Python)
+   * the image is accessed as the `image` variable, and the features should be stored in the `features` variable in the small code editor widget
 
 This functionality can be used by selecting the `Minimal Contour` tab in the `Annotation Toolbox` widget, which will create a new layer called `Anchors`.
 
@@ -84,7 +86,17 @@ This functionality can be used by selecting the `Minimal Contour` tab in the `An
 
 *Note: if any layer is created before opening the `Annotation Toolbox` widget, some "temporary" layers appear in the layer list. This is not intended, but currently there is no way to hide these. __Do not remove or modify these, as this could break the plugin!__ Whenever possible, open the toolbox first, in order to prevent these from appearing.*
 
-https://user-images.githubusercontent.com/36735863/188877621-88aa6cdc-cad0-4a87-97a6-4ca0bcdd5ace.mp4
+#### Intensity-based:
+
+https://user-images.githubusercontent.com/36735863/191023482-0dfafb5c-003a-47f6-a21b-8582a4e3930f.mp4
+
+#### Gradient-based:
+
+https://user-images.githubusercontent.com/36735863/191024941-f20f63a0-8281-47d2-be22-d1ec34fe1f5d.mp4
+
+#### Custom feature:
+
+https://user-images.githubusercontent.com/36735863/191025028-3f807bd2-1f2e-40d2-800b-48af820a7dbe.mp4
 
 ## License
 
