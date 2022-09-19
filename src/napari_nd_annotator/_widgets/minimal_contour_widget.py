@@ -2,6 +2,7 @@ import warnings
 
 import napari
 import skimage.draw
+from napari.utils.events import Event
 from qtpy.QtWidgets import QSpinBox, QVBoxLayout, QCheckBox, QLabel, QComboBox
 from qtpy.QtCore import QMutex
 
@@ -34,7 +35,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.move_mutex = QMutex()
         self._img = None
         self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
-
+        self.remove_last_anchor = False
+        self.last_added_with_shift = None
+        self.last_segment_length = None
         self.anchor_points.combobox.currentIndexChanged.connect(self.set_callbacks)
         self.image.combobox.currentIndexChanged.connect(self.set_image)
         self.feature_inverted = False
@@ -292,6 +295,8 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.anchor_points.layer.mouse_double_click_callbacks.append(self.on_double_click)
         if self.on_mouse_move not in self.anchor_points.layer.mouse_move_callbacks:
             self.anchor_points.layer.mouse_move_callbacks.append(self.on_mouse_move)
+        if self.on_right_click not in self.anchor_points.layer.mouse_drag_callbacks:
+            self.anchor_points.layer.mouse_drag_callbacks.insert(0, self.on_right_click)
 
     def set_image(self):
         image_layer: Image = self.image.layer
@@ -318,6 +323,11 @@ class MinimalContourWidget(WidgetWithLayerList):
     def data_event(self, event):
         if event.source != self.anchor_points.layer or len(self.anchor_points.layer.data) == 0:
             return
+        if self.remove_last_anchor:
+            with self.anchor_points.layer.events.data.blocker():
+                self.anchor_points.layer.data = self.anchor_points.layer.data[:-1]
+                self.remove_last_anchor = False
+                return
         anchor_data = self.anchor_points.layer.data
         anchor_data[-1] = np.clip(anchor_data[-1], 0, self._img.shape[:2])
         if len(anchor_data) > 1 and np.all(np.round(anchor_data[-1]) == np.round(anchor_data[-2])):
@@ -327,13 +337,18 @@ class MinimalContourWidget(WidgetWithLayerList):
             return
         self.anchor_points.layer.refresh()
         if self.shift_down:
+            self.last_added_with_shift = True
             with self.anchor_points.layer.events.data.blocker():
                 self.anchor_points.layer.data = np.roll(self.anchor_points.layer.data, 1, 0)
             if len(self.to_s_points_layer.data):
                 self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
+                self.last_segment_length = len(self.to_s_points_layer.data)
         else:
             if len(self.from_e_points_layer.data):
                 self.output.data = np.concatenate([self.output.data, self.from_e_points_layer.data], 0)
+                self.last_added_with_shift = False
+                self.last_segment_length = len(self.from_e_points_layer.data)
+
         self.point_triangle[-1] = self.anchor_points.layer.data[0]
         self.point_triangle[0] = self.anchor_points.layer.data[-1]
 
@@ -346,6 +361,21 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.clear_all()
         if self.labels.layer and self.autoincrease_label_id_checkbox.isChecked():
             self.labels.layer.selected_label += 1
+
+    def on_right_click(self, layer, event: Event):
+        if event.button == 2 and layer.mode == Mode.ADD:
+            self.remove_last_anchor = True
+            if self.last_segment_length is not None:
+                with self.anchor_points.layer.events.data.blocker():
+                    if self.last_added_with_shift:
+                        self.anchor_points.layer.data = self.anchor_points.layer.data[1:]
+                        self.output.data = self.output.data[self.last_segment_length:]
+                    else:
+                        self.anchor_points.layer.data = self.anchor_points.layer.data[:-1]
+                        self.output.data = self.output.data[:-self.last_segment_length]
+                self.point_triangle[-1] = self.anchor_points.layer.data[0]
+                self.point_triangle[0] = self.anchor_points.layer.data[-1]
+                self.last_segment_length = None
 
     def points_to_mask(self):
         if self._img is None or len(self.output.data) == 0:
