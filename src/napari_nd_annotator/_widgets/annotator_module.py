@@ -9,6 +9,7 @@ import math
 
 from .interpolation_widget import InterpolationWidget
 from .minimal_contour_widget import MinimalContourWidget
+from napari_annotatorj import AnnotatorJ
 
 
 class AnnotatorWidget(QWidget):
@@ -28,6 +29,8 @@ class AnnotatorWidget(QWidget):
         tabs_widget.addTab(interpolation_widget, "Interpolation")
 
         tabs_widget.addTab(MinimalContourWidget(viewer), "Minimal Contour")
+
+        tabs_widget.addTab(AnnotatorJ(viewer), "AnnotatorJ")
 
         layout.addWidget(tabs_widget)
         self.setLayout(layout)
