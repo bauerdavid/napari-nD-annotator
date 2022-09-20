@@ -89,7 +89,6 @@ class MeanThread(QThread):
 
             # unit direction vectors
             dirs = q_mean/qraylengths.reshape(qraylengths.shape[0], 1) # unit direction of the mean contour points
-            print("timestamp 1", (time.time()-timestamp))
             timestamp = time.time()
             # do the reconstruction
             r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), settings, self.rpSignal)
@@ -108,7 +107,6 @@ class MeanThread(QThread):
             deltaDiff = np.sqrt(np.sum(deltaDiff*deltaDiff))
 
             deltaPrev = delta.copy()
-            print("timestamp 2", (time.time() - timestamp))
 
             if deltaDiff<1.:
                 print("centroid converged")
