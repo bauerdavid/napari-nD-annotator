@@ -28,14 +28,17 @@ class ScriptWorker(QObject):
         try:
             exec(self.script, {"np": np, "skimage": skimage}, locals)
             if "features" in locals:
-                self.done.emit(locals["features"])
+                features = locals["features"]
+                if features is not None and features.ndim == 2:
+                    features = np.concatenate([features[..., np.newaxis]] * 3, -1)
+                self.done.emit(features)
             else:
                 warnings.warn("The output should be stored in a variable called 'features'")
                 self.done.emit(None)
         except Exception as e:
-            raise e
-        finally:
             self.done.emit(None)
+            raise e
+
 
 
 class PythonHighlighter(QSyntaxHighlighter):
@@ -114,6 +117,8 @@ class CodeEditor(QPlainTextEdit):
 
 
 class ImageProcessingWidget(QWidget):
+    try_script = Signal()
+
     def __init__(self, image, viewer: napari.Viewer):
         super().__init__()
         self.viewer = viewer
@@ -190,8 +195,6 @@ class ImageProcessingWidget(QWidget):
         if features is None:
             return
         self.features = features.astype(float)
-        if self.features.ndim == 2:
-            self.features = np.concatenate([self.features[..., np.newaxis]]*3, -1)
         self.script_worker.done.disconnect(self.set_features)
 
     def execute(self):
@@ -204,13 +207,14 @@ class ImageProcessingWidget(QWidget):
                 self.viewer.add_image(
                     features,
                     name="Feature map",
-                    rgb=features.ndim == 3 and features.shape[2] == 3
+                    rgb=True
                 )
             else:
                 self.viewer.layers["Feature map"].data = features
         self.script_worker.done.disconnect(self.display_features)
 
     def try_code(self):
+        self.try_script.emit()
         self.script_worker.done.connect(self.display_features)
         self.run_script()
 
