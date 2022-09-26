@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <iostream>
 
-#define _VECTSWITCH 0
+#define _VECTSWITCH 1
 
 struct SVeloData
 {

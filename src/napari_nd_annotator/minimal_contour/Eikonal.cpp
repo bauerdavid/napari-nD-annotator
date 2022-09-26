@@ -201,32 +201,32 @@ inline void CEikonal::UpdateDistanceMap(double maxv)
 		
 			int iy = yy, ix = xx;
 			++ix;
-			if (ix > mStartX && ix < mEndX - 1 && iy > mStartY && iy < mEndY - 1)
+			if (ix < mEndX - 1)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(yy * 0x10000 + ix);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(yy * 0x10000 + ix);
 #endif
 			ix -= 2;
-			if (ix > mStartX && ix < mEndX - 1 && iy > mStartY && iy < mEndY - 1)
+			if (ix > mStartX)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(yy * 0x10000 + ix);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(yy * 0x10000 + ix);
 #endif
-			++ix; ++iy;
-			if (ix > mStartX && ix < mEndX - 1 && iy > mStartY && iy < mEndY - 1)
+			++iy;
+			if (iy < mEndY - 1)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(iy * 0x10000 + xx);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(iy * 0x10000 + xx);
 #endif
 			iy -= 2;
-			if (ix > mStartX && ix < mEndX - 1 && iy > mStartY && iy < mEndY - 1)
+			if (iy > mStartY)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(iy * 0x10000 + xx);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(iy * 0x10000 + xx);
 #endif
 		}
 		else 
@@ -277,7 +277,7 @@ repall:
 	m_curpath.push_back(path);
 
 
-	int iimax = 4444, ii;
+	int iimax = 10000, ii;
 	for (ii = 0; ii < iimax; ++ii) {
 		CVec2 dir;
 		int mx(0), my(0);
