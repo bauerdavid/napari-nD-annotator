@@ -549,7 +549,7 @@ template <class T> struct SWorkImg
             T temp_minval = (T)10000;
 #pragma omp for
             for(int qp =0; qp < ys*xs; qp++){
-                T t = (T)*buf[qp];
+                T t = (T)buf[qp];
                 dat[qp] = t;
                 if(temp_maxval < t) temp_maxval = t;
                 if(temp_minval > t) temp_minval = t;
