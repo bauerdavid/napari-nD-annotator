@@ -17,13 +17,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build_wheels:
-    name: Build wheels on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-20.04, windows-2019, macos-11]
+  build_wheels_macos:
+    name: Build wheels on MacOS
+    runs-on: macos-11
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
     steps:
       - uses: actions/checkout@v3
 
@@ -32,13 +31,57 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Setup OpenMP for ${{ matrix.os }}
+      - name: Setup OpenMP
         run: brew install libomp
-        if: runner.os == 'macOS'
         env:
+          CC: /usr/bin/clang
+          CXX: /usr/bin/clang++
+          CPPFLAGS: "-Xpreprocessor -fopenmp"
           CFLAGS: "-Wno-implicit-function-declaration -I/usr/local/opt/libomp/include"
           CXXFLAGS: "-I/usr/local/opt/libomp/include"
           LDFLAGS: "-Wl,-rpath,/usr/local/opt/libomp/lib -L/usr/local/opt/libomp/lib -lomp"
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.2
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+  build_wheels_linux:
+    name: Build wheels on Linux
+    runs-on: ubuntu-20.04
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.10.2
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+  build_wheels_windows:
+    name: Build wheels on Windows
+    runs-on: windows-2019
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.10.2
