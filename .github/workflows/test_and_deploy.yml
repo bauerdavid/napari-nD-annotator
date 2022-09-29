@@ -26,11 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.x"
-
       - name: Setup OpenMP
         run: brew install libomp
         env:
@@ -59,15 +54,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.x"
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.10.2
         env:
-          CIBW_SKIP: "cp311-* pp*"
+          CIBW_SKIP: "cp311-* pp* cp310-*i686 *musllinux* *s390x* *ppc64le*"
 
       - uses: actions/upload-artifact@v3
         with:
@@ -81,11 +71,6 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.x"
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.10.2
