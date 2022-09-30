@@ -257,13 +257,6 @@ struct SDisImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] = 0;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] = 0;
-//            }
-//        }
     }
     void Set(int x, int y, byte* buf, int mod = 0, int pitch = 0)
     {
@@ -368,9 +361,6 @@ struct SDisImg
             for(int qp =0; qp < ys*xs; qp++){
                 dat[qp] = 255 - dat[qp];
             }
-//            for(int q = 0; q < ys; ++q)
-//                for(int p = 0; p < xs; ++p)
-//                    dat[q * xs + p] = 255 - dat[q * xs + p];
         }
 
 
@@ -422,7 +412,6 @@ struct SDisImg
     {
         if(y >= ys) y = ys - 1;
         else if(y < 0) y = 0;
-        //if (!dat) return &safe[1][1];
         return &dat[y * xs];
     }
     void operator=(SDisImg& tc)
@@ -446,14 +435,6 @@ struct SDisImg
             int q = qp / xs;
             dat[qp] = tc[q][p];
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] = tc[q][p];
-//            }
-//        }
-
     }
     unsigned long* dat;
     int xs;
@@ -522,13 +503,6 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] = (T)0;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] = (T)0;
-//            }
-//        }
     }
     void Set(int x, int y, T fill)
     {
@@ -550,13 +524,6 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] = fill;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] = fill;
-//            }
-//        }
     }
     void Set(int x, int y, byte* buf)
     {
@@ -582,7 +549,7 @@ template <class T> struct SWorkImg
             T temp_minval = (T)10000;
 #pragma omp for
             for(int qp =0; qp < ys*xs; qp++){
-                T t = (T)*buf[qp];
+                T t = (T)buf[qp];
                 dat[qp] = t;
                 if(temp_maxval < t) temp_maxval = t;
                 if(temp_minval > t) temp_minval = t;
@@ -594,18 +561,6 @@ template <class T> struct SWorkImg
                 if(temp_minval < minval) minval = temp_minval;
             }
         }
-
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                T t = (T)*buf++;
-//                dat[q * xs + p] = t;
-//                if(maxval < t) maxval = t;
-//                if(minval > t) minval = t;
-//                avgval += t;
-//            }
-//        }
         avgval /= xs * ys;
         Norm();
     }
@@ -632,16 +587,6 @@ template <class T> struct SWorkImg
                 if(temp_minval < minval) minval = temp_minval;
             }
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                T t = dat[q * xs + p];
-//                if(maxval < t) maxval = t;
-//                if(minval > t) minval = t;
-//                avgval += t;
-//            }
-//        }
         avgval /= xs * ys;
     }
     void Clean()
@@ -661,7 +606,6 @@ template <class T> struct SWorkImg
     {
         if(y >= ys) y = ys - 1;
         else if(y < 0) y = 0;
-        //if (!dat) return &safe[1][1];
         return &dat[y * xs];
     }
     const T* operator[](int y) const
@@ -696,13 +640,6 @@ template <class T> struct SWorkImg
             int q = qp / xs;
             dat[qp] = tc[q][p];
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] = tc[q][p];
-//            }
-//        }
         return *this;
     }
     void operator=(SDisImg& tc)
@@ -745,19 +682,6 @@ template <class T> struct SWorkImg
                 if(temp_minval < minval) minval = temp_minval;
             }
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                T t;
-//                t = (T)(tc[q][p] & 0xff);
-//
-//                dat[q * xs + p] = t;
-//                if(maxval < t) maxval = t;
-//                if(minval > t) minval = t;
-//                avgval += t;
-//            }
-//        }
         avgval /= xs * ys;
         Norm();
     }
@@ -810,23 +734,6 @@ template <class T> struct SWorkImg
                 if(temp_minval < minval) minval = temp_minval;
             }
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                T t;
-//                if(!channel)
-//                    t = (T)(tc[q + modys][p + modxs] & 0xff);
-//                else if(channel == 1)
-//                    t = (T)((tc[q + modys][p + modxs] & 0xff00) >> 8);
-//                else
-//                    t = (T)((tc[q + modys][p + modxs] & 0xff0000) >> 16);
-//                dat[q * xs + p] = t;
-//                if(maxval < t) maxval = t;
-//                if(minval > t) minval = t;
-//                avgval += t;
-//            }
-//        }
         avgval /= xs * ys;
         Norm();
         return true;
@@ -875,17 +782,6 @@ template <class T> struct SWorkImg
                 if(temp_minval < minval) minval = temp_minval;
             }
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                T t = (T)(tc[q + modys][p + modxs]);
-//                    dat[q * xs + p] = t;
-//                if(maxval < t) maxval = t;
-//                if(minval > t) minval = t;
-//                avgval += t;
-//            }
-//        }
         avgval /= xs * ys;
         Norm();
         return true;
@@ -932,18 +828,6 @@ template <class T> struct SWorkImg
                 if(temp_minval < minval) minval = temp_minval;
             }
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                T t;
-//                t = (T)(tc[q][p] & 0xff);
-//                dat[q * xs + p] = t;
-//                if(maxval < t) maxval = t;
-//                if(minval > t) minval = t;
-//                avgval += t;
-//            }
-//        }
         avgval /= xs * ys;
         Renorm();
         return true;
@@ -953,18 +837,10 @@ template <class T> struct SWorkImg
     {
         if(maxval <= 0) return;
         T recip = ((T)1.0) / ((T)maxval);
-        //T recip = ((T)1.0)/((T)255);
 #pragma omp parallel for
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] *= recip;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] *= recip;
-//            }
-//        }
     }
     void Renorm()
     {
@@ -985,13 +861,6 @@ template <class T> struct SWorkImg
                 if(temp_min < min) min = temp_min;
             }
         }
-//        for(int q = 0; q < ys; ++q)
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                T v = dat[q * xs + p];
-//                if(v < min) min = v;
-//                if(v > max) max = v;
-//            }
 
         if(abs((T)(max - min)) < ((T)1e-11f)) return;
 #pragma omp parallel for
@@ -999,14 +868,6 @@ template <class T> struct SWorkImg
             dat[qp] -= (T)min;
             dat[qp] /= (T)(max - min);
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] -= (T)min;
-//                dat[q * xs + p] /= (T)(max - min);
-//            }
-//        }
         SetBound();
 
     }
@@ -1016,13 +877,6 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] = ((T)1.0) - dat[qp];
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] = ((T)1.0) - dat[q * xs + p];
-//            }
-//        }
     }
     void GetReduced2(SWorkImg& r)
     {
@@ -1448,9 +1302,6 @@ template <class T> struct SWorkImg
                 continue;
             gx[q][p] = dat[qp + 1] - dat[qp];
         }
-//        for(int q = 0; q < ys; ++q)
-//            for(int p = 0; p < xs - 1; ++p)
-//                gx[q][p] = dat[q * xs + p + 1] - dat[q * xs + p];
         if(bZeroBound)
         {
 #pragma omp parallel for
@@ -1474,9 +1325,6 @@ template <class T> struct SWorkImg
                 continue;
             gy[q][p] = dat[(q + 1) * xs + p] - dat[qp];
         }
-//        for(int q = 0; q < ys - 1; ++q)
-//            for(int p = 0; p < xs; ++p)
-//                gy[q][p] = dat[(q + 1) * xs + p] - dat[q * xs + p];
         if(bZeroBound)
         {
 #pragma omp parallel for
@@ -1741,13 +1589,6 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] = r;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] = r;
-//            }
-//        }
         return *this;
     }
     SWorkImg& operator*= (T r)
@@ -1756,13 +1597,6 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] *= r;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] *= r;
-//            }
-//        }
         return *this;
     }
     SWorkImg& operator+= (T r)
@@ -1771,13 +1605,6 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] += r;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] += r;
-//            }
-//        }
         return *this;
     }
     SWorkImg& operator-= (T r)
@@ -1786,13 +1613,6 @@ template <class T> struct SWorkImg
         for(int qp =0; qp < ys*xs; qp++){
             dat[qp] -= r;
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] -= r;
-//            }
-//        }
         return *this;
     }
     SWorkImg& operator+= (SWorkImg& tc)
@@ -1807,13 +1627,6 @@ template <class T> struct SWorkImg
             int q = qp / xs;
             dat[qp] += tc[q][p];
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] += tc[q][p];
-//            }
-//        }
         return *this;
     }
     SWorkImg& operator-= (SWorkImg& tc)
@@ -1828,13 +1641,6 @@ template <class T> struct SWorkImg
             int q = qp / xs;
             dat[qp] -= tc[q][p];
         }
-//        for(int q = 0; q < ys; ++q)
-//        {
-//            for(int p = 0; p < xs; ++p)
-//            {
-//                dat[q * xs + p] -= tc[q][p];
-//            }
-//        }
         return *this;
     }
 
@@ -1844,6 +1650,5 @@ template <class T> struct SWorkImg
     T avgval;
     int xs;
     int ys;
-    //bool bnormed;
 };
 

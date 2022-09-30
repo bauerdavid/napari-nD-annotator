@@ -24,9 +24,13 @@ void CEikonal::InitEnvironment(int spacex, int spacey)
 	m_field.Set(spacex,spacey,-1);
 	m_velo.reserve(spacex*spacey);
 	m_boundary.reserve(spacex*spacey);
+	m_aux[0].Set(spacex, spacey, 0.);
+	m_aux[1].Set(spacex, spacey, 0.);
 
 	m_spacex = spacex;
-	m_spacey = spacey;}
+	m_spacey = spacey;
+	SetBoundaries(0, 0, spacex, spacey);
+}
 
 ////////////////////////////////
 // Receiving Start-Stop points
@@ -44,10 +48,14 @@ void CEikonal::SetStartStop(const CVec2 &reference,const CVec2 &target)
 	int cx = (int)m_reference.x, cy = (int)m_reference.y;
 
 	m_currentdistance = 3.0f;
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, m_spacex)
     for(int yx =0; yx < m_spacex*m_spacey; yx++){
         int xx = yx % m_spacex;
+        if(xx< mStartX || xx >=mEndX)
+            continue;
         int yy = yx / m_spacex;
+        if(yy < mStartY || yy >= mEndY)
+            continue;
         int dx = xx-cx, dy = yy-cy;
         double dd = sqrt((double)(dx*dx+dy*dy));
 
@@ -60,27 +68,11 @@ void CEikonal::SetStartStop(const CVec2 &reference,const CVec2 &target)
             m_distance[yy][xx] = -1;
         }
     }
-//	for (int yy = 0; yy < m_spacey; ++yy) {
-//		for (int xx = 0; xx < m_spacex; ++xx) {
-//			int dx = xx-cx, dy = yy-cy;
-//			double dd = sqrt((double)(dx*dx+dy*dy));
-//
-//			if (dd < m_currentdistance) {
-//				m_field[yy][xx] = 1.0-2.0f*dd/m_currentdistance;
-//				m_distance[yy][xx] = dd;
-//			}
-//			else {
-//				m_field[yy][xx] = -1;
-//				m_distance[yy][xx] = -1;
-//			}
-//
-//		}
-//	}
 
 	m_boundary.clear();
 
-	for (int yy = 1; yy < m_spacey - 1; ++yy)
-		for (int xx = 1; xx < m_spacex - 1; ++xx)
+	for (int yy = mStartY; yy < mEndY - 1; ++yy)
+		for (int xx = mStartX; xx < mEndX - 1; ++xx)
 			if (m_field[yy][xx] < m_minuplevel) {
 				if (m_distance[yy + 1][xx] >= 0 || m_distance[yy - 1][xx] >= 0
 				 || m_distance[yy][xx + 1] >= 0 || m_distance[yy][xx - 1] >= 0) {
@@ -112,23 +104,20 @@ void CEikonal::GetMaxAuxGrad()
 #pragma omp parallel
     {
         double temp_max = 0;
-#pragma omp for
+#pragma omp for schedule(dynamic, m_spacex)
         for(int yx =0; yx < xs*ys; yx++){
             int xx = yx % xs;
+            if(xx< mStartX || xx >=mEndX)
+                continue;
             int yy = yx / xs;
+            if(yy < mStartY || yy >= mEndY)
+                continue;
             double sq = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
             if(sq > temp_max) temp_max = sq;
         }
 #pragma omp critical(maxauxgrad)
     if(temp_max > m_maxauxgrad) m_maxauxgrad = temp_max;
     }
-
-//	for (int yy = 0; yy < ys; ++yy) {
-//		for (int xx = 0; xx < xs; ++xx) {
-//			double sq = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
-//			if (sq > m_maxauxgrad) m_maxauxgrad = sq;
-//		}
-//	}
 	m_maxauxgrad = sqrt(m_maxauxgrad);
 }
 
@@ -157,12 +146,7 @@ void CEikonal::InitImageQuant0(SWorkImg<double> &red, SWorkImg<double> &green, S
         m_aux[0][yy][xx] += m_temp[0][yy][xx];
         m_aux[1][yy][xx] += m_temp[1][yy][xx];
     }
-//	for (int yy = 0; yy < ys; ++yy) {
-//		for (int xx = 0; xx < xs; ++xx) {
-//			m_aux[0][yy][xx] += m_temp[0][yy][xx];
-//			m_aux[1][yy][xx] += m_temp[1][yy][xx];
-//		}
-//	}
+
 	blue.GetImgGrad(m_temp[1],m_temp[0]);
 #pragma omp parallel for
     for(int yx =0; yx < xs*ys; yx++){
@@ -171,12 +155,6 @@ void CEikonal::InitImageQuant0(SWorkImg<double> &red, SWorkImg<double> &green, S
         m_aux[0][yy][xx] += m_temp[0][yy][xx];
         m_aux[1][yy][xx] += m_temp[1][yy][xx];
     }
-//	for (int yy = 0; yy < ys; ++yy) {
-//		for (int xx = 0; xx < xs; ++xx) {
-//			m_aux[0][yy][xx] += m_temp[0][yy][xx];
-//			m_aux[1][yy][xx] += m_temp[1][yy][xx];
-//		}
-//	}
 
 	m_aux[1] *= -1;
 	GetMaxAuxGrad();
@@ -223,32 +201,32 @@ inline void CEikonal::UpdateDistanceMap(double maxv)
 		
 			int iy = yy, ix = xx;
 			++ix;
-			if (ix > 0 && ix < xs - 1 && iy > 0 && iy < ys - 1)
+			if (ix < mEndX - 1)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(yy * 0x10000 + ix);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(yy * 0x10000 + ix);
 #endif
 			ix -= 2;
-			if (ix > 0 && ix < xs - 1 && iy > 0 && iy < ys - 1)
+			if (ix > mStartX)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(yy * 0x10000 + ix);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(yy * 0x10000 + ix);
 #endif
-			++ix; ++iy;
-			if (ix > 0 && ix < xs - 1 && iy > 0 && iy < ys - 1)
+			++iy;
+			if (iy < mEndY - 1)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(iy * 0x10000 + xx);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(iy * 0x10000 + xx);
 #endif
 			iy -= 2;
-			if (ix > 0 && ix < xs - 1 && iy > 0 && iy < ys - 1)
+			if (iy > mStartY)
 #if _VECTSWITCH
-				m_auxset.emplace_back(iy * 0x10000 + ix);
+				m_auxset.emplace_back(iy * 0x10000 + xx);
 #else
-				m_auxset.emplace(iy * 0x10000 + ix);
+				m_auxset.emplace(iy * 0x10000 + xx);
 #endif
 		}
 		else 
@@ -262,8 +240,8 @@ inline void CEikonal::UpdateDistanceMap(double maxv)
 		unsigned long cxy = *it;
 		int xx = cxy & 0xffff, yy = cxy >> 16;
 		if (m_field[yy][xx] < m_minuplevel)
-			if (m_distance[yy + 1][xx] >= 0 || m_distance[yy - 1][xx] >= 0
-				|| m_distance[yy][xx + 1] >= 0 || m_distance[yy][xx - 1] >= 0)
+			if ((yy < mEndY - 1 && m_distance[yy + 1][xx] >= 0) || (yy > mStartY && m_distance[yy - 1][xx] >= 0)
+				|| (xx < mEndX - 1 && m_distance[yy][xx + 1] >= 0) || (xx > mStartX && m_distance[yy][xx - 1] >= 0))
 					m_boundary.push_back(cxy);
 	}
 
@@ -278,58 +256,6 @@ inline void CEikonal::UpdateDistanceMap(double maxv)
 ////////////////////////////////////
 // Shortest path from distance map
 ////////////////////////////////////
-#if 0
-std::vector<CVec2>& CEikonal::ResolvePath()
-{
-	SWorkImg<double> &distance = m_distance;
-	int xs = distance.xs, ys = distance.ys;
-	m_curpath.clear();
-
-	int ix(m_xdisto), iy(m_ydisto);
-
-	if (ix < 1) ix = 1;
-	else if (ix >= xs-1) ix = xs-2;
-	if (iy < 1) iy = 1;
-	else if (iy >= ys-1) iy = ys-2;
-
-	double sky = 1.2f*m_currentdistance;
-
-	CVec2 path((double)ix,(double)iy);
-	int lx = -1, ly = -1;
-	m_curpath.push_back(path);
-
-	for (int ii = 0; ii < 4444; ++ii) {
-		CVec2 dir;
-		ix = (int)(path.x+0.0f); iy = (int)(path.y+0.0f);
-		double dxp = distance[iy][ix+1]; if (dxp < 0) dxp = sky;
-		double dxm = distance[iy][ix-1]; if (dxm < 0) dxm = sky;
-		double dyp = distance[iy+1][ix]; if (dyp < 0) dyp = sky;
-		double dym = distance[iy-1][ix]; if (dym < 0) dym = sky;
-		double gradx = 0.5f*(dxp-dxm), grady = 0.5f*(dyp-dym);
-
-		dir.x = gradx; dir.y = grady;
-		GradientCorrection(dir,ix,iy); // specific call
-
-		dir.Norm();
-		path -= dir;
-		
-		int px = (int)(path.x+0.49f), py = (int)(path.y+0.49f);
-		if (lx != px || ly != py) {
-			m_curpath.push_back(CVec2((double)px,(double)py));
-			lx = px; ly = py;
-		}
-
-		dir = path; dir -= m_reference;
-		if (dir.x*dir.x+dir.y*dir.y < 2.0f) {
-			m_curpath.push_back(m_reference);
-			break;
-		}
-	}
-
-	return m_curpath;
-
-}
-#else
 std::vector<CVec2>& CEikonal::ResolvePath()
 {
 	SWorkImg<double>& distance = m_distance;
@@ -340,10 +266,10 @@ repall:
 	m_curpath.clear();
 
 	int ix(m_xdisto), iy(m_ydisto);
-	if (ix < 1) ix = 1;
-	else if (ix >= xs - 1) ix = xs - 2;
-	if (iy < 1) iy = 1;
-	else if (iy >= ys - 1) iy = ys - 2;
+	if (ix < mStartX+1) ix = mStartX+1;
+	else if (ix >= mEndX-1) ix = mEndX-2;
+	if (iy < mStartY+1) iy = mStartY+1;
+	else if (iy >= mEndY-1) iy = mEndY-2;
 
 	double sky = 1.2f * m_currentdistance;
 
@@ -351,7 +277,7 @@ repall:
 	m_curpath.push_back(path);
 
 
-	int iimax = 4444, ii;
+	int iimax = 10000, ii;
 	for (ii = 0; ii < iimax; ++ii) {
 		CVec2 dir;
 		int mx(0), my(0);
@@ -377,7 +303,7 @@ reit:
 				double idlen = 1.0 / sqrt((double)(dx * dx + dy * dy));
 				double dd = sky;
 				int px = ix + dx, py = iy + dy;
-				if (px >= 1 && px < xs-1 && py >= 1 && py < ys-1)
+				if (px >= mStartX+1 && px < mEndX-1 && py >= mStartY+1 && py < mEndY-1)
 					if (distance[py][px] >= 0) dd = distance[py][px];
 
 				dd -= distance[iy][ix] >= 0 ? distance[iy][ix] : sky;
@@ -407,7 +333,6 @@ reit:
 	return m_curpath;
 
 }
-#endif
 //////////////////////////////////////////////////////////////
 // CRanders: Implementation of the edge based Randers metric
 //////////////////////////////////////////////////////////////
@@ -470,36 +395,7 @@ void CRanders::DistanceCalculator()
 #pragma omp critical(maxv)
         if(temp_maxv > maxv) maxv = temp_maxv;
     }
-	for (int ii = 0; ii < bsi ; ++ii) {
-
-		unsigned long cxy = m_boundary[ii];
-		int xx = cxy & 0xffff, yy = cxy >> 16;
-
-		double nx = 0.5f * (m_field[yy][xx + 1] - m_field[yy][xx - 1]);
-		double ny = 0.5f * (m_field[yy + 1][xx] - m_field[yy - 1][xx]);
-		double gradlen = sqrt(nx * nx + ny * ny);
-		if (gradlen < 1e-11) gradlen = 1e-11;
-		double igradlen = 1.0 / gradlen;
-		nx *= igradlen; ny *= igradlen;
-
-		double Qn = tangx[yy][xx] * nx + tangy[yy][xx] * ny;
-		double Qt2 = -tangx[yy][xx] * ny + tangy[yy][xx] * nx;
-		Qt2 *= Qt2;
-		double eikon(1 - Qt2);
-		if (eikon < 0) eikon = 0;
-		eikon = Qn + sqrt(eikon);
-		double vnormed = gradlen / eikon;
-
-		if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
-		SVeloData sv(xx, yy, vnormed);
-
-		if (maxv < vnormed) maxv = vnormed;
-		m_velo[ii] = sv;
-	}
-
-
 	// update distance map
-
 	UpdateDistanceMap(maxv);
 	
 }
@@ -525,7 +421,7 @@ void CRanders::CalcImageQuant()
 	SWorkImg<double> &tang1 = *(m_pTang[1]);
 
 	maxgrab = m_expfac/m_maxauxgrad; // 0 - 8
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, m_spacex)
     for(int yx =0; yx < xs*ys; yx++){
         int xx = yx % xs;
         int yy = yx / xs;
@@ -541,22 +437,6 @@ void CRanders::CalcImageQuant()
             tang0[yy][xx] = tang1[yy][xx] = 0;
         }
     }
-//	for (int yy = 0; yy < ys; ++yy) {
-//		for (int xx = 0; xx < xs; ++xx) {
-//			double q = tang0[yy][xx]*tang0[yy][xx]+tang1[yy][xx]*tang1[yy][xx];
-//			q = sqrt(q);
-//			if (q > 1e-11) {
-//				tang0[yy][xx] /= q; tang1[yy][xx] /= q;
-//				q *= maxgrab;
-//				q = 1.0-((double)exp(-q));	// ~ 0 - 0.632
-//				tang0[yy][xx] *= q; tang1[yy][xx] *= q;
-//			}
-//			else {
-//				tang0[yy][xx] = tang1[yy][xx] = 0;
-//			}
-//		}
-//	}
-
 }
 
 ////////////////////////////////////////////////////////////////
@@ -642,7 +522,7 @@ void CSplitter::CalcImageQuant()
 	if (!m_pData) return;	
 	m_pData->Set(xs,ys); // check
 	SWorkImg<double> &data = *m_pData;
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, m_spacex)
     for(int yx =0; yx < xs*ys; yx++){
         int xx = yx % xs;
         int yy = yx / xs;
@@ -668,7 +548,6 @@ CInhomog::~CInhomog(void)
 
 void CInhomog::DistanceCalculator()
 {
-
 	SWorkImg<double>& data = *(m_pData);
 
 	int xs = m_field.xs, ys = m_field.ys;
@@ -703,13 +582,11 @@ void CInhomog::DistanceCalculator()
 
 void CInhomog::CalcImageQuant()
 {
-
 	int xs = m_aux[0].xs, ys = m_aux[0].ys;
 	if (!m_pData) m_pData = new SWorkImg<double>;
 	if (!m_pData) return;
 	m_pData->Set(xs, ys); // check
 	SWorkImg<double>& data = *m_pData;
-
 	for (int yy = 0; yy < ys; ++yy) {
 		for (int xx = 0; xx < xs; ++xx) {
 			double q = m_aux[0][yy][xx];

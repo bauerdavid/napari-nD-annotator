@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <iostream>
 
-#define _VECTSWITCH 0
+#define _VECTSWITCH 1
 
 struct SVeloData
 {
@@ -60,11 +60,17 @@ public:
 		m_aux[0].Clean();
 		m_aux[1].Clean();
 	}
+	void SetBoundaries(int startX, int startY, int endX, int endY){
+	    mStartX = startX;
+	    mStartY = startY;
+	    mEndX = endX;
+	    mEndY = endY;
+	}
+    virtual void CalcImageQuant() = 0;
 protected:
 	void InitEnvironment(int spacex, int spacey);
 	void UpdateDistanceMap(double maxv);
 	void GetMaxAuxGrad();
-	virtual void CalcImageQuant() = 0;
 	virtual void GradientCorrection(CVec2 &dir, int x, int y) = 0;
 
 	std::vector<SVeloData> m_velo;
@@ -95,6 +101,7 @@ protected:
 	double m_minuplevel = 0.35f;
 
 	int m_iDataPrepared;
+	int mStartX, mStartY, mEndX, mEndY;
 };
 
 enum PrepStat { Prep_No = 0, Prep_Own, Prep_Ext };
@@ -150,11 +157,11 @@ public:
 		m_pTang[1] = 0;
 		m_iDataPrepared = Prep_No;
 	}
+    void CalcImageQuant();
 protected:
 	SWorkImg<double> *m_pTang[2];
 	int m_expfac;
 
-	void CalcImageQuant();
 	void GradientCorrection(CVec2 &dir, int x, int y) {
 		SWorkImg<double> &tangx = *(m_pTang[0]);
 		SWorkImg<double> &tangy = *(m_pTang[1]);
@@ -215,12 +222,12 @@ public:
 		m_pData = 0;
 		m_iDataPrepared = Prep_No;
 	}
+	void CalcImageQuant();
 protected:
 	SWorkImg<double> *m_pData;
 	int m_expfac;
 	double m_relweight;
 
-	void CalcImageQuant();
 	void GradientCorrection(CVec2 &dir, int x, int y) {
 		/**/
 		double driftx = (double)(m_xdisto-x), drifty = (double)(m_ydisto-y);
@@ -244,8 +251,8 @@ public:
 	void DistanceCalculator();
 	void InitImageQuant(SWorkImg<double>& red, SWorkImg<double>& green, SWorkImg<double>& blue) {
 		if (m_iDataPrepared == Prep_No) {
+            InitEnvironment(red.xs, red.ys);
             m_aux[0] = red;	m_aux[0] += green; m_aux[0] += blue; m_aux[0] *= 0.333f;
-            InitEnvironment(m_aux[0].xs, m_aux[0].ys);
             CalcImageQuant();
 			m_iDataPrepared = Prep_Own;
 		}
@@ -284,11 +291,11 @@ public:
 		m_pData = 0;
 		m_iDataPrepared = Prep_No;
 	}
+	void CalcImageQuant();
 protected:
 	SWorkImg<double>* m_pData;
 	int m_expfac;
 
-	void CalcImageQuant();
 	void GradientCorrection(CVec2& dir, int x, int y) { }
 
 };
@@ -314,6 +321,18 @@ struct SControl
 		if (m_pCurrentMethod)
 			m_pCurrentMethod->Clean();
 	}
+
+	void CleanAll() {
+		m_Randers.Clean();
+		m_Splitter.Clean();
+		m_Inhomog.Clean();
+	}
+
+	void SetBoundaries(int startX, int startY, int endX, int endY){
+	    m_Randers.SetBoundaries(startX,startY,endX, endY);
+		m_Splitter.SetBoundaries(startX,startY,endX, endY);
+		m_Inhomog.SetBoundaries(startX,startY,endX, endY);
+	}
 	// Prepare all data terms from color image (for sequential use)
 	void InitEnvironmentAllMethods(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {
 		SetParAll();
@@ -327,6 +346,12 @@ struct SControl
 		m_Randers.InitImageQuant(img);
 		m_Splitter.InitImageQuant(img);
 		m_Inhomog.InitImageQuant(img);
+	}
+
+	void CalcImageQuantAllMethods(){
+	    m_Randers.CalcImageQuant();
+		m_Splitter.CalcImageQuant();
+		m_Inhomog.CalcImageQuant();
 	}
 	// Prepare data term from color image (parallel use)
 	void InitEnvironment(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {

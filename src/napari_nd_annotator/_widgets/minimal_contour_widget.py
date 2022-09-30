@@ -1,11 +1,13 @@
+import time
 import warnings
 
 import napari
 import skimage.draw
 from napari.utils.events import Event
 from qtpy.QtWidgets import QSpinBox, QVBoxLayout, QCheckBox, QLabel, QComboBox
-from qtpy.QtCore import QMutex
+from qtpy.QtCore import QMutex, QThread, QObject, Signal
 
+from ._utils.progress_widget import ProgressWidget
 from ._utils.widget_with_layer_list import WidgetWithLayerList
 from .image_processing_widget import ImageProcessingWidget
 from ..minimal_contour import MinimalContourCalculator
@@ -31,8 +33,16 @@ class MinimalContourWidget(WidgetWithLayerList):
     def __init__(self, viewer: napari.Viewer):
         super().__init__(viewer, [("image", Image), ("labels", Labels), ("anchor_points", Points)])
         self.viewer = viewer
-        self.calculator = MinimalContourCalculator()
+        self.calculator = MinimalContourCalculator(None, 3)
+        self.progress_dialog = ProgressWidget(message="Drawing mask...")
         self.move_mutex = QMutex()
+        self.draw_worker = self.DrawWorker()
+        self.draw_thread = QThread()
+        self.draw_worker.moveToThread(self.draw_thread)
+        self.draw_worker.done.connect(self.draw_thread.quit)
+        self.draw_worker.done.connect(self.set_mask)
+        self.draw_worker.done.connect(lambda: self.progress_dialog.setVisible(False))
+        self.draw_thread.started.connect(self.draw_worker.run)
         self._img = None
         self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
         self.remove_last_anchor = False
@@ -41,6 +51,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.anchor_points.combobox.currentIndexChanged.connect(self.set_callbacks)
         self.image.combobox.currentIndexChanged.connect(self.set_image)
         self.feature_inverted = False
+        self.test_script = False
         layout = QVBoxLayout()
 
         layout.addWidget(QLabel("Used feature"))
@@ -51,6 +62,10 @@ class MinimalContourWidget(WidgetWithLayerList):
 
         self.feature_editor = ImageProcessingWidget(self._img, viewer)
         self.feature_editor.setVisible(self.feature_dropdown.currentText() == "Custom")
+        self.feature_editor.script_worker.done.connect(self.set_features)
+        def set_test_script():
+            self.test_script = True
+        self.feature_editor.try_script.connect(set_test_script)
         layout.addWidget(self.feature_editor)
 
         layout.addWidget(QLabel("Param"))
@@ -58,6 +73,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.param_spinbox.setMinimum(1)
         self.param_spinbox.setMaximum(50)
         self.param_spinbox.setValue(5)
+        self.param_spinbox.valueChanged.connect(lambda val: self.calculator.set_param(val))
+        self.calculator.set_param(self.param_spinbox.value())
         layout.addWidget(self.param_spinbox)
 
         layout.addWidget(QLabel("Increment label id"))
@@ -113,6 +130,14 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.set_image)
+
+    def set_features(self, data):
+        if self.test_script:
+            self.test_script = False
+            return
+        if data is None:
+            return
+        self.calculator.set_image(data)
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -218,22 +243,17 @@ class MinimalContourWidget(WidgetWithLayerList):
             if from_e_idx != len(layer_list) - 4:
                 layer_list.move(from_e_idx, -4)
 
-    def estimate(self, image: np.ndarray, param: int):
+    def estimate(self, image: np.ndarray):
         from_i, to_i = bbox_around_points(self.point_triangle)
         from_i = np.clip(from_i, 0, np.asarray(image.shape[:2])).astype(int)
         to_i = np.clip(to_i, 0, np.asarray(image.shape[:2])).astype(int)
+        self.calculator.set_boundaries(from_i[1], from_i[0], to_i[1], to_i[0])
         results = self.calculator.run(
-            image[from_i[0]:to_i[0], from_i[1]:to_i[1]],
-            self.point_triangle-from_i,
-            GRADIENT_BASED if self.feature_dropdown.currentText().endswith("gradient") else INTENSITY_BASED,
-            param,
+            self.point_triangle,
             True,
             True,
             True
         )
-        if results is not None:
-            for path in results:
-                path += from_i
         return results
 
     def on_feature_change(self, _):
@@ -242,6 +262,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         if current_text.startswith("Low") != self.feature_inverted:
             self.feature_inverted = current_text.startswith("Low")
         self.set_image()
+        self.calculator.set_method(GRADIENT_BASED if "gradient" in current_text else INTENSITY_BASED)
 
     def on_mouse_move(self, layer, event):
         if not self.move_mutex.tryLock():
@@ -256,9 +277,15 @@ class MinimalContourWidget(WidgetWithLayerList):
                 return
             if not self.ctrl_down:
                 if self.feature_editor.isVisible():
-                    results = self.estimate(self.feature_editor.features, self.param_spinbox.value())
+                    if self.feature_editor.features is None:
+                        warnings.warn("Feature image not calculated. Run script using the 'Set' button.")
+                        return
+                    results = self.estimate(self.feature_editor.features)
                 else:
-                    results = self.estimate(self._img, self.param_spinbox.value())
+                    if self._img is None:
+                        warnings.warn("Image was not set.")
+                        return
+                    results = self.estimate(self._img)
             else:
                 results = [
                     np.vstack(skimage.draw.line(
@@ -309,7 +336,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             image_layer.set_view_slice()
         self.autoincrease_label_id_checkbox.setChecked(image_layer.ndim == 2)
         image = image_layer._data_view.astype(float)
-        image = gaussian(image, channel_axis=3 if image.ndim == 3 else None)
+        image = gaussian(image, channel_axis=2 if image.ndim == 3 else None)
         if image.ndim == 2:
             image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
         image = (image - image.min()) / (image.max() - image.min())
@@ -317,7 +344,8 @@ class MinimalContourWidget(WidgetWithLayerList):
             image = 1 - image
         if self.feature_editor.isVisible():
             self.feature_editor.image = image
-            self.feature_editor.execute()
+        else:
+            self.calculator.set_image(image)
         self._img = image
 
     def data_event(self, event):
@@ -358,9 +386,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         elif not self.shift_down and len(self.to_s_points_layer.data):
             self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
         self.points_to_mask()
-        self.clear_all()
-        if self.labels.layer and self.autoincrease_label_id_checkbox.isChecked():
-            self.labels.layer.selected_label += 1
+
+
 
     def on_right_click(self, layer, event: Event):
         if event.button == 2 and layer.mode == Mode.ADD:
@@ -377,6 +404,24 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self.point_triangle[0] = self.anchor_points.layer.data[-1]
                 self.last_segment_length = None
 
+    class DrawWorker(QObject):
+        done = Signal("PyQt_PyObject")
+        contour: np.ndarray
+        mask_shape: tuple
+
+
+        def run(self):
+            mask = skimage.draw.polygon2mask(self.mask_shape, self.contour)
+            self.done.emit(mask)
+
+    def set_mask(self, mask):
+        self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
+        self.labels.layer.events.data()
+        self.labels.layer.refresh()
+        self.clear_all()
+        if self.labels.layer and self.autoincrease_label_id_checkbox.isChecked():
+            self.labels.layer.selected_label += 1
+
     def points_to_mask(self):
         if self._img is None or len(self.output.data) == 0:
             return
@@ -385,9 +430,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             return
         if not self.labels.layer.visible:
             self.labels.layer.set_view_slice()
-        contour = self.output.data
-        image_shape = self._img.shape[:2]
-        mask = skimage.draw.polygon2mask(image_shape, contour)
-        self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
-        self.labels.layer.events.data()
-        self.labels.layer.refresh()
+        self.progress_dialog.setVisible(True)
+        self.draw_worker.contour = self.output.data
+        self.draw_worker.mask_shape = self._img.shape[:2]
+        self.draw_thread.start()

@@ -36,35 +36,109 @@ cdef extern from "Eikonal.h":
         void GetDataTerm(SWorkImg[double]**) nogil
         void GetDataTerm(SWorkImg[double]**, SWorkImg[double]**) nogil
         void InitEnvironment(SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&) nogil
+        void InitEnvironmentAllMethods(SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&) nogil
         int SetNextStartStop() nogil
+        void SetBoundaries(int, int, int, int) nogil
         void DistanceCalculator() nogil
         int GetReady() nogil
         vector[CVec2]& ResolvePath() nogil
         vector[CVec2]& GetMinPath() nogil
+        void CleanAll() nogil
+        void CalcImageQuantAllMethods() nogil
 
 cdef class MinimalContourCalculator:
+    cdef vector[SControl*] eikonals
+    cdef int start_x, start_y, end_x, end_y
+    cdef int param
+    cdef int method
+    cdef vector[int] method_pair
+    cdef vector[int] progresses
+    def __cinit__(self, np.ndarray[np.float_t, ndim=3] image, int n_points):
+        self.set_image(image)
+        self.eikonals.reserve(n_points)
+        self.progresses.resize(n_points)
+        self.param = 5
+        self.method = 0
+        self.method_pair.push_back(self.method)
+        self.method_pair.push_back(self.method)
+        cdef SControl* control
+        cdef int i
+        for i in range(n_points):
+            control = new SControl()
+            control.SetParam(self.param)
+            control.SetParam(0, 0)
+            self.eikonals.push_back(control)
+
+    cpdef set_param(self, int param):
+        cdef int i
+        for i in range(self.eikonals.size()):
+            self.eikonals[i].SetParam(param)
+            self.eikonals[i].CleanAll()
+            self.eikonals[i].CalcImageQuantAllMethods()
+
+    cpdef set_method(self, int method):
+        if method not in [GRADIENT_BASED, INTENSITY_BASED]:
+            print("method should be one of GRADIENT_BASED(=0) or INTENSITY_BASED(=2)")
+            return
+        self.method = method
+        self.method_pair[0] = self.method_pair[1] = method
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cpdef set_boundaries(self, start_x, start_y, end_x, end_y):
+        cdef int i
+        for i in range(self.eikonals.size()):
+            self.eikonals[i].SetBoundaries(start_x, start_y, end_x, end_y)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cpdef set_image(self, np.ndarray[np.float_t, ndim=3] image):
+        if image is None:
+            print("Image was None!")
+            return
+        if image.shape[2] != 3:
+            print("image should have 3 channels")
+            return
+        cdef int w = image.shape[1]
+        cdef int h = image.shape[0]
+        cdef SWorkImg[double] ered, egreen, eblue
+        ered.Set(w, h)
+        egreen.Set(w, h)
+        eblue.Set(w, h)
+        cdef double rgb_scale = 1. / 255.
+        cdef int x, y
+        for y in range(h):
+            r_ptr = ered[y]
+            g_ptr = egreen[y]
+            b_ptr = eblue[y]
+            for x in range(w):
+                r_ptr[x] = image[y, x, 0]
+                g_ptr[x] = image[y, x, 1]
+                b_ptr[x] = image[y, x, 2]
+        cdef int i
+        for i in range(self.eikonals.size()):
+            self.eikonals[i].CleanAll()
+            self.eikonals[i].InitEnvironmentAllMethods(ered, egreen, eblue)
+
     # points are as [x, y]
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cpdef run(
             self,
-            np.ndarray[np.float_t, ndim=3] image,
             np.ndarray[np.double_t, ndim=2] points,
-            int method = GRADIENT_BASED,
-            int param=5,
             reverse_coordinates=False,
             close_path=True,
             return_segment_list=False
     ):
-        if image.shape[2] != 3:
-            print("image should have 3 channels")
-            return
-
         if points.shape[1] != 2:
             print("Points should be 2D")
             return
 
-        cdef int point_count = points.shape[0]
+        if points.shape[0] != self.eikonals.size():
+            print("wrong number of points (%d to %d)" % (points.shape[0], self.eikonals.size()))
+            return
+
+        cdef int point_count = self.eikonals.size()
         cdef bool c_close_path = <bool>close_path
         if point_count < 2:
             print("At least two points should be provided")
@@ -86,54 +160,18 @@ cdef class MinimalContourCalculator:
             # TODO Check if point is out of bounds
             epoints.push_back(CVec2(points[i, X], points[i, Y]))
             inc(idx)
-        cdef int w = image.shape[1]
-        cdef int h = image.shape[0]
-        cdef SWorkImg[double] ered, egreen, eblue
-        ered.Set(w, h)
-        egreen.Set(w, h)
-        eblue.Set(w, h)
-        cdef double rgb_scale = 1./255.
-        cdef int x, y
-        for y in range(h):
-            r_ptr = ered[y]
-            g_ptr = egreen[y]
-            b_ptr = eblue[y]
-            for x in range(w):
-                r_ptr[x] = image[y, x, 0]
-                g_ptr[x] = image[y, x, 1]
-                b_ptr[x] = image[y, x, 2]
-        cdef vector[int] progresses = vector[int](point_count)
         for i in range(point_count):
-            progresses[i] = 0
-        cdef vector[SControl*] eikonals
-        eikonals.reserve(point_count)
-        cdef SControl* control
-        for i in range(point_count):
-            control = new SControl()
-            eikonals.push_back(control)
-
-        cdef SWorkImg[double]* split = NULL
-        cdef SWorkImg[double]* rand0 = NULL
-        cdef SWorkImg[double]* rand1 = NULL
-
+            self.progresses[i] = 0
         cdef vector[CVec2] point_pair
-        cdef vector[int] method_pair
         cdef CVec2 point1
         cdef CVec2 point2
-        method_pair = vector[int](2)
-        if method == GRADIENT_BASED:
-            method_pair[0] = method_pair[1] = 0
-        else:
-            method_pair[0] = method_pair[1] = 2
         cdef int progress
         cdef SControl* eikonal
-        # cdef vector[CVec2] path
         cdef vector[vector[CVec2]] polys
         polys.resize(point_count)
         cdef int n_points = 0
         cdef int num_threads = min(point_count, openmp.omp_get_max_threads())
         for i in prange(point_count, nogil=True, num_threads=num_threads):
-        # for i in range(point_count):
             if i == point_count -1:
                 if not c_close_path:
                     continue
@@ -146,21 +184,12 @@ cdef class MinimalContourCalculator:
             point_pair[0] = point1
             point_pair[1] = point2
 
-            eikonal = eikonals[i]
-            eikonal.SetParam(param)
-            eikonal.SetParam(0, 0)
-            eikonal.DefineInputSet(point_pair, method_pair)
-            eikonal.SetDataTerm(split)
-            eikonal.SetDataTerm(rand0, rand1)
-            eikonal.InitEnvironment(ered, egreen, eblue)
+            eikonal = self.eikonals[i]
+            eikonal.DefineInputSet(point_pair, self.method_pair)
 
-            eikonal.GetDataTerm(&split)
-            eikonal.GetDataTerm(&rand0, &rand1)
 
             eikonal.SetNextStartStop()
-            # try:
-            progress = progresses[i]
-
+            progress = self.progresses[i]
             while True:
                 if cancel:
                     break
@@ -171,7 +200,6 @@ cdef class MinimalContourCalculator:
 
             eikonal.ResolvePath()
             polys[i] = eikonal.GetMinPath()
-            del eikonal
         cdef np.ndarray[np.double_t, ndim=2] segment
         if return_segment_list:
             out_list = []
