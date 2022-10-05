@@ -1,6 +1,6 @@
 name: install_simpleitk
 
-on: workflow-dispatch
+on: workflow_dispatch
 
 jobs:
   install_simpleitk:
