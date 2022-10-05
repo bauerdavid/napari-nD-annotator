@@ -1,0 +1,18 @@
+name: install_simpleitk
+
+on: workflow-dispatch
+
+jobs:
+  install_simpleitk:
+    name: Install SimpleITK
+    runs-on: windows-latest
+    steps:
+      - uses: rodrigorodriguescosta/checkout@main
+        with:
+          name: SimpleITK/SimpleITK
+          path: "C:\\SimpleITK"
+      - run: |
+          cd C:\\
+          mkdir SimpleITK-build
+          cd SimpleITK-build
+          cmake ../SimpleITK/SuperBuild -DWRAP_PYTHON=OFF -DWRAP_CSHARP=OFF -DWRAP_JAVA=OFF -DWARP_TCL=OFF -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF
