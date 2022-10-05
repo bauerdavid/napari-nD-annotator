@@ -29,8 +29,20 @@ class AnnotatorWidget(QWidget):
         tabs_widget.addTab(interpolation_widget, "Interpolation")
 
         tabs_widget.addTab(MinimalContourWidget(viewer), "Minimal Contour")
-
-        tabs_widget.addTab(AnnotatorJ(viewer), "AnnotatorJ")
+        
+        annotatorj_widget = AnnotatorJ(viewer)
+        annotatorj_widget.chckbxAddAutomatically.setVisible(False)
+        annotatorj_widget.chkShowOverlay.setVisible(False)
+        annotatorj_widget.lblCurrentFile.setVisible(False)
+        annotatorj_widget.buttonPrev.setVisible(False)
+        annotatorj_widget.buttonNext.setVisible(False)
+        annotatorj_widget.btnOpen.setVisible(False)
+        annotatorj_widget.btnLoad.setVisible(False)
+        annotatorj_widget.btnSave.setVisible(False)
+        annotatorj_widget.btnOverlay.setVisible(False)
+        annotatorj_widget.buttonOptions.setVisible(False)
+        annotatorj_widget.btnExport.setVisible(False)
+        tabs_widget.addTab(annotatorj_widget, "AnnotatorJ")
 
         layout.addWidget(tabs_widget)
         self.setLayout(layout)
