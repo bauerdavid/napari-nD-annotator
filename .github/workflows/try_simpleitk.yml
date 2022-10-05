@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: rodrigorodriguescosta/checkout@main
         with:
-          name: SimpleITK/SimpleITK
+          repository: SimpleITK/SimpleITK
           path: "C:\\SimpleITK"
       - run: |
           cd C:\\
