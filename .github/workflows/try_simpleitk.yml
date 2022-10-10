@@ -18,4 +18,4 @@ jobs:
           mkdir SimpleITK-build
           cd SimpleITK-build
           cmake ../SimpleITK/SuperBuild -DWRAP_PYTHON=OFF -DWRAP_CSHARP=OFF -DWRAP_JAVA=OFF -DWARP_TCL=OFF -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF
-          msbuild ALL_BUILD.vcxproj /p:configuration=MinSizeRel
+          msbuild ALL_BUILD.vcxproj /p:configuration=MinSizeRel /MP
