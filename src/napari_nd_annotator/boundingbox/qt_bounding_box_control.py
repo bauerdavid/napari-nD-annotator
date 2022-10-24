@@ -2,11 +2,10 @@
 from typing import Iterable
 
 import napari
-from PyQt5.QtWidgets import QCheckBox
 from napari._qt.widgets.qt_color_swatch import QColorSwatchEdit
 from napari.utils.action_manager import action_manager
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QSlider, QButtonGroup, QGridLayout, QLabel, QHBoxLayout
+from qtpy.QtWidgets import QSlider, QButtonGroup, QGridLayout, QLabel, QHBoxLayout, QCheckBox
 from napari._qt.layer_controls.qt_layer_controls_base import QtLayerControls
 import numpy as np
 from napari._qt.utils import qt_signals_blocked, disable_with_opacity
