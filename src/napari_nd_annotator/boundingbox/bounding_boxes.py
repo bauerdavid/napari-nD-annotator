@@ -234,7 +234,7 @@ class BoundingBoxLayer(Layer):
             self,
             features: Union[Dict[str, np.ndarray], pd.DataFrame],
     ) -> None:
-        self._feature_table.set_values(features, num_data=self.nshapes)
+        self._feature_table.set_values(features, num_data=self.nbounding_boxes)
         if self._face_color_property and (
                 self._face_color_property not in self.features
         ):
