@@ -31,7 +31,7 @@ def bbox_around_points(pts):
 
 class MinimalContourWidget(WidgetWithLayerList):
     def __init__(self, viewer: napari.Viewer):
-        super().__init__(viewer, [("image", Image), ("labels", Labels), ("anchor_points", Points)])
+        super().__init__(viewer, [("image", Image), ("labels", Labels)])
         self.viewer = viewer
         self.calculator = MinimalContourCalculator(None, 3)
         self.progress_dialog = ProgressWidget(message="Drawing mask...")
@@ -48,7 +48,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.remove_last_anchor = False
         self.last_added_with_shift = None
         self.last_segment_length = None
-        self.anchor_points.combobox.currentIndexChanged.connect(self.set_callbacks)
+        self.prev_n_anchor_points = 0
         self.image.combobox.currentIndexChanged.connect(self.set_image)
         self.feature_inverted = False
         self.test_script = False
@@ -125,11 +125,17 @@ class MinimalContourWidget(WidgetWithLayerList):
             name="temp [DO NOT TOUCH] <hidden>",
             size=self.point_size_spinbox.value()
         )
+        self.anchor_points = self.viewer.add_points(ndim=2, name="Anchors [DO NOT TOUCH]", symbol="x")
+        self.anchor_points.mode = "add"
         self.shift_down = False
         self.ctrl_down = False
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.set_image)
+        self.viewer.layers.events.connect(self.move_temp_to_top)
+        self.set_image()
+        self.set_callbacks()
+        self.move_temp_to_top()
 
     def set_features(self, data):
         if self.test_script:
@@ -139,18 +145,10 @@ class MinimalContourWidget(WidgetWithLayerList):
             return
         self.calculator.set_image(data)
 
-    def showEvent(self, e):
-        super().showEvent(e)
-        if "Anchors [DO NOT TOUCH]" in self.viewer.layers:
-            return
-        anchors = self.viewer.add_points(ndim=2, name="Anchors [DO NOT TOUCH]", symbol="x")
-        self.anchor_points.layer = anchors
-        self.anchor_points.combobox.setEnabled(False)
-        self.viewer.layers.events.connect(self.move_temp_to_top)
-
     def invalidate_filter(self, e):
         # if e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded"]:
         #     return
+
         self.set_filter_func()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -219,29 +217,32 @@ class MinimalContourWidget(WidgetWithLayerList):
 
     def clear_all(self):
         self.output.data = np.empty((0, 2), dtype=self.output.data.dtype)
-        self.anchor_points.layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
+        self.anchor_points.data = np.empty((0, 2), dtype=self.output.data.dtype)
         self.from_e_points_layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
         self.to_s_points_layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
         self.point_triangle[:] = -1
+        self.prev_n_anchor_points = 0
 
-    def move_temp_to_top(self, e):
-        if e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded"]:
+    def move_temp_to_top(self, e=None):
+        if e is not None and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded"]:
             return
-        layer_list = e.source
+        layer_list = self.viewer.layers
         with layer_list.events.moved.blocker(), layer_list.events.moving.blocker():
             temp_idx = layer_list.index(self.output)
             if temp_idx != len(layer_list) - 1:
                 layer_list.move(temp_idx, -1)
-            if self.anchor_points.layer is not None:
-                points_idx = layer_list.index(self.anchor_points.layer)
+            if self.anchor_points is not None:
+                points_idx = layer_list.index(self.anchor_points)
                 if points_idx != len(layer_list) - 2:
                     layer_list.move(points_idx, -2)
-            to_s_idx = layer_list.index(self.to_s_points_layer)
-            if to_s_idx != len(layer_list) - 3:
-                layer_list.move(to_s_idx, -3)
-            from_e_idx = layer_list.index(self.from_e_points_layer)
-            if from_e_idx != len(layer_list) - 4:
-                layer_list.move(from_e_idx, -4)
+            if self.to_s_points_layer in layer_list:
+                to_s_idx = layer_list.index(self.to_s_points_layer)
+                if to_s_idx != len(layer_list) - 3:
+                    layer_list.move(to_s_idx, -3)
+            if self.from_e_points_layer in layer_list:
+                from_e_idx = layer_list.index(self.from_e_points_layer)
+                if from_e_idx != len(layer_list) - 4:
+                    layer_list.move(from_e_idx, -4)
 
     def estimate(self, image: np.ndarray):
         from_i, to_i = bbox_around_points(self.point_triangle)
@@ -268,7 +269,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         if not self.move_mutex.tryLock():
             return
         try:
-            if self.image.layer is None or self.anchor_points.layer is None:
+            if self.image.layer is None or self.anchor_points is None:
                 return
             if layer.mode != Mode.ADD:
                 return
@@ -310,20 +311,26 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.move_mutex.unlock()
 
     def set_callbacks(self):
-        if self.anchor_points.layer is None:
+        if self.anchor_points is None:
             return
-        self.anchor_points.layer.events.data.connect(self.data_event)
-        self.anchor_points.layer.bind_key("Shift", overwrite=True)(self.shift_pressed)
-        self.anchor_points.layer.bind_key("Control", overwrite=True)(self.ctrl_pressed)
-        self.anchor_points.layer.bind_key("Control-Shift", overwrite=True)(self.ctrl_shift_pressed)
-        self.anchor_points.layer.bind_key("Shift-Control", overwrite=True)(self.shift_ctrl_pressed)
-        self.anchor_points.layer.bind_key("Escape", overwrite=True)(self.esc_callback)
-        if self.on_double_click not in self.anchor_points.layer.mouse_double_click_callbacks:
-            self.anchor_points.layer.mouse_double_click_callbacks.append(self.on_double_click)
-        if self.on_mouse_move not in self.anchor_points.layer.mouse_move_callbacks:
-            self.anchor_points.layer.mouse_move_callbacks.append(self.on_mouse_move)
-        if self.on_right_click not in self.anchor_points.layer.mouse_drag_callbacks:
-            self.anchor_points.layer.mouse_drag_callbacks.insert(0, self.on_right_click)
+        self.anchor_points.events.data.connect(self.data_event)
+        self.anchor_points.events.mode.connect(self.add_mode_only)
+        self.anchor_points.bind_key("Shift", overwrite=True)(self.shift_pressed)
+        self.anchor_points.bind_key("Control", overwrite=True)(self.ctrl_pressed)
+        self.anchor_points.bind_key("Control-Shift", overwrite=True)(self.ctrl_shift_pressed)
+        self.anchor_points.bind_key("Shift-Control", overwrite=True)(self.shift_ctrl_pressed)
+        self.anchor_points.bind_key("Escape", overwrite=True)(self.esc_callback)
+        if self.on_double_click not in self.anchor_points.mouse_double_click_callbacks:
+            self.anchor_points.mouse_double_click_callbacks.append(self.on_double_click)
+        if self.on_mouse_move not in self.anchor_points.mouse_move_callbacks:
+            self.anchor_points.mouse_move_callbacks.append(self.on_mouse_move)
+        if self.on_right_click not in self.anchor_points.mouse_drag_callbacks:
+            self.anchor_points.mouse_drag_callbacks.insert(0, self.on_right_click)
+
+    def add_mode_only(self, event):
+        if event.mode not in ["add", "pan_zoom"]:
+            warnings.warn("Cannot change mode to %s: only 'add' and 'pan_zoom' mode is allowed" % event.mode)
+            event.source.mode = "add"
 
     def set_image(self):
         image_layer: Image = self.image.layer
@@ -349,25 +356,33 @@ class MinimalContourWidget(WidgetWithLayerList):
         self._img = image
 
     def data_event(self, event):
-        if event.source != self.anchor_points.layer or len(self.anchor_points.layer.data) == 0:
+        if event.source != self.anchor_points:
             return
         if self.remove_last_anchor:
-            with self.anchor_points.layer.events.data.blocker():
-                self.anchor_points.layer.data = self.anchor_points.layer.data[:-1]
+            with self.anchor_points.events.data.blocker():
+                self.anchor_points.data = self.anchor_points.data[:-1]
                 self.remove_last_anchor = False
                 return
-        anchor_data = self.anchor_points.layer.data
+        anchor_data = self.anchor_points.data
+        if len(anchor_data) < self.prev_n_anchor_points:
+            with self.anchor_points.events.data.blocker():
+                self.clear_all()
+            warnings.warn("Cannot delete a single point. Cleared all anchor points")
+            return
+        self.prev_n_anchor_points = len(anchor_data)
+        if len(anchor_data) == 0:
+            return
         anchor_data[-1] = np.clip(anchor_data[-1], 0, self._img.shape[:2])
         if len(anchor_data) > 1 and np.all(np.round(anchor_data[-1]) == np.round(anchor_data[-2])):
-            with self.anchor_points.layer.events.data.blocker():
-                self.anchor_points.layer.data = self.anchor_points.layer.data[:-1]
-            self.anchor_points.layer.refresh()
+            with self.anchor_points.events.data.blocker():
+                self.anchor_points.data = self.anchor_points.data[:-1]
+            self.anchor_points.refresh()
             return
-        self.anchor_points.layer.refresh()
+        self.anchor_points.refresh()
         if self.shift_down:
             self.last_added_with_shift = True
-            with self.anchor_points.layer.events.data.blocker():
-                self.anchor_points.layer.data = np.roll(self.anchor_points.layer.data, 1, 0)
+            with self.anchor_points.events.data.blocker():
+                self.anchor_points.data = np.roll(self.anchor_points.data, 1, 0)
             if len(self.to_s_points_layer.data):
                 self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
                 self.last_segment_length = len(self.to_s_points_layer.data)
@@ -377,8 +392,8 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self.last_added_with_shift = False
                 self.last_segment_length = len(self.from_e_points_layer.data)
 
-        self.point_triangle[-1] = self.anchor_points.layer.data[0]
-        self.point_triangle[0] = self.anchor_points.layer.data[-1]
+        self.point_triangle[-1] = self.anchor_points.data[0]
+        self.point_triangle[0] = self.anchor_points.data[-1]
 
     def on_double_click(self, *args):
         if self.shift_down and len(self.from_e_points_layer.data):
@@ -387,21 +402,19 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
         self.points_to_mask()
 
-
-
     def on_right_click(self, layer, event: Event):
         if event.button == 2 and layer.mode == Mode.ADD:
             self.remove_last_anchor = True
             if self.last_segment_length is not None:
-                with self.anchor_points.layer.events.data.blocker():
+                with self.anchor_points.events.data.blocker():
                     if self.last_added_with_shift:
-                        self.anchor_points.layer.data = self.anchor_points.layer.data[1:]
+                        self.anchor_points.data = self.anchor_points.data[1:]
                         self.output.data = self.output.data[self.last_segment_length:]
                     else:
-                        self.anchor_points.layer.data = self.anchor_points.layer.data[:-1]
+                        self.anchor_points.data = self.anchor_points.data[:-1]
                         self.output.data = self.output.data[:-self.last_segment_length]
-                self.point_triangle[-1] = self.anchor_points.layer.data[0]
-                self.point_triangle[0] = self.anchor_points.layer.data[-1]
+                self.point_triangle[-1] = self.anchor_points.data[0]
+                self.point_triangle[0] = self.anchor_points.data[-1]
                 self.last_segment_length = None
 
     class DrawWorker(QObject):
