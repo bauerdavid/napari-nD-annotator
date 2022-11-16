@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from copy import deepcopy, copy
 from itertools import cycle
 from typing import Dict, Optional, Union, Tuple
+from packaging import version
 import napari.layers
 import pandas as pd
 from napari.layers import Layer
@@ -195,7 +196,7 @@ class BoundingBoxLayer(Layer):
                 default="black",
             )
             self.current_properties = {}
-        if napari.__version__ == "0.4.15":
+        if version.parse(napari.__version__) == version.parse("0.4.15"):
             self._text = TextManager._from_layer(
                 text=text,
                 n_text=self.nbounding_boxes,
@@ -258,9 +259,12 @@ class BoundingBoxLayer(Layer):
                 ),
                 RuntimeWarning,
             )
-
-        if self.text.values is not None:
-            self.refresh_text()
+        if version.parse(napari.__version__) == version.parse("0.4.15"):
+            if self.text.values is not None:
+                self.refresh_text()
+        else:
+            self.text.refresh(self.features)
+            self.events.features()
         self.events.properties()
 
     @property
@@ -486,7 +490,7 @@ class BoundingBoxLayer(Layer):
 
     @text.setter
     def text(self, text):
-        if napari.__version__ == "0.4.15":
+        if version.parse(napari.__version__) == version.parse("0.4.15"):
             self._text._update_from_layer(
                 text=text,
                 n_text=self.nbounding_boxes,
@@ -979,7 +983,10 @@ class BoundingBoxLayer(Layer):
 
         This is generally used if the properties were updated without changing the data
         """
-        self.text.refresh_text(self.properties)
+        if version.parse(napari.__version__) == version.parse("0.4.15"):
+            self.text.refresh_text(self.properties)
+        else:
+            self.text.refresh(self.features)
 
     def _is_color_mapped(self, color):
         """determines if the new color argument is for directly setting or cycle/colormap"""
@@ -1885,6 +1892,8 @@ class BoundingBoxLayer(Layer):
         text : (N x 1) np.ndarray
             Array of text strings for the N text elements in view
         """
+        if version.parse(napari.__version__) > version.parse("0.4.15"):
+            self.text.string._apply(self.features)
         return self.text.view_text(self._indices_view)
 
     @property

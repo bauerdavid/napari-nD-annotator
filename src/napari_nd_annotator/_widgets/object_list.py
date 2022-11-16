@@ -308,11 +308,13 @@ class ObjectListWidget(QListWidget):
             # self._bounding_box_layer.events.connect(self.on_layer_event)
             if "label" not in self._bounding_box_layer.current_properties:
                 self._bounding_box_layer.current_properties |= {"label": 0}
-            self._bounding_box_layer.text = {
-                "text": "{label:d}",
-                "size": 10,
-                "color": "green"
-            }
+            self._bounding_box_layer.refresh_text()
+            if len(self._bounding_box_layer.data) > 0:
+                self._bounding_box_layer.text = {
+                    "text": "{label:d}",
+                    "size": 10,
+                    "color": "green"
+                }
         self.update_items()
 
     @property
@@ -439,29 +441,32 @@ class ObjectListWidget(QListWidget):
             self.bounding_box_layer.mode = mode
 
     def bounding_box_change(self, layer, event):
-        previous_data = np.asarray([bb.copy() for bb in self.bounding_box_layer.data])
+        previous_data = np.asarray([bb.copy() for bb in layer.data])
         self._mouse_down = True
         yield
         if len(layer.data)>len(previous_data):
             self.bounding_box_layer.features["label"].iat[-1] = self.next_index()
-            text = dict(self.bounding_box_layer.text)
+            text = dict(layer.text)
             if napari.__version__ == "0.4.15":
                 del text["values"]
             text["text"] = "{label:d}"
-            self.bounding_box_layer.text = text
+            layer.text = text
         while event.type == "mouse_move":
             yield
         self._mouse_down = False
-        new_data = np.asarray(self.bounding_box_layer.data)
-        im_size = self.image_layer.data.shape
-        if self.image_layer.rgb:
-            im_size = im_size[:-1]
+        new_data = np.asarray(layer.data)
+        if self.image_layer:
+            im_size = self.image_layer.data.shape
+            if self.image_layer.rgb:
+                im_size = im_size[:-1]
+        else:
+            im_size = (np.inf,)*new_data.shape[-1]
         if len(new_data) > 0 and (np.any(np.all(new_data > im_size, 1))\
                 or np.any(np.all(new_data < 0, 1))):
-            self.bounding_box_layer.data = previous_data
-        if np.shape(previous_data) != np.shape(self.bounding_box_layer.data):
+            layer.data = previous_data
+        if np.shape(previous_data) != np.shape(layer.data):
             if len(new_data) > len(previous_data):
-                self.bounding_box_layer.data = [np.clip(data, 0, np.asarray(im_size) - 1) for data in new_data]
+                layer.data = [np.clip(data, 0, np.asarray(im_size) - 1) for data in new_data]
         self.update_items()
         if self.projections_widget is not None:
             for p in self.projections_widget.projections:
@@ -571,6 +576,8 @@ class ListWidgetBB(WidgetWithLayerList):
         self.list_widget.bounding_box_layer = self.bounding_box.layer
         if "label" in self.bounding_box.layer.features:
             self.reset_index(max(self.bounding_box.layer.features["label"]) + 1)
+        else:
+            self.reset_index()
 
     def mask_index_change(self, index):
         if self.list_widget is not None and self.list_widget.mask_layer is not self.labels.layer:
@@ -674,7 +681,6 @@ class ListWidgetBB(WidgetWithLayerList):
         bb_layer.features["label"] = ids
         self.viewer.add_layer(bb_layer)
         self.bounding_box.layer = bb_layer
-
 
     def reset_index(self, starting_index=1):
         if self.list_widget is not None:
