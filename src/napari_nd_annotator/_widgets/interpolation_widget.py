@@ -85,6 +85,10 @@ class InterpolationWorker(QObject):
                 mask = mask.astype(np.uint8)
                 if mask.max() == 0:
                     continue
+                next_layer_slice = layer_slice.copy()
+                next_layer_slice[dimension] = i + 1
+                if i + 1 >= data.shape[dimension] or (data[tuple(next_layer_slice)] == self.selected_label).max() > 0:
+                    continue
                 cnt = contour_cv2_mask_uniform(mask, n_contour_points)
                 centroid = cnt.mean(0)
                 start_index = np.argmin(np.abs(np.arctan2(*(cnt - centroid).T)))
