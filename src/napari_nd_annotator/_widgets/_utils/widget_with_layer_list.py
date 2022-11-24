@@ -97,20 +97,24 @@ class WidgetWithLayerList(QWidget):
                 if self.combobox.count() == len(filtered) and \
                         all((layer.name == self.combobox.itemText(i+1) for i, layer in enumerate(filtered))):
                     return
+                self.combobox.blockSignals(True)
                 self.combobox.clear()
                 self.combobox.addItem("[%s]" % self.display_name)
                 for layer in filtered:
                     self.combobox.addItem(layer.name)
                     if layer.name == self._layer_name:
                         self.combobox.setCurrentText(layer.name)
+                self.combobox.blockSignals(False)
                 if self.combobox.count() > 1 and (self.combobox.currentIndex() == 0 or self.layer not in filtered):
                     self.layer = filtered[0]
                 elif self.combobox.count() == 1:
                     self.layer = None
             elif type_ == "name":
+                self.combobox.blockSignals(True)
                 for i in range(len(filtered)):
                     if self.combobox.itemText(i+1) != filtered[i].name:
                         if self.combobox.itemText(i+1) == self._layer_name:
                             self._layer_name = filtered[i].name
                         self.combobox.setItemText(i+1, filtered[i].name)
                         break
+                self.combobox.blockSignals(False)
