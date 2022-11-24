@@ -6,7 +6,6 @@ import cv2
 from napari import Viewer
 from napari.layers import Labels
 from scipy.interpolate import interp1d
-from scipy.ndimage.measurements import find_objects
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton, QComboBox
 from qtpy.QtCore import QThread, QObject, Signal
 

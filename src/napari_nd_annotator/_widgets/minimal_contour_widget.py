@@ -174,7 +174,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.output.size = size
         self.output.selected_data = {}
         self.output.current_size = size
-        self.viewer.window.qt_viewer.canvas.native.setFocus()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer.window.qt_viewer.canvas.native.setFocus()
 
     def shift_pressed(self, _):
         self.shift_down = True
@@ -217,7 +219,9 @@ class MinimalContourWidget(WidgetWithLayerList):
 
     def clear_all(self):
         self.output.data = np.empty((0, 2), dtype=self.output.data.dtype)
-        self.anchor_points.data = np.empty((0, 2), dtype=self.output.data.dtype)
+        with self.anchor_points.events.data.blocker():
+            self.anchor_points.data = np.empty((0, 2), dtype=self.output.data.dtype)
+        self.prev_n_anchor_points = 0
         self.from_e_points_layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
         self.to_s_points_layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
         self.point_triangle[:] = -1
@@ -342,7 +346,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         if not image_layer.visible:
             image_layer.set_view_slice()
         self.autoincrease_label_id_checkbox.setChecked(image_layer.ndim == 2)
-        image = image_layer._data_view.astype(float)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            image = image_layer._data_view.astype(float)
         image = gaussian(image, channel_axis=2 if image.ndim == 3 else None)
         if image.ndim == 2:
             image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
@@ -432,7 +438,9 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.done.emit(mask)
 
     def set_mask(self, mask):
-        self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
         self.labels.layer.events.data()
         self.labels.layer.refresh()
         self.clear_all()
@@ -449,5 +457,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.labels.layer.set_view_slice()
         self.progress_dialog.setVisible(True)
         self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(self.viewer.dims.displayed)] for p in self.output.data])
-        self.draw_worker.mask_shape = self.labels.layer._data_view.shape
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.draw_worker.mask_shape = self.labels.layer._data_view.shape
         self.draw_thread.start()

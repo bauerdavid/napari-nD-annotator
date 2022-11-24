@@ -123,7 +123,9 @@ class ImageProcessingWidget(QWidget):
         super().__init__()
         self.viewer = viewer
         self.progress_dialog = ProgressWidget(message="Calculating feature, please wait...")
-        viewer.window.qt_viewer.window().destroyed.connect(lambda: self.progress_dialog.close())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            viewer.window.qt_viewer.window().destroyed.connect(lambda: self.progress_dialog.close())
         self.script_thread = QThread()
         self.script_worker = ScriptWorker()
         self.script_worker.moveToThread(self.script_thread)
