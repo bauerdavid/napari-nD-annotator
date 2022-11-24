@@ -273,7 +273,7 @@ class MinimalContourWidget(WidgetWithLayerList):
                 return
             if layer.mode != Mode.ADD:
                 return
-            self.point_triangle[1] = [event.position[i] for i in range(len(event.position)) if i in event.dims_displayed]
+            self.point_triangle[1] = list(self.anchor_points.world_to_data([event.position[i] for i in range(len(event.position)) if i in event.dims_displayed]))
             if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= self._img.shape[:2]):
                 return
             if not self.ctrl_down:
@@ -354,6 +354,10 @@ class MinimalContourWidget(WidgetWithLayerList):
         else:
             self.calculator.set_image(image)
         self._img = image
+        self.anchor_points.translate = image_layer.translate[list(self.viewer.dims.displayed)]
+        self.from_e_points_layer.translate = image_layer.translate[list(self.viewer.dims.displayed)]
+        self.to_s_points_layer.translate = image_layer.translate[list(self.viewer.dims.displayed)]
+        self.output.translate = image_layer.translate[list(self.viewer.dims.displayed)]
 
     def data_event(self, event):
         if event.source != self.anchor_points:
@@ -444,6 +448,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         if not self.labels.layer.visible:
             self.labels.layer.set_view_slice()
         self.progress_dialog.setVisible(True)
-        self.draw_worker.contour = self.output.data
-        self.draw_worker.mask_shape = self._img.shape[:2]
+        self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(self.viewer.dims.displayed)] for p in self.output.data])
+        self.draw_worker.mask_shape = self.labels.layer._data_view.shape
         self.draw_thread.start()
