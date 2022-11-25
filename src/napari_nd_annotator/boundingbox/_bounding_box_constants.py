@@ -40,6 +40,11 @@ class ColorMode(StringEnum):
     COLORMAP = auto()
 
 
+class SizeMode(StringEnum):
+    AVERAGE = auto()
+    CONSTANT = auto()
+
+
 class Box:
     """Box: Constants associated with the vertices of the interaction box"""
 

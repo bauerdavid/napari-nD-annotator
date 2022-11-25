@@ -5,7 +5,8 @@ import napari
 from napari._qt.widgets.qt_color_swatch import QColorSwatchEdit
 from napari.utils.action_manager import action_manager
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QSlider, QButtonGroup, QGridLayout, QLabel, QHBoxLayout, QCheckBox
+from qtpy.QtWidgets import QButtonGroup, QGridLayout, QLabel, QHBoxLayout, QCheckBox, QComboBox
+from napari._qt.widgets._slider_compat import QDoubleSlider, QSlider
 from napari._qt.layer_controls.qt_layer_controls_base import QtLayerControls
 import numpy as np
 from napari._qt.utils import qt_signals_blocked, disable_with_opacity
@@ -66,6 +67,9 @@ class QtBoundingBoxControls(QtLayerControls):
         super().__init__(layer)
 
         self.layer.events.mode.connect(self._on_mode_change)
+        self.layer.events.size_mode.connect(self._on_size_mode_change)
+        self.layer.events.size_multiplier.connect(self._on_size_multiplier_change)
+        self.layer.events.size_constant.connect(self._on_size_constant_change)
         self.layer.events.edge_width.connect(self._on_edge_width_change)
         self.layer.events.current_edge_color.connect(
             self._on_current_edge_color_change
@@ -194,6 +198,33 @@ class QtBoundingBoxControls(QtLayerControls):
         button_row.setContentsMargins(0, 0, 0, 5)
         button_row.setSpacing(4)
 
+        bb_size_mode_combobox = QComboBox()
+        bb_size_mode_combobox.addItem("average")
+        bb_size_mode_combobox.addItem("constant")
+        bb_size_mode_combobox.activated[str].connect(self.changeSizeMode)
+        self.bb_size_mode_combobox = bb_size_mode_combobox
+
+        bb_size_mult_slider = QDoubleSlider(Qt.Horizontal, parent=self)
+        bb_size_mult_slider.setFocusPolicy(Qt.NoFocus)
+        bb_size_mult_slider.setMinimum(0.1)
+        bb_size_mult_slider.setMaximum(10)
+        bb_size_mult_slider.setSingleStep(0.1)
+        bb_size_mult_slider.valueChanged.connect(self.changeSizeMultiplier)
+        self.bb_size_mult_slider = bb_size_mult_slider
+        self.bb_size_mult_label = QLabel(trans._('size multiplier:'))
+        self._on_size_multiplier_change()
+
+        bb_size_const_slider = QSlider(Qt.Horizontal)
+        bb_size_const_slider.setFocusPolicy(Qt.NoFocus)
+        bb_size_const_slider.setMinimum(1)
+        bb_size_const_slider.setMaximum(100)
+        bb_size_const_slider.setSingleStep(1)
+        bb_size_const_slider.valueChanged.connect(self.changeSizeConst)
+        self.bb_size_const_slider = bb_size_const_slider
+        self.bb_size_const_label = QLabel(trans._('size constant: '))
+        self._on_size_constant_change()
+        self._on_size_mode_change()
+
 
         self.faceColorEdit = QColorSwatchEdit(
             initial_color=self.layer.current_face_color,
@@ -232,17 +263,23 @@ class QtBoundingBoxControls(QtLayerControls):
             self.grid_layout.addWidget(self.widthSlider, 2, 1)
             self.grid_layout.addWidget(QLabel(trans._('blending:')), 3, 0)
             self.grid_layout.addWidget(self.blendComboBox, 3, 1)
-            self.grid_layout.addWidget(QLabel(trans._('face color:')), 4, 0)
-            self.grid_layout.addWidget(self.faceColorEdit, 4, 1)
-            self.grid_layout.addWidget(QLabel(trans._('edge color:')), 5, 0)
-            self.grid_layout.addWidget(self.edgeColorEdit, 5, 1)
-            self.grid_layout.addWidget(QLabel(trans._('display text:')), 6, 0)
-            self.grid_layout.addWidget(self.textDispCheckBox, 6, 1)
-            self.grid_layout.addWidget(QLabel(trans._('text color:')), 7, 0)
-            self.grid_layout.addWidget(self.textColorEdit, 7, 1)
-            self.grid_layout.addWidget(QLabel(trans._('text size:')), 8, 0)
-            self.grid_layout.addWidget(self.textSlider, 8, 1)
-            self.grid_layout.setRowStretch(9, 1)
+            self.grid_layout.addWidget(QLabel(trans._('size mode:')), 4, 0)
+            self.grid_layout.addWidget(self.bb_size_mode_combobox, 4, 1)
+            self.grid_layout.addWidget(self.bb_size_mult_label, 5, 0)
+            self.grid_layout.addWidget(self.bb_size_mult_slider, 5, 1)
+            self.grid_layout.addWidget(self.bb_size_const_label, 6, 0)
+            self.grid_layout.addWidget(self.bb_size_const_slider, 6, 1)
+            self.grid_layout.addWidget(QLabel(trans._('face color:')), 7, 0)
+            self.grid_layout.addWidget(self.faceColorEdit, 7, 1)
+            self.grid_layout.addWidget(QLabel(trans._('edge color:')), 8, 0)
+            self.grid_layout.addWidget(self.edgeColorEdit, 8, 1)
+            self.grid_layout.addWidget(QLabel(trans._('display text:')), 9, 0)
+            self.grid_layout.addWidget(self.textDispCheckBox, 9, 1)
+            self.grid_layout.addWidget(QLabel(trans._('text color:')), 10, 0)
+            self.grid_layout.addWidget(self.textColorEdit, 10, 1)
+            self.grid_layout.addWidget(QLabel(trans._('text size:')), 11, 0)
+            self.grid_layout.addWidget(self.textSlider, 11, 1)
+            self.grid_layout.setRowStretch(11, 1)
             self.grid_layout.setColumnStretch(1, 1)
             self.grid_layout.setSpacing(4)
         else:
@@ -250,6 +287,9 @@ class QtBoundingBoxControls(QtLayerControls):
             self.layout().addRow(trans._('opacity:'), self.opacitySlider)
             self.layout().addRow(trans._('edge width:'), self.widthSlider)
             self.layout().addRow(trans._('blending:'), self.blendComboBox)
+            self.layout().addRow(trans._('size mode:'), self.bb_size_mode_combobox)
+            self.layout().addRow(self.bb_size_mult_label, self.bb_size_mult_slider)
+            self.layout().addRow(self.bb_size_const_label, self.bb_size_const_slider)
             self.layout().addRow(trans._('face color:'), self.faceColorEdit)
             self.layout().addRow(trans._('edge color:'), self.edgeColorEdit)
             self.layout().addRow(trans._('display text:'), self.textDispCheckBox)
@@ -344,6 +384,15 @@ class QtBoundingBoxControls(QtLayerControls):
         """
         self.layer.text.size = float(value) / 2
 
+    def changeSizeMode(self, value=None):
+        self.layer.size_mode = value
+
+    def changeSizeMultiplier(self, value):
+        self.layer.size_multiplier = value
+
+    def changeSizeConst(self, value):
+        self.layer.size_constant = value
+
     def change_text_visibility(self, state):
         """Toggle the visibiltiy of the text.
 
@@ -431,6 +480,28 @@ class QtBoundingBoxControls(QtLayerControls):
             ],
             self.layer.editable,
         )
+
+    def _on_size_mode_change(self, event=None):
+        size_mode = self.layer.size_mode
+        self.bb_size_mode_combobox.setCurrentText(size_mode)
+        if size_mode == "average":
+            self.bb_size_const_label.setVisible(False)
+            self.bb_size_const_slider.setVisible(False)
+            self.bb_size_mult_label.setVisible(True)
+            self.bb_size_mult_slider.setVisible(True)
+        elif size_mode == "constant":
+            self.bb_size_const_label.setVisible(True)
+            self.bb_size_const_slider.setVisible(True)
+            self.bb_size_mult_label.setVisible(False)
+            self.bb_size_mult_slider.setVisible(False)
+
+    def _on_size_multiplier_change(self, event=None):
+        with self.layer.events.size_multiplier.blocker():
+            self.bb_size_mult_slider.setValue(self.layer.size_multiplier)
+
+    def _on_size_constant_change(self, event=None):
+        with self.layer.events.size_multiplier.blocker():
+            self.bb_size_const_slider.setValue(self.layer.size_constant)
 
     def close(self):
         """Disconnect events when widget is closing."""

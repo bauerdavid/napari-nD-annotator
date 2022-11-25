@@ -22,7 +22,7 @@ from napari.utils.misc import ensure_iterable
 from vispy.color import get_color_names
 
 
-from ._bounding_box_constants import ColorMode, BACKSPACE, Box
+from ._bounding_box_constants import ColorMode, BACKSPACE, Box, SizeMode
 from ._bounding_box_list import BoundingBoxList
 from .bounding_box import BoundingBox
 from ._bounding_box_mouse_bindings import select, highlight, add_bounding_box
@@ -109,6 +109,9 @@ class BoundingBoxLayer(Layer):
             current_face_color=Event,
             current_properties=Event,
             highlight=Event,
+            size_mode=Event,
+            size_multiplier=Event,
+            size_constant=Event
         )
         self._allow_thumbnail_update = True
 
@@ -160,6 +163,11 @@ class BoundingBoxLayer(Layer):
         self._mode = None
         self.mode = Mode.PAN_ZOOM
         self._status = self.mode
+
+        self._size_mode = None
+        self.size_mode = SizeMode.AVERAGE
+        self._size_multiplier = 1.
+        self._size_constant = 20.
 
         self._init_bounding_boxes(
             data,
@@ -771,6 +779,52 @@ class BoundingBoxLayer(Layer):
                 self._finish_drawing()
             else:
                 self.refresh()
+
+    @property
+    def size_mode(self):
+        return str(self._size_mode)
+
+    @size_mode.setter
+    def size_mode(self, size_mode):
+        size_mode = SizeMode(size_mode)
+
+        if size_mode == self._size_mode:
+            return
+
+        if size_mode not in [SizeMode.AVERAGE, SizeMode.CONSTANT]:
+            raise ValueError(
+                trans._(
+                    "SizeMode not recognized",
+                    deferred=True,
+                )
+            )
+
+        self._size_mode = size_mode
+
+        self.events.size_mode(size_mode=size_mode)
+
+    @property
+    def size_multiplier(self):
+        return self._size_multiplier
+
+    @size_multiplier.setter
+    def size_multiplier(self, size_multiplier):
+        if size_multiplier <= 0:
+            raise ValueError("size multiplier should be positive, got %f" % size_multiplier)
+        self._size_multiplier = size_multiplier
+        self.events.size_multiplier(value=self._size_multiplier)
+
+    @property
+    def size_constant(self):
+        return self._size_constant
+
+    @size_constant.setter
+    def size_constant(self, size_constant):
+        if size_constant <= 0:
+            raise ValueError("size const should be positive, got %f" % size_constant)
+        self._size_constant = size_constant
+        self.events.size_constant(value=self._size_constant)
+
 
     @property
     def z_index(self):

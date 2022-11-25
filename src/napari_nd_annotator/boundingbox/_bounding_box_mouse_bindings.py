@@ -100,7 +100,7 @@ def add_bounding_box(layer, event):
 
 
 def _add_bounding_box(layer, event, data):
-    """Helper function for adding a a line, rectangle or ellipse."""
+    """Helper function for adding a bounding box."""
     # on press
     # Start drawing rectangle / ellipse / line
     layer.add(data)
@@ -112,6 +112,7 @@ def _add_bounding_box(layer, event, data):
 
     data = layer.data[layer.nbounding_boxes - 1]
     # on move
+    const_set = False
     while event.type == 'mouse_move':
         # Drag any selected bounding boxes
         coordinates = layer.world_to_data(event.position)
@@ -122,8 +123,13 @@ def _add_bounding_box(layer, event, data):
         visible_size = size[layer._dims_displayed]
         max[layer._dims_displayed] = np.nan
         min[layer._dims_displayed] = np.nan
-        data[:] = np.where(data == max, coordinates+visible_size.mean()/2, data)
-        data[:] = np.where(data == min, coordinates-visible_size.mean()/2, data)
+        if layer.size_mode == "average":
+            data[:] = np.where(data == max, coordinates+visible_size.mean()/2*layer.size_multiplier, data)
+            data[:] = np.where(data == min, coordinates-visible_size.mean()/2*layer.size_multiplier, data)
+        elif not const_set and layer.size_mode == "constant":
+            data[:] = np.where(data == max, np.asarray(coordinates) + layer.size_constant/2, data)
+            data[:] = np.where(data == min, np.asarray(coordinates) - layer.size_constant/2, data)
+            const_set = True
         yield
 
     # on release
