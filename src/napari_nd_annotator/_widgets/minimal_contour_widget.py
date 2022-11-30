@@ -1,20 +1,21 @@
-import time
 import warnings
 
 import napari
 import skimage.draw
 from napari.utils.events import Event
-from qtpy.QtWidgets import QSpinBox, QVBoxLayout, QCheckBox, QLabel, QComboBox
+from qtpy.QtWidgets import QWidget, QSpinBox, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QComboBox
 from qtpy.QtCore import QMutex, QThread, QObject, Signal
 
 from ._utils.progress_widget import ProgressWidget
 from ._utils.widget_with_layer_list import WidgetWithLayerList
+from ._utils.blur_slider import BlurSlider
 from .image_processing_widget import ImageProcessingWidget
 from ..minimal_contour import MinimalContourCalculator
 import numpy as np
-from napari.layers import Points, Image, Labels
+from napari.layers import Image, Labels
 from napari.layers.points._points_constants import Mode
 from skimage.filters import gaussian
+import scipy.fft
 
 GRADIENT_BASED = 0
 INTENSITY_BASED = 2
@@ -77,10 +78,37 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.calculator.set_param(self.param_spinbox.value())
         layout.addWidget(self.param_spinbox)
 
-        layout.addWidget(QLabel("Increment label id"))
-        self.autoincrease_label_id_checkbox = QCheckBox()
+        self.autoincrease_label_id_checkbox = QCheckBox("Increment label id")
         self.autoincrease_label_id_checkbox.setChecked(True)
         layout.addWidget(self.autoincrease_label_id_checkbox)
+
+        self.smooth_image_checkbox = QCheckBox("Smooth image")
+        self.smooth_image_checkbox.setChecked(True)
+        self.smooth_image_checkbox.clicked.connect(self.set_use_smoothing)
+        layout.addWidget(self.smooth_image_checkbox)
+
+        smooth_image_widget = QWidget()
+        smooth_image_layout = QHBoxLayout()
+        smooth_image_layout.addWidget(QLabel("Smoothness"))
+        self.smooth_image_slider = BlurSlider(self.viewer, self.image.layer, lambda img, val: gaussian(img, channel_axis=2 if img.ndim == 3 else None, sigma=val, preserve_range=True).astype(img.dtype), parent=self)
+        self.smooth_image_slider.setVisible(self.smooth_image_checkbox.isChecked())
+        self.smooth_image_slider.sliderReleased.connect(self.set_image)
+        smooth_image_layout.addWidget(self.smooth_image_slider)
+        smooth_image_widget.setLayout(smooth_image_layout)
+        self.smooth_image_widget = smooth_image_widget
+        layout.addWidget(smooth_image_widget)
+
+        smooth_contour_layout = QHBoxLayout()
+        self.smooth_contour_checkbox = QCheckBox("Smooth contour")
+        self.smooth_contour_checkbox.clicked.connect(lambda checked: self.smooth_contour_spinbox.setVisible(checked))
+        self.smooth_contour_checkbox.setChecked(True)
+        self.smooth_contour_spinbox = QSpinBox()
+        self.smooth_contour_spinbox.setMinimum(0)
+        self.smooth_contour_spinbox.setMaximum(100)
+        self.smooth_contour_spinbox.setValue(10)
+        smooth_contour_layout.addWidget(self.smooth_contour_checkbox)
+        smooth_contour_layout.addWidget(self.smooth_contour_spinbox)
+        layout.addLayout(smooth_contour_layout)
 
         layout.addWidget(QLabel("Point size"))
         self.point_size_spinbox = QSpinBox()
@@ -91,41 +119,35 @@ class MinimalContourWidget(WidgetWithLayerList):
         layout.addStretch()
         self.setLayout(layout)
 
-        self.set_filter_func()
-
-        viewer.layers.events.connect(self.invalidate_filter)
-
         def change_layer_callback(num):
             def change_layer(_):
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    if viewer.window.qt_viewer.layers.model().hasIndex(num - 1, 0):
-                        index = viewer.window.qt_viewer.layers.model().index(num - 1, 0)
-                        layer_name = viewer.window.qt_viewer.layers.model().data(index)
-                        viewer.layers.selection.select_only(viewer.layers[layer_name])
+                viewer.layers.selection.select_only(viewer.layers[num])
             return change_layer
         for i in range(1, 10):
             viewer.bind_key("Control-%d" % i, overwrite=True)(change_layer_callback(i))
         self.from_e_points_layer = viewer.add_points(
             ndim=2,
-            name="from E [DO NOT TOUCH] <hidden>",
+            name="<locked> from E",
             size=self.point_size_spinbox.value(),
             face_color="red",
             edge_color="red"
         )
+        self.from_e_points_layer.editable = False
         self.to_s_points_layer = viewer.add_points(
             ndim=2,
-            name="to S [DO NOT TOUCH] <hidden>",
+            name="<locked> to S",
             size=self.point_size_spinbox.value(),
             face_color="gray",
             edge_color="gray"
         )
+        self.to_s_points_layer.editable = False
         self.output = viewer.add_points(
             ndim=2,
-            name="temp [DO NOT TOUCH] <hidden>",
-            size=self.point_size_spinbox.value()
+            name="<locked> temp",
+            size=self.point_size_spinbox.value(),
         )
-        self.anchor_points = self.viewer.add_points(ndim=2, name="Anchors [DO NOT TOUCH]", symbol="x")
+        self.output.editable = False
+        self.anchor_points = self.viewer.add_points(ndim=2, name="Anchors [DO NOT ALTER]", symbol="x")
         self.anchor_points.mode = "add"
         self.shift_down = False
         self.ctrl_down = False
@@ -133,9 +155,14 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.set_image)
         self.viewer.layers.events.connect(self.move_temp_to_top)
+        self.viewer.layers.selection.events.connect(self.lock_layer)
         self.set_image()
         self.set_callbacks()
         self.move_temp_to_top()
+
+    def set_use_smoothing(self, use_smoothing):
+        self.smooth_image_widget.setVisible(use_smoothing)
+        self.set_image()
 
     def set_features(self, data):
         if self.test_script:
@@ -144,23 +171,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         if data is None:
             return
         self.calculator.set_image(data)
-
-    def invalidate_filter(self, e):
-        # if e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded"]:
-        #     return
-
-        self.set_filter_func()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer.window.qt_viewer.layers.model().invalidateFilter()
-            # self.set_filter_func()
-
-    def set_filter_func(self):
-        def filter_func(row, parent):
-            return row < len(self.viewer.layers) and "<hidden>" not in self.viewer.layers[row].name
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer.window.qt_viewer.layers.model().filterAcceptsRow = filter_func
 
     def change_point_size(self, size):
         self.to_s_points_layer.size = size
@@ -177,6 +187,11 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.canvas.native.setFocus()
+
+    def lock_layer(self, event):
+        for layer in event.source:
+            if layer.name.startswith("<locked>"):
+                layer.editable = False
 
     def shift_pressed(self, _):
         self.shift_down = True
@@ -337,6 +352,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             event.source.mode = "add"
 
     def set_image(self):
+        print("set_image")
         image_layer: Image = self.image.layer
         if image_layer is None:
             self._img = None
@@ -349,7 +365,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             image = image_layer._data_view.astype(float)
-        image = gaussian(image, channel_axis=2 if image.ndim == 3 else None)
+        self.smooth_image_slider.image_layer = image_layer
+        if self.smooth_image_checkbox.isChecked():
+            image = self.smooth_image_slider.get_blurred_image()
         if image.ndim == 2:
             image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
         image = (image - image.min()) / (image.max() - image.min())
@@ -410,6 +428,8 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.output.data = np.concatenate([self.output.data, self.from_e_points_layer.data], 0)
         elif not self.shift_down and len(self.to_s_points_layer.data):
             self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
+        if self.smooth_contour_checkbox.isChecked():
+            self.output.data = self.smooth_fourier(self.output.data)
         self.points_to_mask()
 
     def on_right_click(self, layer, event: Event):
@@ -461,3 +481,11 @@ class MinimalContourWidget(WidgetWithLayerList):
             warnings.simplefilter("ignore")
             self.draw_worker.mask_shape = self.labels.layer._data_view.shape
         self.draw_thread.start()
+
+    def smooth_fourier(self, points):
+        coefficients=self.smooth_contour_spinbox.value()
+        center = points.mean(0)
+        points = points - center
+        tformed = scipy.fft.rfft(points, axis=0)
+        tformed[0] = 0
+        return scipy.fft.irfft(tformed[:coefficients], len(points), axis=0) + center
