@@ -101,9 +101,11 @@ void CEikonal::GetMaxAuxGrad()
 {
 	int ys = m_aux[0].ys, xs = m_aux[0].xs;
 	m_maxauxgrad = 0;
+	double minauxgrad = 1000000;
 #pragma omp parallel
     {
         double temp_max = 0;
+        double temp_min = 1000000;
 #pragma omp for schedule(dynamic, m_spacex)
         for(int yx =0; yx < xs*ys; yx++){
             int xx = yx % xs;
@@ -114,11 +116,13 @@ void CEikonal::GetMaxAuxGrad()
                 continue;
             double sq = m_aux[0][yy][xx]*m_aux[0][yy][xx]+m_aux[1][yy][xx]*m_aux[1][yy][xx];
             if(sq > temp_max) temp_max = sq;
+            if(sq < temp_min) temp_min = sq;
         }
 #pragma omp critical(maxauxgrad)
     if(temp_max > m_maxauxgrad) m_maxauxgrad = temp_max;
+    if(temp_min < minauxgrad) minauxgrad = temp_min;
     }
-	m_maxauxgrad = sqrt(m_maxauxgrad);
+	m_maxauxgrad = sqrt(m_maxauxgrad) - sqrt(minauxgrad);
 }
 
 void CEikonal::InitImageQuant0(SWorkImg<double> &img)
