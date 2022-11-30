@@ -53,6 +53,11 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.image.combobox.currentIndexChanged.connect(self.set_image)
         self.feature_inverted = False
         self.test_script = False
+
+        # Ctrl+Z handling
+        self.change_idx = dict()
+        self.prev_vals = dict()
+
         layout = QVBoxLayout()
 
         layout.addWidget(QLabel("Used feature"))
@@ -229,6 +234,19 @@ class MinimalContourWidget(WidgetWithLayerList):
         yield from ctrl_callback
         yield from ctrl_callback
 
+    def ctrl_z_callback(self, _):
+        print("ctrl z")
+        if self.labels.layer in self.change_idx:
+            idx = self.change_idx[self.labels.layer]
+            vals = self.prev_vals[self.labels.layer]
+            self.labels.layer.data[idx] = vals
+            self.labels.layer.events.data()
+            self.labels.layer.refresh()
+            del self.change_idx[self.labels.layer]
+            del self.prev_vals[self.labels.layer]
+        else:
+            warnings.warn("There's nothing to revert.")
+
     def esc_callback(self, _):
         self.clear_all()
 
@@ -339,6 +357,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.anchor_points.bind_key("Control-Shift", overwrite=True)(self.ctrl_shift_pressed)
         self.anchor_points.bind_key("Shift-Control", overwrite=True)(self.shift_ctrl_pressed)
         self.anchor_points.bind_key("Escape", overwrite=True)(self.esc_callback)
+        self.anchor_points.bind_key("Control-Z", overwrite=True)(self.ctrl_z_callback)
         if self.on_double_click not in self.anchor_points.mouse_double_click_callbacks:
             self.anchor_points.mouse_double_click_callbacks.append(self.on_double_click)
         if self.on_mouse_move not in self.anchor_points.mouse_move_callbacks:
@@ -452,14 +471,22 @@ class MinimalContourWidget(WidgetWithLayerList):
         contour: np.ndarray
         mask_shape: tuple
 
-
         def run(self):
             mask = skimage.draw.polygon2mask(self.mask_shape, self.contour)
             self.done.emit(mask)
 
     def set_mask(self, mask):
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            idx = np.nonzero(mask)
+            print(idx)
+            self.prev_vals[self.labels.layer] = self.labels.layer._slice.image.raw[mask]
+            change_idx = list(self.viewer.dims.current_step)
+            for i in range(2):
+                change_idx[self.viewer.dims.displayed[i]] = idx[i]
+
+            self.change_idx[self.labels.layer] = tuple(change_idx)
             self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
         self.labels.layer.events.data()
         self.labels.layer.refresh()
