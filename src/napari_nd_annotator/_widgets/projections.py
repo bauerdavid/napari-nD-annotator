@@ -24,7 +24,7 @@ class DataProjectionWidget(QLabel):
         self.max_width, self.max_height = QWIDGETSIZE_MAX, QWIDGETSIZE_MAX
         self.slices = list(slices) or [s//2 for s in self.image_data.shape]
         self.displayed_axes = displayed_axes
-        overlay_shape = [self.image_data.shape[i] for i in range(self.image_data.ndim) if self.im_idx[i] == slice(None)][:2]
+        overlay_shape = [self.image_data.shape[i] for i in range(self.image_layer.ndim) if self.im_idx[i] == slice(None)][:2]
         self._overlay = np.zeros(overlay_shape, np.uint8)
         if crosshair_color is None:
             self.crosshair_color = (255, 0, 0, 160)
@@ -66,7 +66,7 @@ class DataProjectionWidget(QLabel):
         self._overlay = new_overlay > 0
 
     def update_overlay(self, layer=None, coordinates=None):
-        overlay_shape = [self.image_data.shape[i] for i in range(self.image_data.ndim) if
+        overlay_shape = [self.image_data.shape[i] for i in range(self.image_layer.ndim) if
                          self.im_idx[i] == slice(None)][:2]
         overlay = np.zeros(overlay_shape, bool)
         if layer is not None and coordinates is not None:
@@ -120,13 +120,13 @@ class DataProjectionWidget(QLabel):
     def update(self, update_icon=True, new_size=None):
         if update_icon:
             if any(self.im_idx[i] != slice(None) and self.im_idx[i] >= self.image_data.shape[i]
-                    for i in range(self.image_data.ndim)):
-                im_shape = tuple(self.image_data.shape[i] for i in range(self.image_data.ndim)
+                    for i in range(self.image_layer.ndim)):
+                im_shape = tuple(self.image_data.shape[i] for i in range(self.image_layer.ndim)
                                  if self.im_idx[i] == slice(None))[:2]
                 im = np.zeros(im_shape + (4,), np.uint8)
                 mask = np.zeros_like(im)
             else:
-                if self.image_layer.colormap is None:
+                if self.image_layer.rgb:
                     im = self.image_data[self.im_idx]
                 else:
                     im = self.image_data[self.im_idx]
