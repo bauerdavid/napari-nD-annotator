@@ -1582,6 +1582,8 @@ template <class T> struct SWorkImg
 
     }
 
+    int GetWidth() { return xs;}
+    int GetHeight() {return ys;}
 
     SWorkImg& operator= (T r)
     {

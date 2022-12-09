@@ -125,7 +125,7 @@ class ImageProcessingWidget(QWidget):
         self.progress_dialog = ProgressWidget(message="Calculating feature, please wait...")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            viewer.window.qt_viewer.window().destroyed.connect(lambda: self.progress_dialog.close())
+            viewer.window.qt_viewer.window().destroyed.connect(self.on_destroy)
         self.script_thread = QThread()
         self.script_worker = ScriptWorker()
         self.script_worker.moveToThread(self.script_thread)
@@ -231,3 +231,9 @@ class ImageProcessingWidget(QWidget):
         font.setPointSize(font.pointSize()-1)
         self.text_edit.setFont(font)
         self.text_settings.setValue("script_font_size", font.pointSize())
+
+    def on_destroy(self):
+        try:
+            self.progress_dialog.close()
+        except:
+            ...

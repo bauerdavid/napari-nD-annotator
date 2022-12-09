@@ -1,8 +1,11 @@
 # cython: boundscheck = False
+import time
+
 cimport cython
 import numpy as np
 cimport numpy as np
 cimport openmp
+from libc.string cimport memcpy
 from libcpp cimport bool
 from libcpp.vector cimport vector
 from cython.operator cimport preincrement as inc
@@ -12,6 +15,8 @@ np.import_array()
 GRADIENT_BASED = 0
 INTENSITY_BASED = 2
 CUSTOM_FEATURE = 3
+
+cdef np.ndarray EMPTY = np.empty(0)
 
 cdef extern from "Eikonal.cpp":
     pass
@@ -25,6 +30,8 @@ cdef extern from "Eikonal.h":
         SWorkImg()
         void Set(int, int)
         T* operator[](int)
+        int GetWidth()
+        int GetHeight()
     cdef cppclass SControl:
         SControl() nogil
         int GetProgress() nogil
@@ -37,8 +44,13 @@ cdef extern from "Eikonal.h":
         void GetDataTerm(SWorkImg[double]**, SWorkImg[double]**) nogil
         void InitEnvironment(SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&) nogil
         void InitEnvironmentAllMethods(SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&) nogil
+        void InitEnvironmentAllMethods(SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&) nogil
+        void InitEnvironmentRanders(SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&) nogil
+        void InitEnvironmentInhomog(SWorkImg[double]&, SWorkImg[double]&, SWorkImg[double]&) nogil
+        void InitEnvironmentRandersGrad(SWorkImg[double]&, SWorkImg[double]&) nogil
         int SetNextStartStop() nogil
         void SetBoundaries(int, int, int, int) nogil
+        void SetParAll() nogil
         void DistanceCalculator() nogil
         int GetReady() nogil
         vector[CVec2]& ResolvePath() nogil
@@ -53,8 +65,10 @@ cdef class MinimalContourCalculator:
     cdef int method
     cdef vector[int] method_pair
     cdef vector[int] progresses
+    cdef SWorkImg[double] ered, egreen, eblue, egradx, egrady
+    method_initialized = [False,]*4
     def __cinit__(self, np.ndarray[np.float_t, ndim=3] image, int n_points):
-        self.set_image(image)
+        self.set_image(image, np.empty((0, 0)), np.empty((0, 0)))
         self.eikonals.reserve(n_points)
         self.progresses.resize(n_points)
         self.param = 5
@@ -76,12 +90,22 @@ cdef class MinimalContourCalculator:
             self.eikonals[i].CleanAll()
             self.eikonals[i].CalcImageQuantAllMethods()
 
-    cpdef set_method(self, int method):
+    cpdef set_method(self, int method=-1):
+        if method == -1:
+            method = self.method
         if method not in [GRADIENT_BASED, INTENSITY_BASED]:
             print("method should be one of GRADIENT_BASED(=0) or INTENSITY_BASED(=2)")
             return
         self.method = method
         self.method_pair[0] = self.method_pair[1] = method
+        cdef int i
+        if not self.method_initialized[method]:
+            for i in range(self.eikonals.size()):
+                if method == GRADIENT_BASED:
+                    self.eikonals[i].InitEnvironmentRandersGrad(self.egradx, self.egrady)
+                else:
+                    self.eikonals[i].InitEnvironmentInhomog(self.ered, self.egreen, self.eblue)
+            self.method_initialized[method] = True
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -92,7 +116,7 @@ cdef class MinimalContourCalculator:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cpdef set_image(self, np.ndarray[np.float_t, ndim=3] image):
+    cpdef set_image(self, np.ndarray[np.float_t, ndim=3] image, np.ndarray[np.float_t, ndim=2] gradx, np.ndarray[np.float_t, ndim=2] grady):
         if image is None:
             print("Image was None!")
             return
@@ -101,24 +125,43 @@ cdef class MinimalContourCalculator:
             return
         cdef int w = image.shape[1]
         cdef int h = image.shape[0]
-        cdef SWorkImg[double] ered, egreen, eblue
-        ered.Set(w, h)
-        egreen.Set(w, h)
-        eblue.Set(w, h)
+        if self.ered.GetWidth() != w or self.ered.GetHeight() != h:
+            self.ered.Set(w, h)
+            self.egreen.Set(w, h)
+            self.eblue.Set(w, h)
         cdef double rgb_scale = 1. / 255.
         cdef int x, y
-        for y in range(h):
-            r_ptr = ered[y]
-            g_ptr = egreen[y]
-            b_ptr = eblue[y]
+        cdef double* r_ptr, *g_ptr, *b_ptr
+        for y in prange(h, nogil=True):
+            r_ptr = self.ered[y]
+            g_ptr = self.egreen[y]
+            b_ptr = self.eblue[y]
             for x in range(w):
                 r_ptr[x] = image[y, x, 0]
                 g_ptr[x] = image[y, x, 1]
                 b_ptr[x] = image[y, x, 2]
         cdef int i
-        for i in range(self.eikonals.size()):
-            self.eikonals[i].CleanAll()
-            self.eikonals[i].InitEnvironmentAllMethods(ered, egreen, eblue)
+        for i in range(len(self.method_initialized)):
+            self.method_initialized[i] = False
+        if gradx!=EMPTY and grady!=EMPTY:
+            if self.egradx.GetWidth() != w or self.egrady.GetHeight() != h:
+                self.egradx.Set(w, h)
+                self.egrady.Set(w, h)
+            for y in prange(h, nogil=True):
+                r_ptr = self.egradx[y]
+                g_ptr = self.egrady[y]
+                for x in range(w):
+                    r_ptr[x] = gradx[y, x]
+                    g_ptr[x] = grady[y, x]
+            for i in range(self.eikonals.size()):
+                self.eikonals[i].CleanAll()
+                self.eikonals[i].SetParAll()
+            self.set_method()
+        else:
+            for i in range(self.eikonals.size()):
+                self.eikonals[i].CleanAll()
+                self.eikonals[i].SetParAll()
+            self.set_method()
 
     # points are as [x, y]
     @cython.boundscheck(False)

@@ -115,9 +115,17 @@ public:
 	~CRanders();
 
 	void DistanceCalculator();
+    void InitImageQuantGrad0(SWorkImg<double> &gradx, SWorkImg<double> &grady);
+    void InitImageQuantGrad0(const SWorkImg<double> &gradx, const SWorkImg<double> &grady);
 	void InitImageQuant(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {
 		if (m_iDataPrepared == Prep_No) {
 			InitImageQuant0(red, green, blue); // new dataterm here
+			m_iDataPrepared = Prep_Own;
+		}
+	}
+	void InitImageQuantGrad(SWorkImg<double> &gradx, SWorkImg<double> &grady) {
+		if (m_iDataPrepared == Prep_No) {
+			InitImageQuantGrad0(gradx, grady); // new dataterm here
 			m_iDataPrepared = Prep_Own;
 		}
 	}
@@ -340,6 +348,27 @@ struct SControl
 		m_Splitter.InitImageQuant(red,green,blue);
 		m_Inhomog.InitImageQuant(red, green, blue);
 	}
+
+	void InitEnvironmentRanders(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {
+	    m_Randers.InitImageQuant(red,green,blue);
+	}
+	void InitEnvironmentRandersGrad(SWorkImg<double> &gradx, SWorkImg<double> &grady) {
+        m_Randers.InitImageQuantGrad(gradx, grady);
+    }
+	void InitEnvironmentSplitter(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {
+	    m_Splitter.InitImageQuant(red,green,blue);
+	}
+	void InitEnvironmentInhomog(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {
+	    m_Inhomog.InitImageQuant(red,green,blue);
+	}
+
+	void InitEnvironmentAllMethods(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue, SWorkImg<double> &gradx, SWorkImg<double> &grady) {
+		SetParAll();
+		m_Randers.InitImageQuantGrad(gradx, grady);
+//		m_Splitter.InitImageQuant(red,green,blue);
+//		m_Inhomog.InitImageQuant(red, green, blue);
+	}
+
 	// Prepare all data terms from grayscale image (for sequential use)
 	void InitEnvironmentAllMethods(SWorkImg<double> &img) {
 		SetParAll();
@@ -470,8 +499,6 @@ struct SControl
 	std::vector<CVec2> &GetMinPath() {
 		return m_minpath;
 	}
-	
-private:
 	void SetParAll() {
 		if (m_iParaToUpdate&1) {
 			m_iParaToUpdate &= ~1;
@@ -486,6 +513,8 @@ private:
 				m_Splitter.Clean();
 		}
 	}
+	
+private:
 	void SetMetDatPar() {
 		m_pCurrentMethod = m_pEikonal[m_curri];
 		m_pCurrentMethod->SetDataTerm(m_pdats);

@@ -1,16 +1,21 @@
+import time
 import warnings
-
 import napari
 import skimage.draw
+from napari.layers.labels._labels_utils import get_dtype
+from napari.utils._dtype import get_dtype_limits
+from skimage.morphology import binary_dilation
 from napari.utils.events import Event
-from qtpy.QtWidgets import QWidget, QSpinBox, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QComboBox
-from qtpy.QtCore import QMutex, QThread, QObject, Signal
+from qtpy.QtWidgets import QWidget, QSpinBox, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QComboBox, QPushButton
+from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt
+from superqt import QLargeIntSpinBox
 
 from ._utils.progress_widget import ProgressWidget
 from ._utils.widget_with_layer_list import WidgetWithLayerList
 from ._utils.blur_slider import BlurSlider
+from ._utils.changeable_color_box import QtChangeableColorBox
 from .image_processing_widget import ImageProcessingWidget
-from ..minimal_contour import MinimalContourCalculator
+from ..minimal_contour import MinimalContourCalculator, FeatureManager, FeatureExtractor
 import numpy as np
 from napari.layers import Image, Labels
 from napari.layers.points._points_constants import Mode
@@ -51,8 +56,11 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.last_segment_length = None
         self.prev_n_anchor_points = 0
         self.image.combobox.currentIndexChanged.connect(self.set_image)
+        self.prev_labels_layer = self.labels.layer
         self.feature_inverted = False
         self.test_script = False
+        self.prev_timer_id = None
+        self.feature_manager = FeatureManager(viewer)
 
         # Ctrl+Z handling
         self.change_idx = dict()
@@ -121,6 +129,29 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox.setMaximum(50)
         self.point_size_spinbox.setValue(2)
         layout.addWidget(self.point_size_spinbox)
+
+        extend_mask_button = QPushButton("Extend label")
+        extend_mask_button.clicked.connect(self.extend_mask)
+        layout.addWidget(extend_mask_button)
+
+        self.selectionSpinBox = QLargeIntSpinBox()
+        if self.labels.layer is not None:
+            dtype_lims = get_dtype_limits(get_dtype(self.labels.layer))
+        else:
+            dtype_lims = 0, np.iinfo(np.int).max
+        self.selectionSpinBox.setRange(*dtype_lims)
+        self.selectionSpinBox.setKeyboardTracking(False)
+        self.selectionSpinBox.valueChanged.connect(self.change_selected_label)
+        self.selectionSpinBox.setAlignment(Qt.AlignCenter)
+        color_layout = QHBoxLayout()
+        self.colorBox = QtChangeableColorBox(self.labels.layer)
+        color_layout.addWidget(self.colorBox)
+        color_layout.addWidget(self.selectionSpinBox)
+        self.labels.combobox.currentIndexChanged.connect(self.on_label_change)
+        self.on_label_change()
+        self._on_selected_label_change()
+
+        layout.addLayout(color_layout)
         layout.addStretch()
         self.setLayout(layout)
 
@@ -158,7 +189,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.ctrl_down = False
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
-        viewer.dims.events.current_step.connect(self.set_image)
+        viewer.dims.events.current_step.connect(self.delayed_set_image)
         self.viewer.layers.events.connect(self.move_temp_to_top)
         self.viewer.layers.selection.events.connect(self.lock_layer)
         self.set_image()
@@ -175,7 +206,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             return
         if data is None:
             return
-        self.calculator.set_image(data)
+        self.calculator.set_image(data, np.empty((0, 0,)), np.empty((0, 0,)))
 
     def change_point_size(self, size):
         self.to_s_points_layer.size = size
@@ -235,7 +266,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         yield from ctrl_callback
 
     def ctrl_z_callback(self, _):
-        print("ctrl z")
         if self.labels.layer in self.change_idx:
             idx = self.change_idx[self.labels.layer]
             vals = self.prev_vals[self.labels.layer]
@@ -259,6 +289,43 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.to_s_points_layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
         self.point_triangle[:] = -1
         self.prev_n_anchor_points = 0
+
+    @property
+    def image_data(self):
+        return self._img
+
+    @property
+    def features(self):
+        return self.feature_editor.features
+
+    def on_label_change(self, _=None):
+        if self.labels.layer is not None:
+            dtype_lims = get_dtype_limits(get_dtype(self.labels.layer))
+            self.selectionSpinBox.setValue(self.labels.layer.selected_label)
+        else:
+            dtype_lims = 0, np.iinfo(np.int).max
+        self.selectionSpinBox.setRange(*dtype_lims)
+        self.colorBox.layer = self.labels.layer
+        if self.prev_labels_layer is not None:
+            self.prev_labels_layer.events.selected_label.disconnect(self._on_selected_label_change)
+        if self.labels.layer is not None:
+            self.labels.layer.events.selected_label.connect(
+                self._on_selected_label_change
+            )
+        self.prev_labels_layer = self.labels.layer
+
+    def _on_selected_label_change(self):
+        """Receive layer model label selection change event and update spinbox."""
+        if self.labels.layer is None:
+            return
+        with self.labels.layer.events.selected_label.blocker():
+            value = self.labels.layer.selected_label
+            self.selectionSpinBox.setValue(value)
+
+    def change_selected_label(self, value):
+        self.labels.layer.selected_label = value
+        self.selectionSpinBox.clearFocus()
+        self.setFocus()
 
     def move_temp_to_top(self, e=None):
         if e is not None and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded"]:
@@ -311,19 +378,19 @@ class MinimalContourWidget(WidgetWithLayerList):
             if layer.mode != Mode.ADD:
                 return
             self.point_triangle[1] = list(self.anchor_points.world_to_data([event.position[i] for i in range(len(event.position)) if i in event.dims_displayed]))
-            if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= self._img.shape[:2]):
+            if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= self.image_data.shape[:2]):
                 return
             if not self.ctrl_down:
                 if self.feature_editor.isVisible():
-                    if self.feature_editor.features is None:
+                    if self.features is None:
                         warnings.warn("Feature image not calculated. Run script using the 'Set' button.")
                         return
-                    results = self.estimate(self.feature_editor.features)
+                    results = self.estimate(self.features)
                 else:
-                    if self._img is None:
+                    if self.image_data is None:
                         warnings.warn("Image was not set.")
                         return
-                    results = self.estimate(self._img)
+                    results = self.estimate(self.image_data)
             else:
                 results = [
                     np.vstack(skimage.draw.line(
@@ -370,8 +437,17 @@ class MinimalContourWidget(WidgetWithLayerList):
             warnings.warn("Cannot change mode to %s: only 'add' and 'pan_zoom' mode is allowed" % event.mode)
             event.source.mode = "add"
 
+    def delayed_set_image(self):
+        if self.prev_timer_id is not None:
+            self.killTimer(self.prev_timer_id)
+        self.prev_timer_id = self.startTimer(1000)
+
+    def timerEvent(self, *args, **kwargs):
+        self.set_image()
+        self.killTimer(self.prev_timer_id)
+        self.prev_timer_id = None
+
     def set_image(self):
-        print("set_image")
         image_layer: Image = self.image.layer
         if image_layer is None:
             self._img = None
@@ -395,7 +471,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         if self.feature_editor.isVisible():
             self.feature_editor.image = image
         else:
-            self.calculator.set_image(image)
+            grad_x, grad_y = self.feature_manager.get_features(self.image.layer, self.viewer.dims.current_step)
+            self.calculator.set_image(image, grad_x, grad_y)
         self._img = image
         self.anchor_points.translate = image_layer.translate[list(self.viewer.dims.displayed)]
         self.from_e_points_layer.translate = image_layer.translate[list(self.viewer.dims.displayed)]
@@ -419,7 +496,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.prev_n_anchor_points = len(anchor_data)
         if len(anchor_data) == 0:
             return
-        anchor_data[-1] = np.clip(anchor_data[-1], 0, self._img.shape[:2])
+        anchor_data[-1] = np.clip(anchor_data[-1], 0, self.image_data.shape[:2])
         if len(anchor_data) > 1 and np.all(np.round(anchor_data[-1]) == np.round(anchor_data[-2])):
             with self.anchor_points.events.data.blocker():
                 self.anchor_points.data = self.anchor_points.data[:-1]
@@ -480,7 +557,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             idx = np.nonzero(mask)
-            print(idx)
             self.prev_vals[self.labels.layer] = self.labels.layer._slice.image.raw[mask]
             change_idx = list(self.viewer.dims.current_step)
             for i in range(2):
@@ -495,7 +571,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.labels.layer.selected_label += 1
 
     def points_to_mask(self):
-        if self._img is None or len(self.output.data) == 0:
+        if self.image_data is None or len(self.output.data) == 0:
             return
         elif self.labels.layer is None:
             warnings.warn("Missing output labels layer.")
@@ -516,3 +592,15 @@ class MinimalContourWidget(WidgetWithLayerList):
         tformed = scipy.fft.rfft(points, axis=0)
         tformed[0] = 0
         return scipy.fft.irfft(tformed[:coefficients], len(points), axis=0) + center
+
+    def extend_mask(self):
+        if self.labels.layer is None:
+            return
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            labels = self.labels.layer._slice.image.raw
+        mask = labels == self.labels.layer.selected_label
+        mask = binary_dilation(mask)
+        labels[mask] = self.labels.layer.selected_label
+        self.labels.layer.events.data()
+        self.labels.layer.refresh()

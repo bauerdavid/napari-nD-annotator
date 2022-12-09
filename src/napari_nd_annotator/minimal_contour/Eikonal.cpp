@@ -135,6 +135,16 @@ void CEikonal::InitImageQuant0(SWorkImg<double> &img)
 	CalcImageQuant();
 }
 
+void CRanders::InitImageQuantGrad0(SWorkImg<double> &gradx, SWorkImg<double> &grady){
+    int ys = gradx.ys, xs = gradx.xs;
+	InitEnvironment(xs,ys);
+	m_aux[1] = gradx;
+	m_aux[0] = grady;
+	m_aux[1] *= -1;
+	GetMaxAuxGrad();
+	CalcImageQuant();
+}
+
 void CEikonal::InitImageQuant0(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue)
 {
 	if (green.xs != red.xs || blue.xs != red.xs) return;
