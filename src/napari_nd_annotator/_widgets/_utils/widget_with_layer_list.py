@@ -1,5 +1,5 @@
 import napari
-from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QPushButton
+from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QPushButton, QSizePolicy
 from keyword import iskeyword
 
 
@@ -46,6 +46,7 @@ class WidgetWithLayerList(QWidget):
             self.combobox.addItem("[%s]" % display_name)
             self.combobox.currentIndexChanged.connect(self.on_layer_index_change)
             self.combobox.setToolTip(display_name)
+            self.combobox.setSizePolicy(QSizePolicy.Ignored, self.combobox.sizePolicy().verticalPolicy())
             self.viewer.layers.events.connect(self.on_layer_list_change)
             self._moved_layer = None
             self._layer_name = None
