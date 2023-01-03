@@ -8,6 +8,7 @@ from napari.layers import Labels
 from scipy.interpolate import interp1d
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton, QComboBox
 from qtpy.QtCore import QThread, QObject, Signal
+from scipy.ndimage import distance_transform_edt
 
 from ._utils.progress_widget import ProgressWidget
 from ..mean_contour import settings
@@ -15,6 +16,11 @@ from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
 from ..mean_contour._reconstruction import reconstruct
 from ..mean_contour._essentials import magnitude
+
+
+DISTANCE_BASED = "Distance-based"
+CONTOUR_BASED = "Contour-based"
+RPSV = "RPSV"
 
 
 def contour_cv2_mask_uniform(mask, contoursize_max):
@@ -49,6 +55,14 @@ def contour_cv2_mask_uniform(mask, contoursize_max):
     contour = np.stack((contour[:, 1], contour[:, 0]), axis=-1)
     return contour
 
+def average_mask(m1, m2, w1, w2):
+    m1 = m1.astype(bool)
+    m2 = m2.astype(bool)
+    dt1 = distance_transform_edt(m1) - distance_transform_edt(~m1)
+    dt2 = distance_transform_edt(m2) - distance_transform_edt(~m2)
+    average_dist = (w1 * dt1 + w2 * dt2) / (w1+w2)
+    return average_dist > 0
+
 
 class InterpolationWorker(QObject):
     done = Signal("PyQt_PyObject")
@@ -56,7 +70,7 @@ class InterpolationWorker(QObject):
     dimension: int
     n_contour_points: int
     data: np.ndarray
-    use_rpsv: bool
+    method: str
     max_iterations: int
     dims_displayed: tuple
     current_step: tuple
@@ -67,7 +81,7 @@ class InterpolationWorker(QObject):
             dimension = self.dimension
             n_contour_points = self.n_contour_points
             data = self.data.copy()
-            use_rpsv = self.use_rpsv
+            method = self.method
             layer_slice_template = [
                 slice(None) if d in self.dims_displayed
                     else None if d == dimension
@@ -75,25 +89,26 @@ class InterpolationWorker(QObject):
                 for d in range(data.ndim)]
             prev_cnt = None
             prev_layer = None
+            prev_mask = None
             start = time.time()
             for i in range(data.shape[dimension]):
                 self.progress.emit(i)
                 layer_slice = layer_slice_template.copy()
                 layer_slice[dimension] = i
-                mask = data[tuple(layer_slice)] == self.selected_label
-                mask = mask.astype(np.uint8)
-                if mask.max() == 0:
+                cur_mask = data[tuple(layer_slice)] == self.selected_label
+                cur_mask = cur_mask.astype(np.uint8)
+                if cur_mask.max() == 0:
                     continue
                 next_layer_slice = layer_slice.copy()
                 next_layer_slice[dimension] = i + 1
-                if i + 1 >= data.shape[dimension] or (data[tuple(next_layer_slice)] == self.selected_label).max() > 0:
+                if i + 1 < data.shape[dimension] and (data[tuple(next_layer_slice)] == self.selected_label).max() > 0:
                     continue
-                cnt = contour_cv2_mask_uniform(mask, n_contour_points)
+                cnt = contour_cv2_mask_uniform(cur_mask, n_contour_points)
                 centroid = cnt.mean(0)
                 start_index = np.argmin(np.abs(np.arctan2(*(cnt - centroid).T)))
                 cnt = np.roll(cnt, -start_index, 0)
                 if prev_cnt is not None:
-                    if use_rpsv:
+                    if method == RPSV:
                         stgs = settings.Settings(max_iterations=self.max_iterations,
                                                  n_points=n_contour_points)
                         rpsv_thread = MeanThread([prev_cnt, cnt], stgs)
@@ -104,7 +119,7 @@ class InterpolationWorker(QObject):
                         prev_w = i - j
                         cur_w = j - prev_layer
                         weights = [prev_w, cur_w]
-                        if use_rpsv:
+                        if method == RPSV:
                             contours = rpsv_thread.contours
                             regularMean = np.zeros_like(contours[0].lookup[contours[0].parameterization, :])
                             for j in range(2):
@@ -125,15 +140,23 @@ class InterpolationWorker(QObject):
                             dirs = q_mean / qraylengths.reshape(qraylengths.shape[0], 1)
                             r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), stgs, rpsv_thread.rpSignal)
                             mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
-                        else:
+                            mean_cnt = mean_cnt.astype(np.int32)
+                            mask = np.zeros_like(data[tuple(inter_layer_slice)])
+                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.selected_label, -1)
+                        elif method == CONTOUR_BASED:
                             mean_cnt = (prev_w * prev_cnt + cur_w * cnt)/(prev_w + cur_w)
-                        mean_cnt = mean_cnt.astype(np.int32)
-                        mask = np.zeros_like(data[tuple(inter_layer_slice)])
-                        cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.selected_label, -1)
+                            mean_cnt = mean_cnt.astype(np.int32)
+                            mask = np.zeros_like(data[tuple(inter_layer_slice)])
+                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.selected_label, -1)
+                        else:
+                            mask = average_mask(prev_mask, cur_mask, prev_w, cur_w)
+                            mask.astype(np.uint8)
+                            mask[mask > 0] = self.selected_label
                         cur_slice = data[tuple(inter_layer_slice)]
                         cur_slice[mask > 0] = mask[mask > 0]
                 prev_cnt = cnt
                 prev_layer = i
+                prev_mask = cur_mask
             napari.notification_manager.receive_info("Done in %.4f s" % (time.time() - start))
             self.done.emit(data)
         except Exception as e:
@@ -147,7 +170,7 @@ class InterpolationWidget(QWidget):
         self.viewer = viewer
         self.progress_dialog = ProgressWidget(message="Interpolating slices...")
         layout = QVBoxLayout()
-        self.active_labels_layer = None
+        self._active_labels_layer = None
 
         self.interpolation_thread = QThread()
         self.interpolation_worker = InterpolationWorker()
@@ -165,8 +188,10 @@ class InterpolationWidget(QWidget):
 
         layout.addWidget(QLabel("Method"))
         self.method_dropdown = QComboBox()
-        self.method_dropdown.addItem("Geometric mean")
-        self.method_dropdown.addItem("RPSV")
+        self.method_dropdown.addItem(CONTOUR_BASED)
+        self.method_dropdown.addItem(DISTANCE_BASED)
+        self.method_dropdown.addItem(RPSV)
+
         self.method_dropdown.currentTextChanged.connect(lambda _: self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV"))
         layout.addWidget(self.method_dropdown)
 
@@ -186,11 +211,10 @@ class InterpolationWidget(QWidget):
         self.rpsv_iterations_spinbox.setValue(20)
         rpsv_layout.addWidget(self.rpsv_iterations_spinbox)
         self.rpsv_widget.setLayout(rpsv_layout)
-        self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV")
+        self.rpsv_widget.setVisible(self.method_dropdown.currentText() == RPSV)
         rpsv_layout.setContentsMargins(0, 0, 0, 0)
         self.rpsv_widget.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.rpsv_widget)
-
 
         self.interpolate_button = QPushButton("Interpolate")
         self.interpolate_button.clicked.connect(self.interpolate)
@@ -208,7 +232,21 @@ class InterpolationWidget(QWidget):
             active_layer = self.viewer.layers.selection.active
             if isinstance(active_layer, Labels):
                 self.active_labels_layer = active_layer
-                self.dimension_dropdown.setMaximum(self.active_labels_layer.ndim)
+
+    @property
+    def active_labels_layer(self):
+        return self._active_labels_layer
+
+    @active_labels_layer.setter
+    def active_labels_layer(self, layer):
+        if layer is None:
+            return
+        self.dimension_dropdown.setMaximum(layer.ndim)
+        if self._active_labels_layer is not None:
+            self._active_labels_layer.bind_key("Control-I", overwrite=True)(None)
+        self._active_labels_layer = layer
+        layer.bind_key("Control-I", overwrite=True)(self.interpolate)
+
 
     def set_has_channels(self, has_channels):
         self.channels_dim_dropdown.setEnabled(has_channels)
@@ -223,7 +261,7 @@ class InterpolationWidget(QWidget):
             new_dim = self.viewer.dims.order[int(np.argwhere(not_displayed == ch_excluded[0])[0])]
         self.dimension_dropdown.setValue(new_dim)
 
-    def interpolate(self):
+    def interpolate(self, _):
         if self.active_labels_layer is None:
             return
         dimension = self.dimension_dropdown.value()
@@ -233,7 +271,7 @@ class InterpolationWidget(QWidget):
         self.interpolation_worker.dimension = dimension
         self.interpolation_worker.n_contour_points = self.n_points.value()
         self.interpolation_worker.data = self.active_labels_layer.data
-        self.interpolation_worker.use_rpsv = self.method_dropdown.currentText() == "RPSV"
+        self.interpolation_worker.method = self.method_dropdown.currentText()
         self.interpolation_worker.dims_displayed = self.viewer.dims.displayed
         self.interpolation_worker.current_step = self.viewer.dims.current_step
         self.interpolation_worker.selected_label = self.active_labels_layer.selected_label
@@ -247,4 +285,5 @@ class InterpolationWidget(QWidget):
         if self.active_labels_layer.preserve_labels:
             update_mask &= self.active_labels_layer.data == 0
         self.active_labels_layer.data[update_mask] = data[update_mask]
+        self.active_labels_layer.events.data()
         self.active_labels_layer.refresh()
