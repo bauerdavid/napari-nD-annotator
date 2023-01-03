@@ -76,7 +76,7 @@ class QtChangeableColorBox(QWidget):
         painter = QPainter(self)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            selected_color = self.layer._selected_color
+            selected_color = self.layer._selected_color if self.layer else None
         if selected_color is None:
             self.color = None
             for i in range(self._height // 4):
