@@ -1,36 +1,26 @@
 import warnings
 
-from qtpy.QtWidgets import QSlider
+from napari._qt.widgets._slider_compat import QDoubleSlider
 from qtpy import QtGui
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QEvent
 from scipy.ndimage.filters import gaussian_filter
 from napari.layers import Image
 
 
-class BlurSlider(QSlider):
+class BlurSlider(QDoubleSlider):
     def __init__(self, viewer, image_layer=None, blur_func=None, parent=None):
         super().__init__(parent)
         self.viewer = viewer
         self._smoothed_layer = None
         self.image_layer = image_layer
+        self.setMaximum(20)
         self.valueChanged.connect(self.update_image)
+        self.setMouseTracking(True)
         self.setOrientation(Qt.Horizontal)
         self.blur_func = blur_func if blur_func is not None else lambda img, val: gaussian_filter(img, val)
-
-    def setMaximum(self, a0: float) -> None:
-        super().setMaximum(a0*10)
-
-    def setMinimum(self, a0: float) -> None:
-        super().setMinimum(a0*10)
-
-    def setValue(self, a0: float) -> None:
-        super().setValue(a0*10)
-
-    def value(self):
-        return super().value()/10
+        self.children()[0].installEventFilter(self)
 
     def mousePressEvent(self, ev: QtGui.QMouseEvent) -> None:
-        super().mousePressEvent(ev)
         image_layer = self.image_layer
         if image_layer is None:
             return
@@ -55,7 +45,6 @@ class BlurSlider(QSlider):
             self.viewer.add_layer(self._smoothed_layer)
 
     def mouseReleaseEvent(self, ev: QtGui.QMouseEvent) -> None:
-        super().mouseReleaseEvent(ev)
         if self._smoothed_layer is None:
             return
         self.viewer.layers.remove(self._smoothed_layer)
@@ -70,3 +59,10 @@ class BlurSlider(QSlider):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             return self.blur_func(self.image_layer._data_view, self.value())
+
+    def eventFilter(self, obj: 'QObject', event: 'QEvent') -> bool:
+        if event.type() == QEvent.MouseButtonPress:
+            self.mousePressEvent(event)
+        elif event.type() == QEvent.MouseButtonRelease:
+            self.mouseReleaseEvent(event)
+        return super().eventFilter(obj, event)
