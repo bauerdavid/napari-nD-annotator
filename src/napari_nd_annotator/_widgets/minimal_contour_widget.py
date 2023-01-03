@@ -1,26 +1,40 @@
 import time
 import warnings
+import math
 import napari
 import skimage.draw
 from napari.layers.labels._labels_utils import get_dtype
 from napari.utils._dtype import get_dtype_limits
-from skimage.morphology import binary_dilation
+from skimage.morphology import binary_dilation, binary_erosion
 from napari.utils.events import Event
-from qtpy.QtWidgets import QWidget, QSpinBox, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QComboBox, QPushButton
-from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt
+from qtpy.QtWidgets import QWidget, QSpinBox, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QComboBox, QPushButton, QSizePolicy
+from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt, QEvent
+from qtpy.QtGui import QCursor, QKeyEvent
 from superqt import QLargeIntSpinBox
 
 from ._utils.progress_widget import ProgressWidget
 from ._utils.widget_with_layer_list import WidgetWithLayerList
 from ._utils.blur_slider import BlurSlider
 from ._utils.changeable_color_box import QtChangeableColorBox
+from ._utils.callbacks import (
+    extend_mask,
+    reduce_mask,
+    increase_brush_size,
+    decrease_brush_size,
+    scroll_to_next,
+    scroll_to_prev,
+    increment_selected_label,
+    decrement_selected_label
+)
 from .image_processing_widget import ImageProcessingWidget
-from ..minimal_contour import MinimalContourCalculator, FeatureManager, FeatureExtractor
+
+from ..minimal_contour import MinimalContourCalculator, FeatureManager
 import numpy as np
 from napari.layers import Image, Labels
 from napari.layers.points._points_constants import Mode
 from skimage.filters import gaussian
 import scipy.fft
+import colorsys
 
 GRADIENT_BASED = 0
 INTENSITY_BASED = 2
@@ -37,8 +51,16 @@ def bbox_around_points(pts):
 
 class MinimalContourWidget(WidgetWithLayerList):
     def __init__(self, viewer: napari.Viewer):
+        self.selected_id_label = QLabel()
+        self.selected_id_label.setFixedSize(20, 20)
+        self.selected_id_label.setAlignment(Qt.AlignCenter)
+        self.selected_id_label.setSizePolicy(QSizePolicy.Fixed, self.selected_id_label.sizePolicy().verticalPolicy())
         super().__init__(viewer, [("image", Image), ("labels", Labels)])
         self.viewer = viewer
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer.window.qt_viewer.window().installEventFilter(self)
+            self.viewer.window.qt_viewer.window().setMouseTracking(True)
         self.calculator = MinimalContourCalculator(None, 3)
         self.progress_dialog = ProgressWidget(message="Drawing mask...")
         self.move_mutex = QMutex()
@@ -185,8 +207,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.output.editable = False
         self.anchor_points = self.viewer.add_points(ndim=2, name="Anchors [DO NOT ALTER]", symbol="x")
         self.anchor_points.mode = "add"
-        self.shift_down = False
-        self.ctrl_down = False
+        self.modifiers = None
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.delayed_set_image)
@@ -195,6 +216,13 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.set_image()
         self.set_callbacks()
         self.move_temp_to_top()
+
+        self.selected_id_label.setWindowFlags(Qt.Window
+                                              | Qt.FramelessWindowHint
+                                              | Qt.WindowStaysOnTopHint)
+        self.selected_id_label.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.selected_id_label.installEventFilter(self)
+        self.update_label_tooltip()
 
     def set_use_smoothing(self, use_smoothing):
         self.smooth_image_widget.setVisible(use_smoothing)
@@ -230,7 +258,10 @@ class MinimalContourWidget(WidgetWithLayerList):
                 layer.editable = False
 
     def shift_pressed(self, _):
-        self.shift_down = True
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            if self.labels.layer is not None and len(self.anchor_points.data) == 0 and self.viewer.window.qt_viewer.canvas.native.hasFocus():
+                self.selected_id_label.show()
         self.from_e_points_layer.face_color = "gray"
         self.from_e_points_layer.current_face_color = "gray"
         self.to_s_points_layer.face_color = "red"
@@ -240,7 +271,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.to_s_points_layer.edge_color = "red"
         self.to_s_points_layer.current_edge_color = "red"
         yield
-        self.shift_down = False
+        self.selected_id_label.hide()
         self.from_e_points_layer.face_color = "red"
         self.from_e_points_layer.current_face_color = "red"
         self.to_s_points_layer.face_color = "gray"
@@ -250,20 +281,22 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.to_s_points_layer.edge_color = "gray"
         self.to_s_points_layer.current_edge_color = "gray"
 
-    def ctrl_pressed(self, _):
-        self.ctrl_down = True
-        yield
-        self.ctrl_down = False
+    @property
+    def ctrl_down(self):
+        return self.modifiers & Qt.ControlModifier if self.modifiers is not None else False
+
+    @property
+    def shift_down(self):
+        return self.modifiers & Qt.ShiftModifier if self.modifiers is not None else False
+
+    @property
+    def alt_down(self):
+        return self.modifiers & Qt.AltModifier if self.modifiers is not None else False
 
     def ctrl_shift_pressed(self, _):
         shift_callback = self.shift_pressed(_)
         yield from shift_callback
         yield from shift_callback
-
-    def shift_ctrl_pressed(self, _):
-        ctrl_callback = self.ctrl_pressed(_)
-        yield from ctrl_callback
-        yield from ctrl_callback
 
     def ctrl_z_callback(self, _):
         if self.labels.layer in self.change_idx:
@@ -308,10 +341,22 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.colorBox.layer = self.labels.layer
         if self.prev_labels_layer is not None:
             self.prev_labels_layer.events.selected_label.disconnect(self._on_selected_label_change)
+            self.prev_labels_layer.bind_key("Control-Tab", overwrite=True)(None)
+            if self.on_mouse_wheel in self.prev_labels_layer.mouse_wheel_callbacks:
+                self.prev_labels_layer.mouse_wheel_callbacks.remove(self.on_mouse_wheel)
+            self.prev_labels_layer.bind_key("Shift", overwrite=True)(None)
+            self.prev_labels_layer.bind_key("Alt", overwrite=True)(None)
+            self.prev_labels_layer.bind_key("Control-+", overwrite=True)(None)
+            self.prev_labels_layer.bind_key("Control--", overwrite=True)(None)
         if self.labels.layer is not None:
             self.labels.layer.events.selected_label.connect(
                 self._on_selected_label_change
             )
+            self.labels.layer.bind_key("Control-Tab", overwrite=True)(lambda _: self.viewer.layers.selection.select_only(self.anchor_points))
+            if self.on_mouse_wheel not in self.labels.layer.mouse_wheel_callbacks:
+                self.labels.layer.mouse_wheel_callbacks.append(self.on_mouse_wheel)
+            self.labels.layer.bind_key("Shift", overwrite=True)(self.shift_pressed)
+            self._on_selected_label_change()
         self.prev_labels_layer = self.labels.layer
 
     def _on_selected_label_change(self):
@@ -321,6 +366,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         with self.labels.layer.events.selected_label.blocker():
             value = self.labels.layer.selected_label
             self.selectionSpinBox.setValue(value)
+            self.update_label_tooltip()
 
     def change_selected_label(self, value):
         self.labels.layer.selected_label = value
@@ -414,6 +460,17 @@ class MinimalContourWidget(WidgetWithLayerList):
         finally:
             self.move_mutex.unlock()
 
+    def on_mouse_wheel(self, _, event):
+        if self.labels.layer is None:
+            return
+        delta = (np.sign(event.delta)).astype(int)
+        if self.shift_down:
+            self.labels.layer.selected_label = max(0, self.labels.layer.selected_label + delta[1])
+        elif self.alt_down:
+            diff = delta[0]
+            diff *= min(max(1, self.labels.layer.brush_size//10), 5)
+            self.labels.layer.brush_size = max(0, self.labels.layer.brush_size + diff)
+
     def set_callbacks(self):
         if self.anchor_points is None:
             return
@@ -425,12 +482,23 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.anchor_points.bind_key("Shift-Control", overwrite=True)(self.shift_ctrl_pressed)
         self.anchor_points.bind_key("Escape", overwrite=True)(self.esc_callback)
         self.anchor_points.bind_key("Control-Z", overwrite=True)(self.ctrl_z_callback)
+        self.anchor_points.bind_key("Control-Tab", overwrite=True)(lambda _: self.labels.layer and self.viewer.layers.selection.select_only(self.labels.layer))
+        self.anchor_points.bind_key("Control-+", overwrite=True)(lambda _: extend_mask(self.labels.layer))
+        self.anchor_points.bind_key("Control--", overwrite=True)(lambda _: reduce_mask(self.labels.layer))
+        self.anchor_points.bind_key("Q", overwrite=True)(lambda _: decrement_selected_label(self.labels.layer))
+        self.anchor_points.bind_key("E", overwrite=True)(lambda _: increment_selected_label(self.labels.layer))
+        self.anchor_points.bind_key("A", overwrite=True)(scroll_to_prev(self.viewer))
+        self.anchor_points.bind_key("D", overwrite=True)(scroll_to_next(self.viewer))
+        self.anchor_points.bind_key("W", overwrite=True)(lambda _: increase_brush_size(self.labels.layer))
+        self.anchor_points.bind_key("S", overwrite=True)(lambda _: decrease_brush_size(self.labels.layer))
         if self.on_double_click not in self.anchor_points.mouse_double_click_callbacks:
             self.anchor_points.mouse_double_click_callbacks.append(self.on_double_click)
         if self.on_mouse_move not in self.anchor_points.mouse_move_callbacks:
             self.anchor_points.mouse_move_callbacks.append(self.on_mouse_move)
         if self.on_right_click not in self.anchor_points.mouse_drag_callbacks:
             self.anchor_points.mouse_drag_callbacks.insert(0, self.on_right_click)
+        if self.on_mouse_wheel not in self.anchor_points.mouse_wheel_callbacks:
+            self.anchor_points.mouse_wheel_callbacks.append(self.on_mouse_wheel)
 
     def add_mode_only(self, event):
         if event.mode not in ["add", "pan_zoom"]:
@@ -472,6 +540,8 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.feature_editor.image = image
         else:
             grad_x, grad_y = self.feature_manager.get_features(self.image.layer, self.viewer.dims.current_step)
+            grad_x = self.smooth_image_slider.blur_func(grad_x, self.smooth_image_slider.value()).astype(float)
+            grad_y = self.smooth_image_slider.blur_func(grad_y, self.smooth_image_slider.value()).astype(float)
             self.calculator.set_image(image, grad_x, grad_y)
         self._img = image
         self.anchor_points.translate = image_layer.translate[list(self.viewer.dims.displayed)]
@@ -573,8 +643,11 @@ class MinimalContourWidget(WidgetWithLayerList):
     def points_to_mask(self):
         if self.image_data is None or len(self.output.data) == 0:
             return
-        elif self.labels.layer is None:
+        if self.labels.layer is None:
             warnings.warn("Missing output labels layer.")
+            return
+        if self.labels.layer.data.shape != self.image_data.shape:
+            warnings.warn("Shape of labels and image does not match.")
             return
         if not self.labels.layer.visible:
             self.labels.layer.set_view_slice()
@@ -593,7 +666,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         tformed[0] = 0
         return scipy.fft.irfft(tformed[:coefficients], len(points), axis=0) + center
 
-    def extend_mask(self):
+    def extend_mask(self, _):
         if self.labels.layer is None:
             return
         with warnings.catch_warnings():
@@ -604,3 +677,46 @@ class MinimalContourWidget(WidgetWithLayerList):
         labels[mask] = self.labels.layer.selected_label
         self.labels.layer.events.data()
         self.labels.layer.refresh()
+
+    def reduce_mask(self, _):
+        if self.labels.layer is None:
+            return
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            labels = self.labels.layer._slice.image.raw
+        mask = labels == self.labels.layer.selected_label
+        eroded_mask = binary_erosion(mask)
+        labels[mask & ~eroded_mask] = 0
+        self.labels.layer.events.data()
+        self.labels.layer.refresh()
+
+    def eventFilter(self, src: 'QObject', event: 'QEvent') -> bool:
+        try:
+            self.modifiers = event.modifiers()
+        except:
+            pass
+        if src == self.selected_id_label and event.type() == QEvent.Enter:
+            pos = QCursor.pos()
+        elif event.type() == QEvent.Type.HoverMove:
+            pos = src.mapToGlobal(event.pos())
+        else:
+            return False
+        pos.setX(pos.x()+20)
+        pos.setY(pos.y()+20)
+        self.selected_id_label.move(pos)
+        return False
+
+    def update_label_tooltip(self):
+        if self.labels.layer is None:
+            return
+        self.selected_id_label.setText(str(self.labels.layer.selected_label))
+        bg_color = self.labels.layer._selected_color
+        if bg_color is None:
+            bg_color = np.ones(4)
+        h, s, v = colorsys.rgb_to_hsv(*bg_color[:-1])
+        bg_color = (255*bg_color).astype(int)
+        color = (np.zeros(3) if v > 0.7 else np.ones(3)*255).astype(int)
+        self.selected_id_label.setStyleSheet("background-color: rgb(%d,%d,%d); color: rgb(%d,%d,%d)" % (tuple(bg_color[:-1]) + tuple(color)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer.window.qt_viewer.canvas.native.setFocus()

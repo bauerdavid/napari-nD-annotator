@@ -81,8 +81,8 @@ class FeatureExtractor:
                     self.lock.release()
                     if not self.rgb:
                         # self.out[idx, ...] = gaussian_gradient_magnitude(self.data[idx].astype(float), 5)
-                        self.outs[0][idx, ...] = sobel_v(self.data[idx].astype(float))
-                        self.outs[1][idx, ...] = sobel_h(self.data[idx].astype(float))
+                        self.outs[0][idx] = sobel_v(self.data[idx].astype(float))
+                        self.outs[1][idx] = sobel_h(self.data[idx].astype(float))
                     else:
                         # grad_r = gaussian_gradient_magnitude(self.data[idx + (0,)].astype(float), 5)
                         # grad_g = gaussian_gradient_magnitude(self.data[idx + (1,)].astype(float), 5)

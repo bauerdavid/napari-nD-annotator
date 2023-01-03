@@ -55,20 +55,20 @@ class FeatureManager:
             self.slices_calculated[layer][dims_displayed] = np.zeros([layer.data.shape[i] for i in self.viewer.dims.not_displayed], bool)
         path_v = self.generate_filename(filename, dims_displayed, "_v")
         path_h = self.generate_filename(filename, dims_displayed, "_h")
+        if layer.rgb:
+            shape = layer.data.shape[:-1]
+        else:
+            shape = layer.data.shape
         if not os.path.exists(path_v):
-            if layer.rgb:
-                shape = layer.data.shape[:-1]
-            else:
-                shape = layer.data.shape
-            self.memmaps.append(tifffile.create_output(path_v, shape, float))
-            self.memmaps.append(tifffile.create_output(path_h, shape, float))
+            self.memmaps.append(np.memmap(path_v, shape=shape, dtype=int, mode="w+"))
+            self.memmaps.append(np.memmap(path_h, shape=shape, dtype=int, mode="w+"))
             self.start_feature_calculation(layer)
         else:
-            self.memmaps.append(tifffile.memmap(path_v))
-            self.memmaps.append(tifffile.memmap(path_h))
+            self.memmaps.append(np.memmap(path_v, shape=shape, dtype=int))
+            self.memmaps.append(np.memmap(path_h, shape=shape, dtype=int))
 
     def generate_filename(self, prefix, dims_displayed, suffix=''):
-        return os.path.join(self.temp_folder, "tmp_ftrs_%s_%s%s.tif" % (prefix, "_".join(str(d) for d in dims_displayed), suffix))
+        return os.path.join(self.temp_folder, "tmp_ftrs_%s_%s%s.dat" % (prefix, "_".join(str(d) for d in dims_displayed), suffix))
 
     def start_feature_calculation(self, layer):
         self.feature_extractor.start_jobs(layer.data, self.memmaps, self.viewer.dims.current_step, self.viewer.dims.displayed, layer.rgb)
