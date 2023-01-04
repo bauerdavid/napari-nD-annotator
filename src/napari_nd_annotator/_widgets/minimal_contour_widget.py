@@ -477,9 +477,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.anchor_points.events.data.connect(self.data_event)
         self.anchor_points.events.mode.connect(self.add_mode_only)
         self.anchor_points.bind_key("Shift", overwrite=True)(self.shift_pressed)
-        self.anchor_points.bind_key("Control", overwrite=True)(self.ctrl_pressed)
         self.anchor_points.bind_key("Control-Shift", overwrite=True)(self.ctrl_shift_pressed)
-        self.anchor_points.bind_key("Shift-Control", overwrite=True)(self.shift_ctrl_pressed)
         self.anchor_points.bind_key("Escape", overwrite=True)(self.esc_callback)
         self.anchor_points.bind_key("Control-Z", overwrite=True)(self.ctrl_z_callback)
         self.anchor_points.bind_key("Control-Tab", overwrite=True)(lambda _: self.labels.layer and self.viewer.layers.selection.select_only(self.labels.layer))
@@ -646,7 +644,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         if self.labels.layer is None:
             warnings.warn("Missing output labels layer.")
             return
-        if self.labels.layer.data.shape != self.image_data.shape:
+        if self.labels.layer.ndim != self.image_data.ndim:
             warnings.warn("Shape of labels and image does not match.")
             return
         if not self.labels.layer.visible:

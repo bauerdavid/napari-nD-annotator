@@ -9,7 +9,7 @@ from napari.layers import Image
 
 class BlurSlider(QDoubleSlider):
     def __init__(self, viewer, image_layer=None, blur_func=None, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.viewer = viewer
         self._smoothed_layer = None
         self.image_layer = image_layer
