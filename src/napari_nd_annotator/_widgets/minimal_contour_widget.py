@@ -51,16 +51,8 @@ def bbox_around_points(pts):
 
 class MinimalContourWidget(WidgetWithLayerList):
     def __init__(self, viewer: napari.Viewer):
-        self.selected_id_label = QLabel()
-        self.selected_id_label.setFixedSize(20, 20)
-        self.selected_id_label.setAlignment(Qt.AlignCenter)
-        self.selected_id_label.setSizePolicy(QSizePolicy.Fixed, self.selected_id_label.sizePolicy().verticalPolicy())
         super().__init__(viewer, [("image", Image), ("labels", Labels)])
         self.viewer = viewer
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer.window.qt_viewer.window().installEventFilter(self)
-            self.viewer.window.qt_viewer.window().setMouseTracking(True)
         self.calculator = MinimalContourCalculator(None, 3)
         self.progress_dialog = ProgressWidget(message="Drawing mask...")
         self.move_mutex = QMutex()
@@ -110,16 +102,23 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.param_spinbox.setMaximum(50)
         self.param_spinbox.setValue(5)
         self.param_spinbox.valueChanged.connect(lambda val: self.calculator.set_param(val))
+        self.param_spinbox.setToolTip("Increasing this parameter will cause contours to be more aligned\n"
+                                      "with the selected image feature (with a lower number the contour will be\n"
+                                      "closer to the Euclidean shortest path")
         self.calculator.set_param(self.param_spinbox.value())
         layout.addWidget(self.param_spinbox)
 
         self.autoincrease_label_id_checkbox = QCheckBox("Increment label id")
         self.autoincrease_label_id_checkbox.setChecked(True)
+        self.autoincrease_label_id_checkbox.setToolTip("When checked, selected label will be incremented\n"
+                                                       "after completing the contour")
         layout.addWidget(self.autoincrease_label_id_checkbox)
 
         self.smooth_image_checkbox = QCheckBox("Smooth image")
         self.smooth_image_checkbox.setChecked(True)
         self.smooth_image_checkbox.clicked.connect(self.set_use_smoothing)
+        self.smooth_image_checkbox.setToolTip("When checked, the image will be blurred\n"
+                                              "before calculating minimal contour")
         layout.addWidget(self.smooth_image_checkbox)
 
         smooth_image_widget = QWidget()
@@ -137,10 +136,15 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.smooth_contour_checkbox = QCheckBox("Smooth contour")
         self.smooth_contour_checkbox.clicked.connect(lambda checked: self.smooth_contour_spinbox.setVisible(checked))
         self.smooth_contour_checkbox.setChecked(True)
+        self.smooth_contour_checkbox.setToolTip("When checked, the finished contour will be smoothed\n"
+                                                "to remove minor noise using Fourier transformation.")
         self.smooth_contour_spinbox = QSpinBox()
         self.smooth_contour_spinbox.setMinimum(0)
         self.smooth_contour_spinbox.setMaximum(100)
         self.smooth_contour_spinbox.setValue(10)
+        self.smooth_contour_spinbox.setToolTip("Number of Fourier coefficients to approximate the contour.\n"
+                                               "Lower number -> smoother contour\n"
+                                               "Higher number -> more faithful to the original")
         smooth_contour_layout.addWidget(self.smooth_contour_checkbox)
         smooth_contour_layout.addWidget(self.smooth_contour_spinbox)
         layout.addLayout(smooth_contour_layout)
@@ -150,10 +154,13 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox.setMinimum(1)
         self.point_size_spinbox.setMaximum(50)
         self.point_size_spinbox.setValue(2)
+        self.point_size_spinbox.setToolTip("Point size for contour display.")
         layout.addWidget(self.point_size_spinbox)
 
         extend_mask_button = QPushButton("Extend label")
         extend_mask_button.clicked.connect(self.extend_mask)
+        extend_mask_button.setToolTip("Extend the selected label by one pixel around the borders\n"
+                                      "using dilation")
         layout.addWidget(extend_mask_button)
 
         self.selectionSpinBox = QLargeIntSpinBox()
@@ -165,6 +172,17 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.selectionSpinBox.setKeyboardTracking(False)
         self.selectionSpinBox.valueChanged.connect(self.change_selected_label)
         self.selectionSpinBox.setAlignment(Qt.AlignCenter)
+        self.selectionSpinBox.setToolTip("Selected label for the current 'labels' layer.")
+        self.selected_id_label = QLabel()
+        self.selected_id_label.setFixedSize(20, 20)
+        self.selected_id_label.setAlignment(Qt.AlignCenter)
+        self.selected_id_label.setSizePolicy(QSizePolicy.Fixed, self.selected_id_label.sizePolicy().verticalPolicy())
+
+        self.selected_id_label.setWindowFlags(Qt.Window
+                                              | Qt.FramelessWindowHint
+                                              | Qt.WindowStaysOnTopHint)
+        self.selected_id_label.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.selected_id_label.installEventFilter(self)
         color_layout = QHBoxLayout()
         self.colorBox = QtChangeableColorBox(self.labels.layer)
         color_layout.addWidget(self.colorBox)
@@ -179,7 +197,10 @@ class MinimalContourWidget(WidgetWithLayerList):
 
         def change_layer_callback(num):
             def change_layer(_):
-                viewer.layers.selection.select_only(viewer.layers[num])
+                if num-1 < len(viewer.layers):
+                    viewer.layers.selection.select_only(viewer.layers[num-1])
+                else:
+                    warnings.warn("%d is out of range (number of layers: %d)" % (num, len(viewer.layers)))
             return change_layer
         for i in range(1, 10):
             viewer.bind_key("Control-%d" % i, overwrite=True)(change_layer_callback(i))
@@ -213,15 +234,15 @@ class MinimalContourWidget(WidgetWithLayerList):
         viewer.dims.events.current_step.connect(self.delayed_set_image)
         self.viewer.layers.events.connect(self.move_temp_to_top)
         self.viewer.layers.selection.events.connect(self.lock_layer)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer.window.qt_viewer.window().installEventFilter(self)
+            self.viewer.window.qt_viewer.window().setMouseTracking(True)
         self.set_image()
         self.set_callbacks()
         self.move_temp_to_top()
 
-        self.selected_id_label.setWindowFlags(Qt.Window
-                                              | Qt.FramelessWindowHint
-                                              | Qt.WindowStaysOnTopHint)
-        self.selected_id_label.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.selected_id_label.installEventFilter(self)
+
         self.update_label_tooltip()
 
     def set_use_smoothing(self, use_smoothing):

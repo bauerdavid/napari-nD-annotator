@@ -1,5 +1,5 @@
-from qtpy.QtCore import QObject, QEvent
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QTabWidget, QLabel
+from qtpy.QtCore import QObject, QEvent, Qt
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QTabWidget, QPushButton
 from napari import Viewer
 from napari.layers import Labels, Layer
 import numpy as np
@@ -19,6 +19,7 @@ from ._utils.callbacks import (
     increment_selected_label,
     decrement_selected_label
 )
+from ._utils.help_dialog import HelpDialog
 def check_connectivity(event):
     layer = event.source
     current_slice = layer._slice.image.raw
@@ -31,6 +32,8 @@ class AnnotatorWidget(QWidget):
         layout = QVBoxLayout()
         self.fill_objects_checkbox = QCheckBox("autofill objects")
         self.fill_objects_checkbox.setChecked(True)
+        self.fill_objects_checkbox.setToolTip("When drawing labels,"
+                                              " close the drawn curve and fill its area after releasing the mouse")
         self._active_labels_layer = None
         self.drawn_region_history = dict()
         self.drawn_slice_history = dict()
@@ -48,6 +51,15 @@ class AnnotatorWidget(QWidget):
         tabs_widget.addTab(self.minimal_contour_widget, "Minimal Contour")
 
         layout.addWidget(tabs_widget)
+
+        help_layout = QVBoxLayout()
+        help_layout.setAlignment(Qt.AlignRight)
+        help_button = QPushButton("?")
+        help_button.setToolTip("Help")
+        help_button.clicked.connect(self.show_help_window)
+        help_button.setFixedSize(20, 20)
+        help_layout.addWidget(help_button)
+        layout.addLayout(help_layout)
         self.setLayout(layout)
         self.installEventFilter(self)
         layout.addStretch()
@@ -206,3 +218,7 @@ class AnnotatorWidget(QWidget):
     def decr_history_idx(self, *args):
         if self.history_idx >= 0:
             self.history_idx -= 1
+
+    def show_help_window(self):
+        dialog = HelpDialog(self)
+        dialog.show()

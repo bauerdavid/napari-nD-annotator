@@ -184,6 +184,7 @@ class InterpolationWidget(QWidget):
         self.dimension_dropdown = QSpinBox()
         self.dimension_dropdown.setMinimum(0)
         self.dimension_dropdown.setMaximum(0)
+        self.dimension_dropdown.setToolTip("Dimension along which slices will be interpolated")
         layout.addWidget(self.dimension_dropdown)
 
         layout.addWidget(QLabel("Method"))
@@ -191,7 +192,10 @@ class InterpolationWidget(QWidget):
         self.method_dropdown.addItem(CONTOUR_BASED)
         self.method_dropdown.addItem(DISTANCE_BASED)
         self.method_dropdown.addItem(RPSV)
-
+        self.method_dropdown.setToolTip("Interpolation method\n"
+                                        "%s: arithmetic mean of contour points\n"
+                                        "%s: interpolation between distance maps\n"
+                                        "%s: shape-aware mean of contours" % (CONTOUR_BASED, DISTANCE_BASED, RPSV))
         self.method_dropdown.currentTextChanged.connect(lambda _: self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV"))
         layout.addWidget(self.method_dropdown)
 
@@ -200,6 +204,7 @@ class InterpolationWidget(QWidget):
         self.n_points.setMinimum(10)
         self.n_points.setMaximum(1000)
         self.n_points.setValue(300)
+        self.n_points.setToolTip("Number of contour points sampled. Used only for\"%s\" and \"%s\" methods" % (RPSV, CONTOUR_BASED))
         layout.addWidget(self.n_points)
 
         self.rpsv_widget = QWidget()
@@ -209,6 +214,7 @@ class InterpolationWidget(QWidget):
         self.rpsv_iterations_spinbox.setMaximum(100)
         self.rpsv_iterations_spinbox.setMinimum(1)
         self.rpsv_iterations_spinbox.setValue(20)
+        self.rpsv_iterations_spinbox.setToolTip("Maximum number of iterations for RPSV. Can be fewer if points converge.")
         rpsv_layout.addWidget(self.rpsv_iterations_spinbox)
         self.rpsv_widget.setLayout(rpsv_layout)
         self.rpsv_widget.setVisible(self.method_dropdown.currentText() == RPSV)
