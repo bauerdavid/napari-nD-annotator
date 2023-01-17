@@ -9,7 +9,8 @@ from scipy.interpolate import interp1d
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton, QComboBox
 from qtpy.QtCore import QThread, QObject, Signal
 from scipy.ndimage import distance_transform_edt
-
+from skimage.measure import regionprops
+from skimage.transform import SimilarityTransform, warp
 from ._utils.progress_widget import ProgressWidget
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
@@ -17,6 +18,7 @@ from ..mean_contour._contour import calcRpsvInterpolation
 from ..mean_contour._reconstruction import reconstruct
 from ..mean_contour._essentials import magnitude
 
+import matplotlib.pyplot as plt
 
 DISTANCE_BASED = "Distance-based"
 CONTOUR_BASED = "Contour-based"
@@ -55,13 +57,27 @@ def contour_cv2_mask_uniform(mask, contoursize_max):
     contour = np.stack((contour[:, 1], contour[:, 0]), axis=-1)
     return contour
 
+
 def average_mask(m1, m2, w1, w2):
-    m1 = m1.astype(bool)
-    m2 = m2.astype(bool)
-    dt1 = distance_transform_edt(m1) - distance_transform_edt(~m1)
-    dt2 = distance_transform_edt(m2) - distance_transform_edt(~m2)
-    average_dist = (w1 * dt1 + w2 * dt2) / (w1+w2)
-    return average_dist > 0
+    m1 = m1.astype(np.uint16)
+    m2 = m2.astype(np.uint16)
+    im_center = np.asarray(m1.shape)/2
+    centroid1 = np.asarray(regionprops(m1)[0].centroid)
+    centroid2 = np.asarray(regionprops(m2)[0].centroid)
+    transl_1 = centroid1 - im_center
+    transl_2 = centroid2 - im_center
+    tform1 = SimilarityTransform(translation=np.flip(transl_1))
+    tform2 = SimilarityTransform(translation=np.flip(transl_2))
+    m1_translated = warp(m1, tform1, preserve_range=True).astype(bool)
+    m2_translated = warp(m2, tform2, preserve_range=True).astype(bool)
+    dt1_translated = distance_transform_edt(m1_translated) - distance_transform_edt(~m1_translated)
+    dt2_translated = distance_transform_edt(m2_translated) - distance_transform_edt(~m2_translated)
+    average_dist_translated = (w1 * dt1_translated + w2 * dt2_translated) / (w1+w2)
+    average_mask_translated = average_dist_translated > 0
+    transl_avg = im_center - (centroid1*w1+centroid2*w2)/(w1+w2)
+    tform_avg = SimilarityTransform(translation=np.flip(transl_avg))
+
+    return warp(average_mask_translated, tform_avg)
 
 
 class InterpolationWorker(QObject):
@@ -148,10 +164,12 @@ class InterpolationWorker(QObject):
                             mean_cnt = mean_cnt.astype(np.int32)
                             mask = np.zeros_like(data[tuple(inter_layer_slice)])
                             cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.selected_label, -1)
-                        else:
+                        elif method == DISTANCE_BASED:
                             mask = average_mask(prev_mask, cur_mask, prev_w, cur_w)
-                            mask.astype(np.uint8)
+                            mask = mask.astype(np.uint8)
                             mask[mask > 0] = self.selected_label
+                        else:
+                            raise ValueError("method should be one of %s" % ((RPSV, CONTOUR_BASED, DISTANCE_BASED),))
                         cur_slice = data[tuple(inter_layer_slice)]
                         cur_slice[mask > 0] = mask[mask > 0]
                 prev_cnt = cnt
