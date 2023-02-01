@@ -7,14 +7,25 @@ from napari.layers.labels._labels_utils import get_dtype
 from napari.utils._dtype import get_dtype_limits
 from skimage.morphology import binary_dilation, binary_erosion
 from napari.utils.events import Event
-from qtpy.QtWidgets import QWidget, QSpinBox, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QComboBox, QPushButton, QSizePolicy
+from qtpy.QtWidgets import (
+    QWidget,
+    QSpinBox,
+    QVBoxLayout,
+    QHBoxLayout,
+    QCheckBox,
+    QLabel,
+    QComboBox,
+    QPushButton,
+    QSizePolicy
+)
 from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt, QEvent
-from qtpy.QtGui import QCursor, QKeyEvent
+from qtpy.QtGui import QCursor, QKeyEvent, QPixmap, QImage
 from superqt import QLargeIntSpinBox
+from napari._qt.widgets._slider_compat import QDoubleSlider
 
 from ._utils.progress_widget import ProgressWidget
 from ._utils.widget_with_layer_list import WidgetWithLayerList
-from ._utils.blur_slider import BlurSlider
+from ._utils.collapsible_widget import CollapsibleWidget
 from ._utils.changeable_color_box import QtChangeableColorBox
 from ._utils.callbacks import (
     extend_mask,
@@ -39,6 +50,7 @@ import colorsys
 GRADIENT_BASED = 0
 INTENSITY_BASED = 2
 
+DEMO_SIZE = 200
 
 def bbox_around_points(pts):
     p1 = pts.min(0)
@@ -64,12 +76,17 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.draw_worker.done.connect(lambda: self.progress_dialog.setVisible(False))
         self.draw_thread.started.connect(self.draw_worker.run)
         self._img = None
+        self._prev_img_layer = self.image.layer
+        self._orig_image = self.image.layer.data if self.image.layer is not None else None
         self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
         self.remove_last_anchor = False
         self.last_added_with_shift = None
         self.last_segment_length = None
         self.prev_n_anchor_points = 0
+        self.image.combobox.currentIndexChanged.connect(self.store_orig_image)
+        self.image.combobox.currentIndexChanged.connect(self.apply_smoothing)
         self.image.combobox.currentIndexChanged.connect(self.set_image)
+        self.image.combobox.currentIndexChanged.connect(self.update_demo_image)
         self.prev_labels_layer = self.labels.layer
         self.feature_inverted = False
         self.test_script = False
@@ -122,12 +139,30 @@ class MinimalContourWidget(WidgetWithLayerList):
         layout.addWidget(self.smooth_image_checkbox)
 
         smooth_image_widget = QWidget()
-        smooth_image_layout = QHBoxLayout()
+        smooth_image_layout = QVBoxLayout()
+        smooth_image_layout.setContentsMargins(0, 0, 0, 0)
         smooth_image_layout.addWidget(QLabel("Smoothness"))
-        self.smooth_image_slider = BlurSlider(self.viewer, self.image.layer, lambda img, val: gaussian(img, channel_axis=2 if img.ndim == 3 else None, sigma=val, preserve_range=True).astype(img.dtype), parent=self)
+        self.smooth_image_slider = QDoubleSlider(parent=self)
+        self.smooth_image_slider.setMaximum(20)
+        self.smooth_image_slider.setOrientation(Qt.Horizontal)
+        # self.smooth_image_slider.sliderReleased.connect(self.apply_smoothing)
+        # self.smooth_image_slider.sliderReleased.connect(self.set_image)
+        self.smooth_image_slider.valueChanged.connect(self.update_demo_image)
         self.smooth_image_slider.setVisible(self.smooth_image_checkbox.isChecked())
-        self.smooth_image_slider.sliderReleased.connect(self.set_image)
         smooth_image_layout.addWidget(self.smooth_image_slider)
+
+        demo_widget = CollapsibleWidget("Example", self)
+        self.demo_image = QLabel()
+        self.update_demo_image()
+        demo_layout = QVBoxLayout()
+        demo_layout.addWidget(self.demo_image)
+        demo_widget.setLayout(demo_layout)
+        smooth_image_layout.addWidget(demo_widget)
+
+        self.apply_smoothing_button = QPushButton("Apply smoothing")
+        self.apply_smoothing_button.setEnabled(self.smooth_image_checkbox.isChecked())
+        self.apply_smoothing_button.clicked.connect(self.apply_smoothing)
+        smooth_image_layout.addWidget(self.apply_smoothing_button)
         smooth_image_widget.setLayout(smooth_image_layout)
         self.smooth_image_widget = smooth_image_widget
         layout.addWidget(smooth_image_widget)
@@ -232,6 +267,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.delayed_set_image)
+        viewer.dims.events.current_step.connect(self.update_demo_image)
         self.viewer.layers.events.connect(self.move_temp_to_top)
         self.viewer.layers.selection.events.connect(self.lock_layer)
         with warnings.catch_warnings():
@@ -247,6 +283,7 @@ class MinimalContourWidget(WidgetWithLayerList):
 
     def set_use_smoothing(self, use_smoothing):
         self.smooth_image_widget.setVisible(use_smoothing)
+        self.apply_smoothing()
         self.set_image()
 
     def set_features(self, data):
@@ -530,9 +567,18 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.prev_timer_id = self.startTimer(1000)
 
     def timerEvent(self, *args, **kwargs):
+        self.apply_smoothing()
         self.set_image()
         self.killTimer(self.prev_timer_id)
         self.prev_timer_id = None
+
+    def store_orig_image(self):
+        image_layer: Image = self.image.layer
+        if image_layer != self._prev_img_layer:
+            if self._prev_img_layer is not None:
+                self._prev_img_layer.data = self._orig_image
+            self._orig_image = image_layer.data.copy() if image_layer is not None else None
+        self._prev_img_layer = image_layer
 
     def set_image(self):
         image_layer: Image = self.image.layer
@@ -547,9 +593,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             image = image_layer._data_view.astype(float)
-        self.smooth_image_slider.image_layer = image_layer
-        if self.smooth_image_checkbox.isChecked():
-            image = self.smooth_image_slider.get_blurred_image()
         if image.ndim == 2:
             image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
         image = (image - image.min()) / (image.max() - image.min())
@@ -559,8 +602,9 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.feature_editor.image = image
         else:
             grad_x, grad_y = self.feature_manager.get_features(self.image.layer, self.viewer.dims.current_step)
-            grad_x = self.smooth_image_slider.blur_func(grad_x, self.smooth_image_slider.value()).astype(float)
-            grad_y = self.smooth_image_slider.blur_func(grad_y, self.smooth_image_slider.value()).astype(float)
+            if self.smooth_image_checkbox.isChecked():
+                grad_x = self.blur_image(grad_x).astype(float)
+                grad_y = self.blur_image(grad_y).astype(float)
             self.calculator.set_image(image, grad_x, grad_y)
         self._img = image
         self.anchor_points.translate = image_layer.translate[list(self.viewer.dims.displayed)]
@@ -739,3 +783,55 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.canvas.native.setFocus()
+
+    def apply_smoothing(self):
+        if self.image.layer is None:
+            return
+        self.image.layer.data = self._orig_image.copy()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            if self.smooth_image_checkbox.isChecked() and self.smooth_image_slider.value() > 0.:
+                slice_ = tuple(
+                    slice(None) if i in self.viewer.dims.displayed else self.viewer.dims.current_step[i]
+                    for i in range(self.viewer.dims.ndim)
+                )
+                orig_image = self._orig_image[slice_]
+                if self.image.layer.rgb:
+                    max_vals = orig_image.max((0, 1))
+                    for i in range(3):
+                        if max_vals[i] == 0:
+                            continue
+                        self.image.layer.data[slice_ + (i,)] = self.blur_image(orig_image[..., i]).astype(self._orig_image.dtype)
+                else:
+                    self.image.layer.data[slice_] = self.blur_image(self._orig_image[slice_]).astype(self._orig_image.dtype)
+                self.image.layer.events.data()
+                self.image.layer.refresh()
+
+    def update_demo_image(self):
+        if self.image.layer is None:
+            img = np.zeros((DEMO_SIZE, DEMO_SIZE, 3), np.uint8)
+        else:
+            im_layer: Image = self.image.layer
+            slice_ = tuple(slice(None) if i in self.viewer.dims.displayed else self.viewer.dims.current_step[i] for i in
+                           range(self.viewer.dims.ndim))
+            img = self._orig_image[slice_]
+            img = img[(img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2, (img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2]
+            img = self.blur_image(img)
+            if not im_layer.rgb:
+                max_ = im_layer.contrast_limits[1]
+                min_ = im_layer.contrast_limits[0]
+                img = np.clip((img - min_) / (max_ - min_), 0, 1)
+                img = (im_layer.colormap.map(img.ravel()).reshape(img.shape + (4,))*255)[..., :3].copy()
+            img = img.astype(np.uint8)
+        image = QImage(img, DEMO_SIZE, DEMO_SIZE, DEMO_SIZE * 3, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(image, Qt.ImageConversionFlag.ColorOnly)
+        self.demo_image.setPixmap(pixmap)
+
+    def blur_image(self, img):
+        return gaussian(
+            img,
+            sigma=self.smooth_image_slider.value(),
+            preserve_range=True,
+            channel_axis=-1 if img.ndim==3 else None,
+            truncate=2.
+        )
