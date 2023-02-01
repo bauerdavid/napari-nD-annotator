@@ -3,6 +3,8 @@ from scipy.ndimage import binary_dilation, binary_erosion
 
 
 def extend_mask(layer):
+    if layer is None:
+        return
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         labels = layer._slice.image.raw
@@ -14,6 +16,8 @@ def extend_mask(layer):
 
 
 def reduce_mask(layer):
+    if layer is None:
+        return
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         labels = layer._slice.image.raw
@@ -25,10 +29,14 @@ def reduce_mask(layer):
 
 
 def increment_selected_label(layer):
+    if layer is None:
+        return
     layer.selected_label = layer.selected_label+1
 
 
 def decrement_selected_label(layer):
+    if layer is None:
+        return
     layer.selected_label = max(0, layer.selected_label-1)
 
 
@@ -51,10 +59,14 @@ def scroll_to_next(viewer):
 
 
 def increase_brush_size(layer):
+    if layer is None:
+        return
     diff = min(max(1, layer.brush_size // 10), 5)
     layer.brush_size = max(0, layer.brush_size + diff)
 
 
 def decrease_brush_size(layer):
+    if layer is None:
+        return
     diff = min(max(1, layer.brush_size // 10), 5)
     layer.brush_size = max(0, layer.brush_size - diff)

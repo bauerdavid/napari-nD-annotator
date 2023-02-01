@@ -60,12 +60,12 @@ class FeatureManager:
         else:
             shape = layer.data.shape
         if not os.path.exists(path_v):
-            self.memmaps.append(np.memmap(path_v, shape=shape, dtype=int, mode="w+"))
-            self.memmaps.append(np.memmap(path_h, shape=shape, dtype=int, mode="w+"))
+            self.memmaps.append(np.memmap(path_v, shape=shape, dtype=float, mode="w+"))
+            self.memmaps.append(np.memmap(path_h, shape=shape, dtype=float, mode="w+"))
             self.start_feature_calculation(layer)
         else:
-            self.memmaps.append(np.memmap(path_v, shape=shape, dtype=int))
-            self.memmaps.append(np.memmap(path_h, shape=shape, dtype=int))
+            self.memmaps.append(np.memmap(path_v, shape=shape, dtype=float))
+            self.memmaps.append(np.memmap(path_h, shape=shape, dtype=float))
 
     def generate_filename(self, prefix, dims_displayed, suffix=''):
         return os.path.join(self.temp_folder, "tmp_ftrs_%s_%s%s.dat" % (prefix, "_".join(str(d) for d in dims_displayed), suffix))

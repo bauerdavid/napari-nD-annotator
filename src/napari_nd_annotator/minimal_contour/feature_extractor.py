@@ -91,7 +91,7 @@ class FeatureExtractor:
                         channels_v = []
                         channels_h = []
                         if np.any(r):
-                            channels_v.append(cv2.filter2D(r, -1, self.conv_filter_v))
+                            channels_v.append(cv2.filter2D(r, -1, self.conv_filter_v).astype(float))
                             channels_h.append(cv2.filter2D(r, -1, self.conv_filter_h))
                         if np.any(g):
                             channels_v.append(cv2.filter2D(g, -1, self.conv_filter_v))
