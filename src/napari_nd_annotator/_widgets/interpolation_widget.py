@@ -10,6 +10,7 @@ from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton, 
 from qtpy.QtCore import QThread, QObject, Signal
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
+from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils.progress_widget import ProgressWidget
 from ..mean_contour import settings
@@ -70,8 +71,8 @@ def average_mask(m1, m2, w1, w2):
     tform2 = SimilarityTransform(translation=np.flip(transl_2))
     m1_translated = warp(m1, tform1, preserve_range=True).astype(bool)
     m2_translated = warp(m2, tform2, preserve_range=True).astype(bool)
-    dt1_translated = distance_transform_edt(m1_translated) - distance_transform_edt(~m1_translated)
-    dt2_translated = distance_transform_edt(m2_translated) - distance_transform_edt(~m2_translated)
+    dt1_translated = distance_transform_edt(binary_erosion(m1_translated)) - distance_transform_edt(~m1_translated)
+    dt2_translated = distance_transform_edt(binary_erosion(m2_translated)) - distance_transform_edt(~m2_translated)
     average_dist_translated = (w1 * dt1_translated + w2 * dt2_translated) / (w1+w2)
     average_mask_translated = average_dist_translated > 0
     transl_avg = im_center - (centroid1*w1+centroid2*w2)/(w1+w2)
