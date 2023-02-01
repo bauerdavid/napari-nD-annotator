@@ -1,13 +1,19 @@
 import napari
-from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QPushButton, QSizePolicy
+from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QPushButton, QSizePolicy, QScrollArea
+from qtpy.QtCore import Qt
 from keyword import iskeyword
 
 
 class WidgetWithLayerList(QWidget):
-    def __init__(self, viewer: napari.Viewer, layers, add_layers=True, **kwargs):
+    def __init__(self, viewer: napari.Viewer, layers, add_layers=True, scrollable=True, **kwargs):
         super().__init__(**kwargs)
         layout = QVBoxLayout()
         layers_layout = QVBoxLayout()
+        if scrollable:
+            self.scroll_area = QScrollArea()
+            self.scroll_area.setWidgetResizable(True)
+            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.central_widget = QWidget()
         self.viewer = viewer
         self.layers = dict()  # str -> QComboBox
@@ -26,7 +32,11 @@ class WidgetWithLayerList(QWidget):
             if add_layers:
                 layers_layout.addWidget(self.layers[layer_name].combobox)
         layout.addLayout(layers_layout)
-        layout.addWidget(self.central_widget)
+        if scrollable:
+            self.scroll_area.setWidget(self.central_widget)
+            layout.addWidget(self.scroll_area)
+        else:
+            layout.addWidget(self.central_widget)
         super().setLayout(layout)
 
     def setLayout(self, a0: 'QLayout') -> None:
