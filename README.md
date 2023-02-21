@@ -39,6 +39,8 @@ You can install `napari-nD-annotator` via [pip]:
 The plugin is also available in napari-hub, to install it directly from napari, please refer to
 [plugin installation instructions] at the official [napari] website.
 
+If any problems occur during installation or while using the plugin, please refer to [Known Issues](#known-issues).
+
 ## Usage
 You can start napari with the plugin's widgets already opened as:
 
@@ -110,6 +112,7 @@ Distributed under the terms of the [BSD-3] license,
    * When deleting a single layer from the layer list, some other layers' names might be overwritten by some "invisible" utility layers. Selecting and unselecting these will restore the original layer.
    * When deleting multiple layers, some strange behavior can happen (layer duplicates appear, only in the layer list; napari breaks etc.). Until fixed, layers should be removed one by one.
    * If any layer is created before opening the `Annotation Toolbox` widget, some "temporary" layers appear in the layer list. For further information see the [Minimal contour](https://github.com/bauerdavid/napari-nD-annotator/edit/mean_contour/README.md#minimal-contour) section
+   * A thorough analysis of the required Python modules is missing. The last release of the plugin won't work with `napari==0.4.17` (was tested for `0.4.15` and `0.4.16`), and also it is incompatible with `numpy=1.24.0` (was tested for `1.23.5`). For the next release we will test and provide the exact required Python packages.
 
 If you encounter any problems, please [file an issue] along with a detailed description.
 
