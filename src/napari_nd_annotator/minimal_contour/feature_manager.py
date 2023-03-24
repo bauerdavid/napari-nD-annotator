@@ -24,12 +24,12 @@ class FeatureManager:
         self.feature_extractor = FeatureExtractor()
         atexit.register(self.clean)
 
-    def get_features(self, layer, idx, block=True):
-        dims_displayed = self.viewer.dims.displayed
-        dims_not_displayed = self.viewer.dims.not_displayed
+    def get_features(self, layer, block=True):
+        dims_displayed = tuple(layer._dims_displayed)
+        dims_not_displayed = tuple(layer._dims_not_displayed)
         if layer != self.layer or dims_displayed != self.dims_displayed:
             self.init_file(layer, dims_displayed)
-        idx = tuple(idx[i] for i in range(len(idx)) if i in dims_not_displayed)
+        idx = tuple(layer._slice_indices[i] for i in range(layer.ndim) if i in dims_not_displayed)
         # if not block and not self.slices_calculated[layer][dims_displayed][idx]:
         if not block and not self.feature_extractor.done_mask[idx]:
             raise ValueError("features not calculated for layer %s at %s" % (layer, idx))
@@ -66,12 +66,13 @@ class FeatureManager:
         else:
             self.memmaps.append(np.memmap(path_v, shape=shape, dtype=float))
             self.memmaps.append(np.memmap(path_h, shape=shape, dtype=float))
+            self.feature_extractor.done_mask = np.ones([shape[i] for i in layer._dims_not_displayed], bool)
 
     def generate_filename(self, prefix, dims_displayed, suffix=''):
         return os.path.join(self.temp_folder, "tmp_ftrs_%s_%s%s.dat" % (prefix, "_".join(str(d) for d in dims_displayed), suffix))
 
     def start_feature_calculation(self, layer):
-        self.feature_extractor.start_jobs(layer.data, self.memmaps, self.viewer.dims.current_step, self.viewer.dims.displayed, layer.rgb)
+        self.feature_extractor.start_jobs(layer.data, self.memmaps, layer._slice_indices, layer._dims_displayed, layer.rgb)
 
     @staticmethod
     def random_prefix():
