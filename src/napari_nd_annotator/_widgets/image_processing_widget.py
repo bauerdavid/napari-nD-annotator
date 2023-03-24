@@ -11,7 +11,7 @@ import skimage
 import warnings
 import keyword
 
-from ._utils.progress_widget import ProgressWidget
+from ._utils import ProgressWidget
 
 
 class ScriptWorker(QObject):
