@@ -1,14 +1,19 @@
+import itertools
+
 from qtpy.QtCore import QObject, QEvent, Qt
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QTabWidget, QPushButton
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QTabWidget, QPushButton, QSizePolicy
 from napari import Viewer
-from napari.layers import Labels, Layer
+from napari.layers import Labels, Layer, Image
+from napari.qt.threading import create_worker
 import numpy as np
 from skimage.draw import draw
-from scipy.ndimage import binary_fill_holes
+from scipy.ndimage import binary_fill_holes, find_objects
 import math
 
+from napari_bbox import BoundingBoxLayer
 from .interpolation_widget import InterpolationWidget
 from .minimal_contour_widget import MinimalContourWidget
+from .minimal_surface_widget import MinimalSurfaceWidget
 from ._utils.callbacks import (
     extend_mask,
     reduce_mask,
@@ -17,7 +22,9 @@ from ._utils.callbacks import (
     scroll_to_next,
     scroll_to_prev,
     increment_selected_label,
-    decrement_selected_label
+    decrement_selected_label,
+    lock_layer,
+    LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
 def check_connectivity(event):
@@ -35,11 +42,14 @@ class AnnotatorWidget(QWidget):
         self.fill_objects_checkbox.setToolTip("When drawing labels,"
                                               " close the drawn curve and fill its area after releasing the mouse")
         self._active_labels_layer = None
+        self._active_bbox_layer = None
         self.drawn_region_history = dict()
         self.drawn_slice_history = dict()
         self.values_history = dict()
         self.viewer = viewer
         self.viewer.layers.selection.events.connect(self.on_layer_selection_change)
+        self.viewer.layers.selection.events.connect(lock_layer)
+        self.viewer.layers.events.connect(self.move_bbox_to_top)
         self.fill_objects_checkbox.clicked.connect(self.set_fill_objects)
         layout.addWidget(self.fill_objects_checkbox)
 
@@ -50,6 +60,9 @@ class AnnotatorWidget(QWidget):
         self.minimal_contour_widget = MinimalContourWidget(viewer)
         tabs_widget.addTab(self.minimal_contour_widget, "Minimal Contour")
 
+        self.minimal_surface_widget = MinimalSurfaceWidget(viewer, self.minimal_contour_widget)
+        tabs_widget.addTab(self.minimal_surface_widget, "Minimal Surface")
+        tabs_widget.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
         layout.addWidget(tabs_widget)
 
         help_layout = QVBoxLayout()
@@ -62,9 +75,9 @@ class AnnotatorWidget(QWidget):
         layout.addLayout(help_layout)
         self.setLayout(layout)
         self.installEventFilter(self)
-        layout.addStretch()
         self.set_fill_objects(True)
         self.on_layer_selection_change()
+        self.init_bbox_layer()
 
     def eventFilter(self, source: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Hide:
@@ -90,6 +103,7 @@ class AnnotatorWidget(QWidget):
         self._active_labels_layer = labels_layer
         self.set_fill_objects(self.fill_objects)
         self.set_labels_callbacks()
+        self.init_bbox_layer()
 
     def unset_labels_callbacks(self):
         if self.active_labels_layer is None:
@@ -108,6 +122,9 @@ class AnnotatorWidget(QWidget):
             return
         if check_connectivity not in self.active_labels_layer.events.data.callbacks:
             self.active_labels_layer.events.data.connect(check_connectivity)
+        if self.start_update_bbox not in self.active_labels_layer.events.selected_label.callbacks:
+            self.active_labels_layer.events.selected_label.connect(self.start_update_bbox)
+            self.active_labels_layer.events.data.connect(self.start_update_bbox)
         self.active_labels_layer.bind_key("Control-Z", overwrite=True)(self.undo)
         self.active_labels_layer.bind_key("Control-+", overwrite=True)(extend_mask)
         self.active_labels_layer.bind_key("Control--", overwrite=True)(reduce_mask)
@@ -117,6 +134,51 @@ class AnnotatorWidget(QWidget):
         self.active_labels_layer.bind_key("D", overwrite=True)(scroll_to_next(self.viewer))
         self.active_labels_layer.bind_key("W", overwrite=True)(increase_brush_size)
         self.active_labels_layer.bind_key("S", overwrite=True)(decrease_brush_size)
+
+    def move_bbox_to_top(self, e=None):
+        if self._active_bbox_layer not in self.viewer.layers:
+            return
+        if e is not None\
+                and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded", "reordered", "editable", "translate"]:
+            return
+        layer_list = self.viewer.layers
+        with (
+            layer_list.events.moved.blocker(),
+            layer_list.events.moving.blocker()
+        ):
+            for i in reversed(range(len(layer_list))):
+                layer = layer_list[i]
+                if layer == self._active_bbox_layer:
+                    break
+                if type(layer) not in [Labels, Image]:
+                    continue
+                bbox_index = layer_list.index(self._active_bbox_layer)
+                if i == bbox_index+1:
+                    layer_list.move(i, bbox_index)
+                else:
+                    layer_list.move(bbox_index, i)
+                break
+
+    def start_update_bbox(self, event):
+        worker = create_worker(self.update_bbox, event.source)
+        worker.finished.connect(self._active_bbox_layer.refresh)
+        worker.start()
+
+    def update_bbox(self, layer):
+        if len(self._active_bbox_layer.data) > 0:
+            self._active_bbox_layer.data = []
+        label = layer.selected_label
+        data = layer.data
+        mask = data == label
+        bb_corners = find_objects(mask, max_label=1)[0]
+        if bb_corners is None:
+            return
+        min_ = [slice_.start for slice_ in bb_corners]
+        max_ = [slice_.stop - 1 for slice_ in bb_corners]
+        bb = np.asarray(np.where(list(itertools.product((False, True), repeat=layer.ndim)), max_, min_))
+        self._active_bbox_layer.add(bb)
+        self._active_bbox_layer.properties["label"][0] = label
+        self._active_bbox_layer.refresh_text()
 
     def set_fill_objects(self, state):
         if self.active_labels_layer is None:
@@ -160,8 +222,8 @@ class AnnotatorWidget(QWidget):
             return
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        image_coords = tuple(coordinates[i] for i in range(len(coordinates)) if i in event.dims_displayed)
-        slice_dims = tuple(coordinates[i] if i not in event.dims_displayed else slice(None) for i in range(len(coordinates)))
+        image_coords = tuple(coordinates[i] for i in layer._dims_displayed)
+        slice_dims = tuple(coordinates[i] if i not in layer._dims_displayed else slice(None) for i in range(layer.ndim))
         current_draw = np.zeros_like(layer.data[slice_dims], np.bool)
         start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
@@ -172,7 +234,7 @@ class AnnotatorWidget(QWidget):
         while event.type == 'mouse_move':
             coordinates = layer.world_to_data(event.position)
             coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-            image_coords = tuple(coordinates[i] for i in range(len(coordinates)) if i in event.dims_displayed)
+            image_coords = tuple(coordinates[i] for i in layer._dims_displayed)
             AnnotatorWidget.draw_line(prev_x, prev_y, image_coords[-2], image_coords[-1], layer.brush_size, current_draw)
             prev_x, prev_y = image_coords
             yield
@@ -183,7 +245,7 @@ class AnnotatorWidget(QWidget):
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(
             max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        image_coords = tuple(coordinates[i] for i in range(len(coordinates)) if i in event.dims_displayed)
+        image_coords = tuple(coordinates[i] for i in layer._dims_displayed)
         prev_x, prev_y = image_coords
         AnnotatorWidget.draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
         cx, cy = draw.disk((prev_x, prev_y), layer.brush_size/2)
@@ -211,6 +273,7 @@ class AnnotatorWidget(QWidget):
             del self.values_history[self.history_idx]
         self.decr_history_idx()
         layer.undo()
+        layer.events.data()
 
     def incr_history_idx(self, *args):
         self.history_idx += 1
@@ -222,3 +285,27 @@ class AnnotatorWidget(QWidget):
     def show_help_window(self):
         dialog = HelpDialog(self)
         dialog.show()
+
+    def init_bbox_layer(self):
+        if self.active_labels_layer is None:
+            return
+        if self._active_bbox_layer in self.viewer.layers:
+            if (self.active_labels_layer is not None and self._active_bbox_layer.ndim == self.active_labels_layer.ndim
+                    or self.active_labels_layer is None and self._active_bbox_layer.ndim == 2):
+                return
+            with self.viewer.layers.selection.events.blocker(self.on_layer_selection_change):
+                self.viewer.layers.remove(self._active_bbox_layer)
+        self._active_bbox_layer = BoundingBoxLayer(name="%s active object" % LOCK_CHAR, face_color="transparent",
+                                                  edge_color="green", ndim=self.active_labels_layer.ndim if self.active_labels_layer else 2)
+        self._active_bbox_layer.opacity = 1.
+        self._active_bbox_layer.current_properties |= {"label": 0}
+        self._active_bbox_layer.text = {
+            "text": "{label:d}",
+            "size": 10,
+            "color": "green"
+        }
+        with self.viewer.layers.selection.events.blocker(self.on_layer_selection_change):
+            prev_selection = self.viewer.layers.selection.copy()
+            self.viewer.add_layer(self._active_bbox_layer)
+            if len(prev_selection) == 1 and self._active_bbox_layer not in prev_selection:
+                self.viewer.layers.selection = prev_selection
