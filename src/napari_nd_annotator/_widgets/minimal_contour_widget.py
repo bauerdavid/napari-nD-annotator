@@ -21,11 +21,8 @@ from qtpy.QtWidgets import (
 from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt, QEvent
 from qtpy.QtGui import QCursor, QKeyEvent, QPixmap, QImage
 from superqt import QLargeIntSpinBox
-from napari._qt.widgets._slider_compat import QDoubleSlider
-
-from ._utils.progress_widget import ProgressWidget
-from ._utils.widget_with_layer_list import WidgetWithLayerList
-from ._utils.collapsible_widget import CollapsibleWidget
+# from napari._qt.widgets._slider_compat import QDoubleSlider
+from ._utils import QDoubleSlider, ProgressWidget, WidgetWithLayerList, CollapsibleWidget
 from ._utils.changeable_color_box import QtChangeableColorBox
 from ._utils.callbacks import (
     extend_mask,
@@ -35,7 +32,8 @@ from ._utils.callbacks import (
     scroll_to_next,
     scroll_to_prev,
     increment_selected_label,
-    decrement_selected_label
+    decrement_selected_label,
+    LOCK_CHAR
 )
 from .image_processing_widget import ImageProcessingWidget
 
@@ -51,6 +49,7 @@ GRADIENT_BASED = 0
 INTENSITY_BASED = 2
 
 DEMO_SIZE = 200
+
 
 def bbox_around_points(pts):
     p1 = pts.min(0)
@@ -118,7 +117,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.param_spinbox.setMinimum(1)
         self.param_spinbox.setMaximum(50)
         self.param_spinbox.setValue(5)
-        self.param_spinbox.valueChanged.connect(lambda val: self.calculator.set_param(val))
+        self.param_spinbox.valueChanged.connect(self.on_param_change)
         self.param_spinbox.setToolTip("Increasing this parameter will cause contours to be more aligned\n"
                                       "with the selected image feature (with a lower number the contour will be\n"
                                       "closer to the Euclidean shortest path")
@@ -170,16 +169,17 @@ class MinimalContourWidget(WidgetWithLayerList):
         smooth_contour_layout = QHBoxLayout()
         self.smooth_contour_checkbox = QCheckBox("Smooth contour")
         self.smooth_contour_checkbox.clicked.connect(lambda checked: self.smooth_contour_spinbox.setVisible(checked))
-        self.smooth_contour_checkbox.setChecked(True)
         self.smooth_contour_checkbox.setToolTip("When checked, the finished contour will be smoothed\n"
                                                 "to remove minor noise using Fourier transformation.")
-        self.smooth_contour_spinbox = QSpinBox()
-        self.smooth_contour_spinbox.setMinimum(0)
-        self.smooth_contour_spinbox.setMaximum(100)
-        self.smooth_contour_spinbox.setValue(10)
+        self.smooth_contour_spinbox = QDoubleSlider(Qt.Horizontal)
+        self.smooth_contour_spinbox.setMinimum(0.)
+        self.smooth_contour_spinbox.setMaximum(1.)
+        self.smooth_contour_spinbox.setValue(1.)
+        # self.smooth_contour_spinbox.setTickInterval(0.05)
         self.smooth_contour_spinbox.setToolTip("Number of Fourier coefficients to approximate the contour.\n"
                                                "Lower number -> smoother contour\n"
                                                "Higher number -> more faithful to the original")
+        self.smooth_contour_spinbox.setVisible(self.smooth_contour_checkbox.isChecked())
         smooth_contour_layout.addWidget(self.smooth_contour_checkbox)
         smooth_contour_layout.addWidget(self.smooth_contour_spinbox)
         layout.addLayout(smooth_contour_layout)
@@ -202,7 +202,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         if self.labels.layer is not None:
             dtype_lims = get_dtype_limits(get_dtype(self.labels.layer))
         else:
-            dtype_lims = 0, np.iinfo(np.int).max
+            dtype_lims = 0, np.iinfo(int).max
         self.selectionSpinBox.setRange(*dtype_lims)
         self.selectionSpinBox.setKeyboardTracking(False)
         self.selectionSpinBox.valueChanged.connect(self.change_selected_label)
@@ -227,7 +227,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self._on_selected_label_change()
 
         layout.addLayout(color_layout)
-        layout.addStretch()
         self.setLayout(layout)
 
         def change_layer_callback(num):
@@ -241,7 +240,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             viewer.bind_key("Control-%d" % i, overwrite=True)(change_layer_callback(i))
         self.from_e_points_layer = viewer.add_points(
             ndim=2,
-            name="<locked> from E",
+            name="%s from E" % LOCK_CHAR,
             size=self.point_size_spinbox.value(),
             face_color="red",
             edge_color="red"
@@ -249,7 +248,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.from_e_points_layer.editable = False
         self.to_s_points_layer = viewer.add_points(
             ndim=2,
-            name="<locked> to S",
+            name="%s to S" % LOCK_CHAR,
             size=self.point_size_spinbox.value(),
             face_color="gray",
             edge_color="gray"
@@ -257,7 +256,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.to_s_points_layer.editable = False
         self.output = viewer.add_points(
             ndim=2,
-            name="<locked> temp",
+            name="%s temp" % LOCK_CHAR,
             size=self.point_size_spinbox.value(),
         )
         self.output.editable = False
@@ -267,9 +266,10 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.delayed_set_image)
+        viewer.dims.events.ndisplay.connect(self.set_image)
         viewer.dims.events.current_step.connect(self.update_demo_image)
         self.viewer.layers.events.connect(self.move_temp_to_top)
-        self.viewer.layers.selection.events.connect(self.lock_layer)
+        self.viewer.bind_key("Control-Tab", overwrite=True)(self.swap_selection)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.window().installEventFilter(self)
@@ -277,8 +277,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.set_image()
         self.set_callbacks()
         self.move_temp_to_top()
-
-
         self.update_label_tooltip()
 
     def set_use_smoothing(self, use_smoothing):
@@ -309,11 +307,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.canvas.native.setFocus()
-
-    def lock_layer(self, event):
-        for layer in event.source:
-            if layer.name.startswith("<locked>"):
-                layer.editable = False
 
     def shift_pressed(self, _):
         with warnings.catch_warnings():
@@ -394,12 +387,11 @@ class MinimalContourWidget(WidgetWithLayerList):
             dtype_lims = get_dtype_limits(get_dtype(self.labels.layer))
             self.selectionSpinBox.setValue(self.labels.layer.selected_label)
         else:
-            dtype_lims = 0, np.iinfo(np.int).max
+            dtype_lims = 0, np.iinfo(int).max
         self.selectionSpinBox.setRange(*dtype_lims)
         self.colorBox.layer = self.labels.layer
         if self.prev_labels_layer is not None:
             self.prev_labels_layer.events.selected_label.disconnect(self._on_selected_label_change)
-            self.prev_labels_layer.bind_key("Control-Tab", overwrite=True)(None)
             if self.on_mouse_wheel in self.prev_labels_layer.mouse_wheel_callbacks:
                 self.prev_labels_layer.mouse_wheel_callbacks.remove(self.on_mouse_wheel)
             self.prev_labels_layer.bind_key("Shift", overwrite=True)(None)
@@ -410,7 +402,6 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.labels.layer.events.selected_label.connect(
                 self._on_selected_label_change
             )
-            self.labels.layer.bind_key("Control-Tab", overwrite=True)(lambda _: self.viewer.layers.selection.select_only(self.anchor_points))
             if self.on_mouse_wheel not in self.labels.layer.mouse_wheel_callbacks:
                 self.labels.layer.mouse_wheel_callbacks.append(self.on_mouse_wheel)
             self.labels.layer.bind_key("Shift", overwrite=True)(self.shift_pressed)
@@ -432,7 +423,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.setFocus()
 
     def move_temp_to_top(self, e=None):
-        if e is not None and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded"]:
+        if e is not None and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded", "editable", "translate"]:
             return
         layer_list = self.viewer.layers
         with layer_list.events.moved.blocker(), layer_list.events.moving.blocker():
@@ -482,6 +473,8 @@ class MinimalContourWidget(WidgetWithLayerList):
             if layer.mode != Mode.ADD:
                 return
             self.point_triangle[1] = list(self.anchor_points.world_to_data([event.position[i] for i in range(len(event.position)) if i in event.dims_displayed]))
+            if np.any(self.point_triangle[1] < 0) or np.any(self.point_triangle[1] >= self.image_data.shape[:2]):
+                self.point_triangle[1] = np.clip(self.point_triangle[1], 0, np.subtract(self.image_data.shape[:2], 1))
             if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= self.image_data.shape[:2]):
                 return
             if not self.ctrl_down:
@@ -538,7 +531,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.anchor_points.bind_key("Control-Shift", overwrite=True)(self.ctrl_shift_pressed)
         self.anchor_points.bind_key("Escape", overwrite=True)(self.esc_callback)
         self.anchor_points.bind_key("Control-Z", overwrite=True)(self.ctrl_z_callback)
-        self.anchor_points.bind_key("Control-Tab", overwrite=True)(lambda _: self.labels.layer and self.viewer.layers.selection.select_only(self.labels.layer))
         self.anchor_points.bind_key("Control-+", overwrite=True)(lambda _: extend_mask(self.labels.layer))
         self.anchor_points.bind_key("Control--", overwrite=True)(lambda _: reduce_mask(self.labels.layer))
         self.anchor_points.bind_key("Q", overwrite=True)(lambda _: decrement_selected_label(self.labels.layer))
@@ -587,6 +579,8 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.feature_editor.image = None
             self.feature_editor.features = None
             return
+        if self.viewer.dims.ndisplay == 3:
+            return
         if not image_layer.visible:
             image_layer.set_view_slice()
         self.autoincrease_label_id_checkbox.setChecked(image_layer.ndim == 2)
@@ -601,16 +595,17 @@ class MinimalContourWidget(WidgetWithLayerList):
         if self.feature_editor.isVisible():
             self.feature_editor.image = image
         else:
-            grad_x, grad_y = self.feature_manager.get_features(self.image.layer, self.viewer.dims.current_step)
+            grad_x, grad_y = self.feature_manager.get_features(self.image.layer)
             if self.smooth_image_checkbox.isChecked():
                 grad_x = self.blur_image(grad_x).astype(float)
                 grad_y = self.blur_image(grad_y).astype(float)
             self.calculator.set_image(image, grad_x, grad_y)
         self._img = image
-        self.anchor_points.translate = image_layer.translate[list(self.viewer.dims.displayed)]
-        self.from_e_points_layer.translate = image_layer.translate[list(self.viewer.dims.displayed)]
-        self.to_s_points_layer.translate = image_layer.translate[list(self.viewer.dims.displayed)]
-        self.output.translate = image_layer.translate[list(self.viewer.dims.displayed)]
+        dims_displayed = list(image_layer._dims_displayed)
+        self.anchor_points.translate = image_layer.translate[dims_displayed]
+        self.from_e_points_layer.translate = image_layer.translate[dims_displayed]
+        self.to_s_points_layer.translate = image_layer.translate[dims_displayed]
+        self.output.translate = image_layer.translate[dims_displayed]
 
     def data_event(self, event):
         if event.source != self.anchor_points:
@@ -629,7 +624,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.prev_n_anchor_points = len(anchor_data)
         if len(anchor_data) == 0:
             return
-        anchor_data[-1] = np.clip(anchor_data[-1], 0, self.image_data.shape[:2])
+        anchor_data[-1] = np.clip(anchor_data[-1], 0, np.subtract(self.image_data.shape[:2], 1))
         if len(anchor_data) > 1 and np.all(np.round(anchor_data[-1]) == np.round(anchor_data[-2])):
             with self.anchor_points.events.data.blocker():
                 self.anchor_points.data = self.anchor_points.data[:-1]
@@ -683,6 +678,7 @@ class MinimalContourWidget(WidgetWithLayerList):
 
         def run(self):
             mask = skimage.draw.polygon2mask(self.mask_shape, self.contour)
+            mask = skimage.filters.rank.median(mask.astype(int), np.asarray([[0, 1, 0], [1, 1, 1], [0, 1, 0]])).astype(bool)
             self.done.emit(mask)
 
     def set_mask(self, mask):
@@ -709,20 +705,20 @@ class MinimalContourWidget(WidgetWithLayerList):
         if self.labels.layer is None:
             warnings.warn("Missing output labels layer.")
             return
-        if self.labels.layer.ndim != self.image_data.ndim:
+        if self.labels.layer.ndim != self.image.layer.ndim:
             warnings.warn("Shape of labels and image does not match.")
             return
         if not self.labels.layer.visible:
             self.labels.layer.set_view_slice()
         self.progress_dialog.setVisible(True)
-        self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(self.viewer.dims.displayed)] for p in self.output.data])
+        self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(self.labels.layer._dims_displayed)] for p in self.output.data])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.draw_worker.mask_shape = self.labels.layer._data_view.shape
         self.draw_thread.start()
 
     def smooth_fourier(self, points):
-        coefficients=self.smooth_contour_spinbox.value()
+        coefficients=max(3, round(self.smooth_contour_spinbox.value()*len(points)))
         center = points.mean(0)
         points = points - center
         tformed = scipy.fft.rfft(points, axis=0)
@@ -809,13 +805,16 @@ class MinimalContourWidget(WidgetWithLayerList):
 
     def update_demo_image(self):
         if self.image.layer is None:
+            demo_shape = (DEMO_SIZE, DEMO_SIZE)
             img = np.zeros((DEMO_SIZE, DEMO_SIZE, 3), np.uint8)
         else:
             im_layer: Image = self.image.layer
-            slice_ = tuple(slice(None) if i in self.viewer.dims.displayed else self.viewer.dims.current_step[i] for i in
-                           range(self.viewer.dims.ndim))
-            img = self._orig_image[slice_]
-            img = img[(img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2, (img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2]
+            img = im_layer._data_view.astype(float)
+            if all(s > DEMO_SIZE for s in img.shape if s > 3):
+                demo_shape = (DEMO_SIZE, DEMO_SIZE)
+                img = img[(img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2, (img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2]
+            else:
+                demo_shape = tuple(s for s in img.shape if s > 3)
             img = self.blur_image(img)
             if not im_layer.rgb:
                 max_ = im_layer.contrast_limits[1]
@@ -823,7 +822,7 @@ class MinimalContourWidget(WidgetWithLayerList):
                 img = np.clip((img - min_) / (max_ - min_), 0, 1)
                 img = (im_layer.colormap.map(img.ravel()).reshape(img.shape + (4,))*255)[..., :3].copy()
             img = img.astype(np.uint8)
-        image = QImage(img, DEMO_SIZE, DEMO_SIZE, DEMO_SIZE * 3, QImage.Format.Format_RGB888)
+        image = QImage(img, demo_shape[1], demo_shape[0], demo_shape[1]*3, QImage.Format.Format_RGB888)
         pixmap = QPixmap.fromImage(image, Qt.ImageConversionFlag.ColorOnly)
         self.demo_image.setPixmap(pixmap)
 
@@ -832,6 +831,16 @@ class MinimalContourWidget(WidgetWithLayerList):
             img,
             sigma=self.smooth_image_slider.value(),
             preserve_range=True,
-            channel_axis=-1 if img.ndim==3 else None,
+            channel_axis=-1 if img.ndim == 3 else None,
             truncate=2.
         )
+
+    def on_param_change(self, val):
+        self.calculator.set_param(val)
+        self.set_image()
+
+    def swap_selection(self, viewer: napari.Viewer):
+        if self.anchor_points != viewer.layers.selection.active:
+            viewer.layers.selection.select_only(self.anchor_points)
+        elif self.labels.layer is not None and self.labels.layer != viewer.layers.selection.active:
+            viewer.layers.selection.select_only(self.labels.layer)

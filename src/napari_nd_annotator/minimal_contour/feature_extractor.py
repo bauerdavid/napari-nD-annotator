@@ -23,6 +23,7 @@ class FeatureExtractor:
     def start_jobs(self, img, outs, current_slice=None, dims_displayed=None, rgb=None, f=None):
         self.start = time.time()
         ndim = img.ndim - (1 if rgb else 0)
+        current_slice = tuple(map(lambda s: 0 if type(s) == slice else s, current_slice))
         dims_not_displayed = tuple(i for i in range(ndim) if i not in dims_displayed)
         idx_list = np.indices((img.shape[i] if i in dims_not_displayed else 1 for i in range(ndim)))
         idx_list = idx_list.reshape((idx_list.shape[0], -1)).T

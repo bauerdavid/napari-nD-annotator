@@ -12,7 +12,7 @@ from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
-from ._utils.progress_widget import ProgressWidget
+from ._utils import ProgressWidget
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
@@ -118,7 +118,11 @@ class InterpolationWorker(QObject):
                     continue
                 next_layer_slice = layer_slice.copy()
                 next_layer_slice[dimension] = i + 1
-                if i + 1 < data.shape[dimension] and (data[tuple(next_layer_slice)] == self.selected_label).max() > 0:
+                prev_layer_slice = layer_slice.copy()
+                prev_layer_slice[dimension] = i - 1
+                if i + 1 < data.shape[dimension] \
+                        and (data[tuple(prev_layer_slice)] == self.selected_label).max() > 0\
+                        and (data[tuple(next_layer_slice)] == self.selected_label).max() > 0:
                     continue
                 cnt = contour_cv2_mask_uniform(cur_mask, n_contour_points)
                 centroid = cnt.mean(0)
@@ -159,12 +163,12 @@ class InterpolationWorker(QObject):
                             mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
                             mean_cnt = mean_cnt.astype(np.int32)
                             mask = np.zeros_like(data[tuple(inter_layer_slice)])
-                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.selected_label, -1)
+                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(self.selected_label), -1)
                         elif method == CONTOUR_BASED:
                             mean_cnt = (prev_w * prev_cnt + cur_w * cnt)/(prev_w + cur_w)
                             mean_cnt = mean_cnt.astype(np.int32)
                             mask = np.zeros_like(data[tuple(inter_layer_slice)])
-                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, self.selected_label, -1)
+                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(self.selected_label), -1)
                         elif method == DISTANCE_BASED:
                             mask = average_mask(prev_mask, cur_mask, prev_w, cur_w)
                             mask = mask.astype(np.uint8)
@@ -187,7 +191,7 @@ class InterpolationWidget(QWidget):
     def __init__(self, viewer: Viewer):
         super().__init__()
         self.viewer = viewer
-        self.progress_dialog = ProgressWidget(message="Interpolating slices...")
+        self.progress_dialog = ProgressWidget(self, message="Interpolating slices...")
         layout = QVBoxLayout()
         self._active_labels_layer = None
 
@@ -271,29 +275,16 @@ class InterpolationWidget(QWidget):
             self._active_labels_layer.bind_key("Control-I", overwrite=True)(None)
         self._active_labels_layer = layer
         layer.bind_key("Control-I", overwrite=True)(self.interpolate)
+        self.on_order_change()
 
-
-    def set_has_channels(self, has_channels):
-        self.channels_dim_dropdown.setEnabled(has_channels)
-
-    def on_order_change(self, event):
-        extents = self.active_labels_layer.extent.data[1] + 1
-        not_displayed = extents[list(self.viewer.dims.not_displayed)]
-        ch_excluded = list(filter(lambda x: x > 3, not_displayed))
-        if len(ch_excluded) == 0:
-            new_dim = self.viewer.dims.not_displayed[0]
-        else:
-            new_dim = self.viewer.dims.order[int(np.argwhere(not_displayed == ch_excluded[0])[0])]
+    def on_order_change(self, event=None):
+        if self.active_labels_layer is None or self.active_labels_layer.ndim < 3:
+            return
+        new_dim = self.viewer.dims.not_displayed[0]
         self.dimension_dropdown.setValue(new_dim)
 
-    def interpolate(self, _):
-        if self.active_labels_layer is None:
-            return
-        dimension = self.dimension_dropdown.value()
-        self.progress_dialog.setMaximum(self.active_labels_layer.data.shape[dimension])
-        self.progress_dialog.setVisible(True)
-        self.interpolate_button.setEnabled(False)
-        self.interpolation_worker.dimension = dimension
+    def prepare_interpolation_worker(self):
+        self.interpolation_worker.dimension = self.dimension_dropdown.value()
         self.interpolation_worker.n_contour_points = self.n_points.value()
         self.interpolation_worker.data = self.active_labels_layer.data
         self.interpolation_worker.method = self.method_dropdown.currentText()
@@ -301,6 +292,14 @@ class InterpolationWidget(QWidget):
         self.interpolation_worker.current_step = self.viewer.dims.current_step
         self.interpolation_worker.selected_label = self.active_labels_layer.selected_label
         self.interpolation_worker.max_iterations = self.rpsv_iterations_spinbox.value()
+
+    def interpolate(self, _=None):
+        if self.active_labels_layer is None:
+            return
+        self.progress_dialog.setMaximum(self.active_labels_layer.data.shape[self.dimension_dropdown.value()])
+        self.progress_dialog.setVisible(True)
+        self.interpolate_button.setEnabled(False)
+        self.prepare_interpolation_worker()
         self.interpolation_thread.start()
 
     def set_labels(self, data):

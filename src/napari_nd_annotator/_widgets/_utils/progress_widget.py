@@ -5,6 +5,7 @@ from qtpy import QtGui
 class ProgressWidget(QWidget):
     def __init__(self, parent=None, min_value=0, max_value=0, value=0, message="running...", visible=False, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.drag_start_x = None
         self.drag_start_y = None
         layout = QVBoxLayout()

@@ -376,10 +376,10 @@ void CRanders::DistanceCalculator()
 
 	auto bsi = m_boundary.size();
 	m_velo.resize(bsi);
-#pragma omp parallel
+//#pragma omp parallel
     {
         double temp_maxv(0);
-#pragma omp for
+//#pragma omp for
         for (int ii = 0; ii < bsi ; ++ii) {
 
             unsigned long cxy = m_boundary[ii];
@@ -406,7 +406,7 @@ void CRanders::DistanceCalculator()
             if (temp_maxv < vnormed) temp_maxv = vnormed;
             m_velo[ii] = sv;
         }
-#pragma omp critical(maxv)
+//#pragma omp critical(maxv)
         if(temp_maxv > maxv) maxv = temp_maxv;
     }
 	// update distance map
@@ -482,10 +482,10 @@ void CSplitter::DistanceCalculator()
 
 	auto bsi = m_boundary.size();
 	m_velo.resize(bsi);
-#pragma omp parallel
+//#pragma omp parallel
     {
         double temp_maxv(0);
-#pragma omp for
+//#pragma omp for
         for (int ii = 0; ii < bsi; ++ii) {
 
             unsigned long cxy = m_boundary[ii];
@@ -516,7 +516,7 @@ void CSplitter::DistanceCalculator()
             m_velo[ii] = sv;
 
         }
-#pragma omp critical(temp_maxv)
+//#pragma omp critical(temp_maxv)
         if(temp_maxv>maxv) maxv = temp_maxv;
     }
 	UpdateDistanceMap(maxv);
