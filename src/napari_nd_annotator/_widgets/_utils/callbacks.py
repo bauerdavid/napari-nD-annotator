@@ -1,6 +1,8 @@
 import warnings
 from scipy.ndimage import binary_dilation, binary_erosion
+from napari.layers import Labels, Image
 
+LOCK_CHAR = u"\U0001F512"
 
 def extend_mask(layer):
     if layer is None:
@@ -70,3 +72,36 @@ def decrease_brush_size(layer):
         return
     diff = min(max(1, layer.brush_size // 10), 5)
     layer.brush_size = max(0, layer.brush_size - diff)
+
+
+def lock_layer(event):
+    for layer in event.source:
+        if layer.name.startswith(LOCK_CHAR):
+            layer.editable = False
+
+
+def keep_layer_on_top(layer):
+    def on_top_callback(e):
+        layers = e.source
+        if layer not in layers:
+            return
+        if e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded", "editable", "translate"]:
+            return
+        layer_list = layers
+        with (
+            layer_list.events.moved.blocker(),
+            layer_list.events.moving.blocker()
+        ):
+            for i in reversed(range(len(layer_list))):
+                elem = layer_list[i]
+                if elem == layer:
+                    break
+                if type(elem) not in [Labels, Image]:
+                    continue
+                layer_index = layer_list.index(layer)
+                if i == layer_index+1:
+                    layer_list.move(i, layer_index)
+                else:
+                    layer_list.move(layer_index, i)
+                break
+    return on_top_callback
