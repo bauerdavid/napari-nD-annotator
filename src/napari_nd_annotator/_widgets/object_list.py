@@ -14,9 +14,9 @@ from napari.layers import Image, Labels
 from napari.layers.labels._labels_constants import Mode
 from scipy.ndimage import find_objects
 
-from ._utils.widget_with_layer_list import WidgetWithLayerList
+from ._utils import WidgetWithLayerList
 from .projections import SliceDisplayWidget
-from ..boundingbox import BoundingBoxLayer
+from napari_bbox import BoundingBoxLayer
 
 import itertools
 import csv
