@@ -1,5 +1,6 @@
 import itertools
 
+import napari
 from qtpy.QtCore import QObject, QEvent, Qt
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QTabWidget, QPushButton, QSizePolicy
 from napari import Viewer
@@ -9,8 +10,10 @@ import numpy as np
 from skimage.draw import draw
 from scipy.ndimage import binary_fill_holes, find_objects
 import math
+from packaging import version
 
-from napari_bbox import BoundingBoxLayer
+if version.parse(napari.__version__) >= version.parse("0.4.15"):
+    from napari_bbox import BoundingBoxLayer
 from .interpolation_widget import InterpolationWidget
 from .minimal_contour_widget import MinimalContourWidget
 from .minimal_surface_widget import MinimalSurfaceWidget
@@ -160,11 +163,15 @@ class AnnotatorWidget(QWidget):
                 break
 
     def start_update_bbox(self, event):
+        if self._active_bbox_layer is None:
+            return
         worker = create_worker(self.update_bbox, event.source)
         worker.finished.connect(self._active_bbox_layer.refresh)
         worker.start()
 
     def update_bbox(self, layer):
+        if self._active_bbox_layer is None:
+            return
         if len(self._active_bbox_layer.data) > 0:
             self._active_bbox_layer.data = []
         label = layer.selected_label
@@ -287,7 +294,7 @@ class AnnotatorWidget(QWidget):
         dialog.show()
 
     def init_bbox_layer(self):
-        if self.active_labels_layer is None:
+        if self.active_labels_layer is None or version.parse(napari.__version__) < version.parse("0.4.15"):
             return
         if self._active_bbox_layer in self.viewer.layers:
             if (self.active_labels_layer is not None and self._active_bbox_layer.ndim == self.active_labels_layer.ndim

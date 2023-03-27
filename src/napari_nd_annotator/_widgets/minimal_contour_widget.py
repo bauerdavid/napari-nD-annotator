@@ -408,7 +408,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             self._on_selected_label_change()
         self.prev_labels_layer = self.labels.layer
 
-    def _on_selected_label_change(self):
+    def _on_selected_label_change(self, *args):
         """Receive layer model label selection change event and update spinbox."""
         if self.labels.layer is None:
             return
@@ -553,7 +553,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             warnings.warn("Cannot change mode to %s: only 'add' and 'pan_zoom' mode is allowed" % event.mode)
             event.source.mode = "add"
 
-    def delayed_set_image(self):
+    def delayed_set_image(self, *args):
         if self.prev_timer_id is not None:
             self.killTimer(self.prev_timer_id)
         self.prev_timer_id = self.startTimer(1000)
@@ -572,7 +572,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             self._orig_image = image_layer.data.copy() if image_layer is not None else None
         self._prev_img_layer = image_layer
 
-    def set_image(self):
+    def set_image(self, *args):
         image_layer: Image = self.image.layer
         if image_layer is None:
             self._img = None
@@ -803,7 +803,7 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self.image.layer.events.data()
                 self.image.layer.refresh()
 
-    def update_demo_image(self):
+    def update_demo_image(self, *args):
         if self.image.layer is None:
             demo_shape = (DEMO_SIZE, DEMO_SIZE)
             img = np.zeros((DEMO_SIZE, DEMO_SIZE, 3), np.uint8)

@@ -1,5 +1,4 @@
 import itertools
-import warnings
 
 import numpy as np
 from PIL import Image as PILImage
@@ -154,7 +153,7 @@ class DataProjectionWidget(QLabel):
                 _icon = np.tile(_icon, (1, 1, 3))
             elif _icon.shape[-1] == 4:
                 _icon = _icon[..., :-1]
-            self.img = QImage(_icon, _icon.shape[1], _icon.shape[0], QImage.Format.Format_RGB888)
+            self.img = QImage(_icon, _icon.shape[1], _icon.shape[0], _icon.shape[1]*3, QImage.Format.Format_RGB888)
         pixmap = QPixmap()
         pixmap = pixmap.fromImage(self.img, QtCore.Qt.ImageConversionFlag.ColorOnly)
         self.setMinimumSize(64, 64)

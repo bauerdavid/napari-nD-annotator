@@ -36,6 +36,7 @@ class FeatureManager:
         # while not self.slices_calculated[layer][dims_displayed][idx]:
         while not self.feature_extractor.done_mask[idx]:
             pass
+        idx = tuple(layer._slice_indices[i] if i in dims_not_displayed else slice(None) for i in range(layer.ndim))
         return self.memmaps[0][idx], self.memmaps[1][idx]
 
     def init_file(self, layer, dims_displayed):

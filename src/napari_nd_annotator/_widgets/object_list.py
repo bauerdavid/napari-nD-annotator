@@ -215,13 +215,8 @@ class QObjectListWidgetItem(QListWidgetItem):
         self.image_layer.visible = False
 
     def on_data_change(self, event):
-        if self.channels_dim is not None and not self.image_layer.rgb:
-            if self.parent.crop_mask_layer._mode == Mode.PAINT:
-                data = self.parent.crop_mask_layer.data.max(axis=self.channels_dim, keepdims=True)
-                self.parent.crop_mask_layer.data[:] = data
-            elif self.parent.crop_mask_layer._mode == Mode.ERASE:
-                data = self.parent.crop_mask_layer.data.min(axis=self.channels_dim, keepdims=True)
-                self.parent.crop_mask_layer.data[:] = data
+        if self.parent.crop_mask_layer is None:
+            return
         self.mask_layer.data[self.bbox_idx] = self.parent.crop_mask_layer.data
         if self.parent.projections_widget is not None:
             self.parent.projections_widget.update_slider_ranges()
