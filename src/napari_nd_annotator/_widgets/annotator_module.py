@@ -149,18 +149,21 @@ class AnnotatorWidget(QWidget):
             layer_list.events.moved.blocker(),
             layer_list.events.moving.blocker()
         ):
-            for i in reversed(range(len(layer_list))):
-                layer = layer_list[i]
-                if layer == self._active_bbox_layer:
+            try:
+                for i in reversed(range(len(layer_list))):
+                    layer = layer_list[i]
+                    if layer == self._active_bbox_layer:
+                        break
+                    if type(layer) not in [Labels, Image]:
+                        continue
+                    bbox_index = layer_list.index(self._active_bbox_layer)
+                    if i == bbox_index+1:
+                        layer_list.move(i, bbox_index)
+                    else:
+                        layer_list.move(bbox_index, i)
                     break
-                if type(layer) not in [Labels, Image]:
-                    continue
-                bbox_index = layer_list.index(self._active_bbox_layer)
-                if i == bbox_index+1:
-                    layer_list.move(i, bbox_index)
-                else:
-                    layer_list.move(bbox_index, i)
-                break
+            except KeyError:
+                ...
 
     def start_update_bbox(self, event):
         if self._active_bbox_layer is None:
