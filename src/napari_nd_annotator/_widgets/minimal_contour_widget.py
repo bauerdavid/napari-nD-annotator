@@ -1,6 +1,4 @@
-import time
 import warnings
-import math
 import napari
 import skimage.draw
 from napari.layers.labels._labels_utils import get_dtype
@@ -22,7 +20,7 @@ from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt, QEvent
 from qtpy.QtGui import QCursor, QKeyEvent, QPixmap, QImage
 from superqt import QLargeIntSpinBox
 # from napari._qt.widgets._slider_compat import QDoubleSlider
-from ._utils import QDoubleSlider, ProgressWidget, WidgetWithLayerList, CollapsibleWidget
+from ._utils import QDoubleSlider, ProgressWidget, WidgetWithLayerList, CollapsibleWidget, CollapsibleWidgetGroup
 from ._utils.changeable_color_box import QtChangeableColorBox
 from ._utils.callbacks import (
     extend_mask,
@@ -83,7 +81,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.last_segment_length = None
         self.prev_n_anchor_points = 0
         self.image.combobox.currentIndexChanged.connect(self.store_orig_image)
-        self.image.combobox.currentIndexChanged.connect(self.apply_smoothing)
+        self.image.combobox.currentIndexChanged.connect(self.apply_blurring)
         self.image.combobox.currentIndexChanged.connect(self.set_image)
         self.image.combobox.currentIndexChanged.connect(self.update_demo_image)
         self.prev_labels_layer = self.labels.layer
@@ -97,12 +95,13 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.prev_vals = dict()
 
         layout = QVBoxLayout()
-
-        layout.addWidget(QLabel("Used feature"))
+        features_widget = CollapsibleWidget("Image features")
+        features_layout = QVBoxLayout()
+        features_layout.addWidget(QLabel("Used feature"))
         self.feature_dropdown = QComboBox()
         self.feature_dropdown.addItems(["High gradient", "High intensity", "Low intensity", "Custom"])
         self.feature_dropdown.currentIndexChanged.connect(self.on_feature_change)
-        layout.addWidget(self.feature_dropdown)
+        features_layout.addWidget(self.feature_dropdown)
 
         self.feature_editor = ImageProcessingWidget(self._img, viewer)
         self.feature_editor.setVisible(self.feature_dropdown.currentText() == "Custom")
@@ -110,9 +109,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         def set_test_script():
             self.test_script = True
         self.feature_editor.try_script.connect(set_test_script)
-        layout.addWidget(self.feature_editor)
+        features_layout.addWidget(self.feature_editor)
 
-        layout.addWidget(QLabel("Param"))
+        features_layout.addWidget(QLabel("Param"))
         self.param_spinbox = QSpinBox()
         self.param_spinbox.setMinimum(1)
         self.param_spinbox.setMaximum(50)
@@ -122,33 +121,29 @@ class MinimalContourWidget(WidgetWithLayerList):
                                       "with the selected image feature (with a lower number the contour will be\n"
                                       "closer to the Euclidean shortest path")
         self.calculator.set_param(self.param_spinbox.value())
-        layout.addWidget(self.param_spinbox)
+        features_layout.addWidget(self.param_spinbox)
+        features_widget.setLayout(features_layout)
+        layout.addWidget(features_widget, 0, Qt.AlignTop)
 
-        self.autoincrease_label_id_checkbox = QCheckBox("Increment label id")
-        self.autoincrease_label_id_checkbox.setChecked(True)
-        self.autoincrease_label_id_checkbox.setToolTip("When checked, selected label will be incremented\n"
-                                                       "after completing the contour")
-        layout.addWidget(self.autoincrease_label_id_checkbox)
-
-        self.smooth_image_checkbox = QCheckBox("Smooth image")
-        self.smooth_image_checkbox.setChecked(True)
-        self.smooth_image_checkbox.clicked.connect(self.set_use_smoothing)
-        self.smooth_image_checkbox.setToolTip("When checked, the image will be blurred\n"
+        blur_widget = CollapsibleWidget("Blurring")
+        blur_layout = QVBoxLayout()
+        self.blur_image_checkbox = QCheckBox("Blur image")
+        self.blur_image_checkbox.setChecked(True)
+        self.blur_image_checkbox.clicked.connect(self.set_use_smoothing)
+        self.blur_image_checkbox.setToolTip("When checked, the image will be blurred\n"
                                               "before calculating minimal contour")
-        layout.addWidget(self.smooth_image_checkbox)
+        blur_layout.addWidget(self.blur_image_checkbox)
 
-        smooth_image_widget = QWidget()
-        smooth_image_layout = QVBoxLayout()
-        smooth_image_layout.setContentsMargins(0, 0, 0, 0)
-        smooth_image_layout.addWidget(QLabel("Smoothness"))
-        self.smooth_image_slider = QDoubleSlider(parent=self)
-        self.smooth_image_slider.setMaximum(20)
-        self.smooth_image_slider.setOrientation(Qt.Horizontal)
-        # self.smooth_image_slider.sliderReleased.connect(self.apply_smoothing)
-        # self.smooth_image_slider.sliderReleased.connect(self.set_image)
-        self.smooth_image_slider.valueChanged.connect(self.update_demo_image)
-        self.smooth_image_slider.setVisible(self.smooth_image_checkbox.isChecked())
-        smooth_image_layout.addWidget(self.smooth_image_slider)
+        blur_image_widget = QWidget()
+        blur_image_layout = QVBoxLayout()
+        blur_image_layout.setContentsMargins(0, 0, 0, 0)
+        blur_image_layout.addWidget(QLabel("Blur sigma"))
+        self.blur_image_slider = QDoubleSlider(parent=self)
+        self.blur_image_slider.setMaximum(20)
+        self.blur_image_slider.setOrientation(Qt.Horizontal)
+        self.blur_image_slider.valueChanged.connect(self.update_demo_image)
+        self.blur_image_slider.setVisible(self.blur_image_checkbox.isChecked())
+        blur_image_layout.addWidget(self.blur_image_slider)
 
         demo_widget = CollapsibleWidget("Example", self)
         self.demo_image = QLabel()
@@ -156,16 +151,20 @@ class MinimalContourWidget(WidgetWithLayerList):
         demo_layout = QVBoxLayout()
         demo_layout.addWidget(self.demo_image)
         demo_widget.setLayout(demo_layout)
-        smooth_image_layout.addWidget(demo_widget)
+        blur_image_layout.addWidget(demo_widget)
 
-        self.apply_smoothing_button = QPushButton("Apply smoothing")
-        self.apply_smoothing_button.setEnabled(self.smooth_image_checkbox.isChecked())
-        self.apply_smoothing_button.clicked.connect(self.apply_smoothing)
-        smooth_image_layout.addWidget(self.apply_smoothing_button)
-        smooth_image_widget.setLayout(smooth_image_layout)
-        self.smooth_image_widget = smooth_image_widget
-        layout.addWidget(smooth_image_widget)
+        self.apply_blurring_button = QPushButton("Apply blurring")
+        self.apply_blurring_button.setEnabled(self.blur_image_checkbox.isChecked())
+        self.apply_blurring_button.clicked.connect(self.apply_blurring)
+        blur_image_layout.addWidget(self.apply_blurring_button)
+        blur_image_widget.setLayout(blur_image_layout)
+        self.blur_image_widget = blur_image_widget
+        blur_layout.addWidget(blur_image_widget)
+        blur_widget.setLayout(blur_layout)
+        layout.addWidget(blur_widget, 0, Qt.AlignTop)
 
+        contour_widget = CollapsibleWidget("Contour")
+        contour_layout = QVBoxLayout()
         smooth_contour_layout = QHBoxLayout()
         self.smooth_contour_checkbox = QCheckBox("Smooth contour")
         self.smooth_contour_checkbox.clicked.connect(lambda checked: self.smooth_contour_spinbox.setVisible(checked))
@@ -182,21 +181,22 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.smooth_contour_spinbox.setVisible(self.smooth_contour_checkbox.isChecked())
         smooth_contour_layout.addWidget(self.smooth_contour_checkbox)
         smooth_contour_layout.addWidget(self.smooth_contour_spinbox)
-        layout.addLayout(smooth_contour_layout)
+        contour_layout.addLayout(smooth_contour_layout)
 
-        layout.addWidget(QLabel("Point size"))
+        point_size_layout = QHBoxLayout()
+        point_size_layout.addWidget(QLabel("Point size"))
         self.point_size_spinbox = QSpinBox()
         self.point_size_spinbox.setMinimum(1)
         self.point_size_spinbox.setMaximum(50)
         self.point_size_spinbox.setValue(2)
         self.point_size_spinbox.setToolTip("Point size for contour display.")
-        layout.addWidget(self.point_size_spinbox)
+        point_size_layout.addWidget(self.point_size_spinbox)
+        contour_layout.addLayout(point_size_layout)
+        contour_widget.setLayout(contour_layout)
+        layout.addWidget(contour_widget, 0, Qt.AlignTop)
 
-        extend_mask_button = QPushButton("Extend label")
-        extend_mask_button.clicked.connect(self.extend_mask)
-        extend_mask_button.setToolTip("Extend the selected label by one pixel around the borders\n"
-                                      "using dilation")
-        layout.addWidget(extend_mask_button)
+        label_widget = CollapsibleWidget("Label options")
+        label_layout = QVBoxLayout()
 
         self.selectionSpinBox = QLargeIntSpinBox()
         if self.labels.layer is not None:
@@ -225,8 +225,33 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.labels.combobox.currentIndexChanged.connect(self.on_label_change)
         self.on_label_change()
         self._on_selected_label_change()
+        label_layout.addLayout(color_layout)
 
-        layout.addLayout(color_layout)
+        self.autoincrease_label_id_checkbox = QCheckBox("Increment label id")
+        self.autoincrease_label_id_checkbox.setChecked(True)
+        self.autoincrease_label_id_checkbox.setToolTip("When checked, selected label will be incremented\n"
+                                                       "after completing the contour")
+        label_layout.addWidget(self.autoincrease_label_id_checkbox)
+
+        label_manipulation_layout = QHBoxLayout()
+
+        reduce_mask_button = QPushButton("Reduce label")
+        reduce_mask_button.clicked.connect(lambda: reduce_mask(self.labels.layer))
+        reduce_mask_button.setToolTip("Reduce the selected label by one pixel around the borders\n"
+                                      "using erosion")
+        label_manipulation_layout.addWidget(reduce_mask_button)
+
+        extend_mask_button = QPushButton("Extend label")
+        extend_mask_button.clicked.connect(lambda: extend_mask(self.labels.layer))
+        extend_mask_button.setToolTip("Extend the selected label by one pixel around the borders\n"
+                                      "using dilation")
+        label_manipulation_layout.addWidget(extend_mask_button)
+        label_layout.addLayout(label_manipulation_layout)
+        label_widget.setLayout(label_layout)
+        layout.addWidget(label_widget, 0, Qt.AlignTop)
+        self._collapsible_group = CollapsibleWidgetGroup([features_widget, blur_widget, contour_widget, label_widget])
+
+        layout.addStretch()
         self.setLayout(layout)
 
         def change_layer_callback(num):
@@ -280,8 +305,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.update_label_tooltip()
 
     def set_use_smoothing(self, use_smoothing):
-        self.smooth_image_widget.setVisible(use_smoothing)
-        self.apply_smoothing()
+        self.blur_image_widget.setVisible(use_smoothing)
+        self.apply_blurring()
         self.set_image()
 
     def set_features(self, data):
@@ -426,22 +451,25 @@ class MinimalContourWidget(WidgetWithLayerList):
         if e is not None and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded", "editable", "translate"]:
             return
         layer_list = self.viewer.layers
-        with layer_list.events.moved.blocker(), layer_list.events.moving.blocker():
-            temp_idx = layer_list.index(self.output)
-            if temp_idx != len(layer_list) - 1:
-                layer_list.move(temp_idx, -1)
-            if self.anchor_points is not None:
-                points_idx = layer_list.index(self.anchor_points)
-                if points_idx != len(layer_list) - 2:
-                    layer_list.move(points_idx, -2)
-            if self.to_s_points_layer in layer_list:
-                to_s_idx = layer_list.index(self.to_s_points_layer)
-                if to_s_idx != len(layer_list) - 3:
-                    layer_list.move(to_s_idx, -3)
-            if self.from_e_points_layer in layer_list:
-                from_e_idx = layer_list.index(self.from_e_points_layer)
-                if from_e_idx != len(layer_list) - 4:
-                    layer_list.move(from_e_idx, -4)
+        try:
+            with layer_list.events.moved.blocker(), layer_list.events.moving.blocker():
+                temp_idx = layer_list.index(self.output)
+                if temp_idx != len(layer_list) - 1:
+                    layer_list.move(temp_idx, -1)
+                if self.anchor_points is not None:
+                    points_idx = layer_list.index(self.anchor_points)
+                    if points_idx != len(layer_list) - 2:
+                        layer_list.move(points_idx, -2)
+                if self.to_s_points_layer in layer_list:
+                    to_s_idx = layer_list.index(self.to_s_points_layer)
+                    if to_s_idx != len(layer_list) - 3:
+                        layer_list.move(to_s_idx, -3)
+                if self.from_e_points_layer in layer_list:
+                    from_e_idx = layer_list.index(self.from_e_points_layer)
+                    if from_e_idx != len(layer_list) - 4:
+                        layer_list.move(from_e_idx, -4)
+        except KeyError:
+            ...
 
     def estimate(self, image: np.ndarray):
         from_i, to_i = bbox_around_points(self.point_triangle)
@@ -559,7 +587,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.prev_timer_id = self.startTimer(1000)
 
     def timerEvent(self, *args, **kwargs):
-        self.apply_smoothing()
+        self.apply_blurring()
         self.set_image()
         self.killTimer(self.prev_timer_id)
         self.prev_timer_id = None
@@ -596,7 +624,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.feature_editor.image = image
         else:
             grad_x, grad_y = self.feature_manager.get_features(self.image.layer)
-            if self.smooth_image_checkbox.isChecked():
+            if self.blur_image_checkbox.isChecked():
                 grad_x = self.blur_image(grad_x).astype(float)
                 grad_y = self.blur_image(grad_y).astype(float)
             self.calculator.set_image(image, grad_x, grad_y)
@@ -678,7 +706,7 @@ class MinimalContourWidget(WidgetWithLayerList):
 
         def run(self):
             mask = skimage.draw.polygon2mask(self.mask_shape, self.contour)
-            mask = skimage.filters.rank.median(mask.astype(int), np.asarray([[0, 1, 0], [1, 1, 1], [0, 1, 0]])).astype(bool)
+            mask = skimage.filters.rank.median(mask.astype(np.uint8), np.asarray([[0, 1, 0], [1, 1, 1], [0, 1, 0]])).astype(bool)
             self.done.emit(mask)
 
     def set_mask(self, mask):
@@ -780,13 +808,13 @@ class MinimalContourWidget(WidgetWithLayerList):
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.canvas.native.setFocus()
 
-    def apply_smoothing(self):
+    def apply_blurring(self):
         if self.image.layer is None:
             return
         self.image.layer.data = self._orig_image.copy()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            if self.smooth_image_checkbox.isChecked() and self.smooth_image_slider.value() > 0.:
+            if self.blur_image_checkbox.isChecked() and self.blur_image_slider.value() > 0.:
                 slice_ = tuple(
                     slice(None) if i in self.viewer.dims.displayed else self.viewer.dims.current_step[i]
                     for i in range(self.viewer.dims.ndim)
@@ -829,7 +857,7 @@ class MinimalContourWidget(WidgetWithLayerList):
     def blur_image(self, img):
         return gaussian(
             img,
-            sigma=self.smooth_image_slider.value(),
+            sigma=self.blur_image_slider.value(),
             preserve_range=True,
             channel_axis=-1 if img.ndim == 3 else None,
             truncate=2.

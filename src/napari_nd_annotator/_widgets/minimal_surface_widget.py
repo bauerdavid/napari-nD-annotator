@@ -382,7 +382,7 @@ if MinArea is not None:
                     else:
                         print("%s was not initialized as id (%d) was not %d" % (name, idx, selected_idx))
                 except Exception as e:
-                    print(e)
+                    ...
 
             return initialize
             # return lambda arr, idx: print("initializing", name)
