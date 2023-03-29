@@ -92,16 +92,19 @@ def keep_layer_on_top(layer):
             layer_list.events.moved.blocker(),
             layer_list.events.moving.blocker()
         ):
-            for i in reversed(range(len(layer_list))):
-                elem = layer_list[i]
-                if elem == layer:
+            try:
+                for i in reversed(range(len(layer_list))):
+                    elem = layer_list[i]
+                    if elem == layer:
+                        break
+                    if type(elem) not in [Labels, Image]:
+                        continue
+                    layer_index = layer_list.index(layer)
+                    if i == layer_index+1:
+                        layer_list.move(i, layer_index)
+                    else:
+                        layer_list.move(layer_index, i)
                     break
-                if type(elem) not in [Labels, Image]:
-                    continue
-                layer_index = layer_list.index(layer)
-                if i == layer_index+1:
-                    layer_list.move(i, layer_index)
-                else:
-                    layer_list.move(layer_index, i)
-                break
+            except Exception as e:
+                ...
     return on_top_callback
