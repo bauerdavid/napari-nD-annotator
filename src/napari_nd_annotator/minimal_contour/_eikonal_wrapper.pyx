@@ -131,7 +131,9 @@ cdef class MinimalContourCalculator:
             self.eblue.Set(w, h)
         cdef double rgb_scale = 1. / 255.
         cdef int x, y
-        cdef double* r_ptr, *g_ptr, *b_ptr
+        cdef double* r_ptr
+        cdef double* g_ptr
+        cdef double* b_ptr
         for y in prange(h, nogil=True):
             r_ptr = self.ered[y]
             g_ptr = self.egreen[y]
