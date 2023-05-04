@@ -278,7 +278,7 @@ class InterpolationWidget(QWidget):
         self.on_order_change()
 
     def on_order_change(self, event=None):
-        if self.active_labels_layer is None or self.active_labels_layer.ndim < 3:
+        if self.active_labels_layer is None or self.active_labels_layer.ndim < 3 or self.viewer.dims.ndisplay == 3:
             return
         new_dim = self.viewer.dims.not_displayed[0]
         self.dimension_dropdown.setValue(new_dim)
