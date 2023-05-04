@@ -629,7 +629,9 @@ class MinimalContourWidget(WidgetWithLayerList):
                 grad_y = self.blur_image(grad_y).astype(float)
             self.calculator.set_image(image, grad_x, grad_y)
         self._img = image
-        dims_displayed = list(image_layer._dims_displayed)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dims_displayed = list(image_layer._dims_displayed)
         self.anchor_points.translate = image_layer.translate[dims_displayed]
         self.from_e_points_layer.translate = image_layer.translate[dims_displayed]
         self.to_s_points_layer.translate = image_layer.translate[dims_displayed]
@@ -837,7 +839,9 @@ class MinimalContourWidget(WidgetWithLayerList):
             img = np.zeros((DEMO_SIZE, DEMO_SIZE, 3), np.uint8)
         else:
             im_layer: Image = self.image.layer
-            img = im_layer._data_view.astype(float)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                img = im_layer._data_view.astype(float)
             if all(s > DEMO_SIZE for s in img.shape if s > 3):
                 demo_shape = (DEMO_SIZE, DEMO_SIZE)
                 img = img[(img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2, (img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2]
