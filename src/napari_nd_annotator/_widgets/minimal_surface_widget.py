@@ -1,90 +1,95 @@
-from time import sleep
-
-import tifffile
-from napari.utils.notifications import show_info
-
-from ._utils import WidgetWithLayerList, CollapsibleWidget, CollapsibleWidgetGroup, ProgressWidget
-from ._utils.delayed_executor import DelayedExecutor
-from ._utils.callbacks import keep_layer_on_top
-import napari
-from napari.layers import Image, Labels, Points, Shapes
-from napari.utils.colormaps.standardize_color import transform_color
-from napari._qt.widgets._slider_compat import QDoubleSlider
-from qtpy.QtCore import Signal, Qt, QObject, QThread
-from qtpy.QtWidgets import (
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QDoubleSpinBox,
-    QCheckBox,
-    QPushButton,
-    QFrame,
-    QWidget,
-    QApplication,
-    QComboBox,
-    QSpinBox,
-    QSizePolicy
-)
-from threading import Thread
-import cv2
-import numpy as np
-import skimage.measure, skimage.morphology
-from scipy.ndimage import gaussian_filter, zoom
-import itertools
-import colorsys
-from random import shuffle, seed
-import SimpleITK as sitk
-
 try:
     import MinArea
 except ImportError:
     MinArea = None
 
 
-def pts_2_bb(p1, p2, image_size, scale=1.):
-    center = (p1 + p2) / 2
-    size = np.sqrt(((p1 - p2) ** 2).sum()) + 10
-    size = np.divide(size, scale)
-    bb = np.asarray(np.where(list(itertools.product((False, True), repeat=3)), center + size / 2, center - size / 2))
-    bb = np.clip(bb, 0, np.asarray(image_size) - 1)
-    return bb
-
-
-def get_bb_corners(bb):
-    return np.concatenate([bb.min(0, keepdims=True), bb.max(0, keepdims=True)])
-
-
-def bb_2_slice(bb):
-    bb_corners = get_bb_corners(bb).round().astype(int)
-    return tuple(slice(bb_corners[0, i], bb_corners[1, i]) for i in range(3))
-
-
-def color_to_hex_string(rgb_tuple):
-    return '#%.2X%.2X%.2X' % rgb_tuple
-
-
-def generate_label_colors(n):
-    rgb_tuples = [colorsys.hsv_to_rgb(x * 1.0 / n, 1., 1.) for x in range(n)]
-    rgb_tuples = [(int(rgb_tuples[i][0] * 255), int(rgb_tuples[i][1] * 255), int(rgb_tuples[i][2] * 255)) for i in
-                  range(n)]
-    seed(0)
-    shuffle(rgb_tuples)
-    return rgb_tuples
-
-
-def generate_sphere_mask(shape):
-    ndim = len(shape)
-    r = max(shape)//2
-    mask = skimage.morphology.ball(r)
-    shape_diffs = tuple(shape[i] - mask.shape[i] for i in range(ndim))
-    crop_idx = tuple(slice(max(0, round(-shape_diffs[i]/2+0.1)), mask.shape[i]+min(0, round(shape_diffs[i]/2+0.1))) for i in range(ndim))
-    mask = mask[crop_idx]
-    mask = np.pad(mask, [(max(0, round(shape_diffs[i]/2)), -min(0, round(-shape_diffs[i]/2+0.1))) for i in range(ndim)])
-    assert mask.shape == shape
-    return mask
-
-
 if MinArea is not None:
+    from time import sleep
+
+    import tifffile
+    from napari.utils.notifications import show_info
+
+    from ._utils import WidgetWithLayerList, CollapsibleWidget, CollapsibleWidgetGroup, ProgressWidget, QDoubleSlider
+    from ._utils.delayed_executor import DelayedExecutor
+    from ._utils.callbacks import keep_layer_on_top
+    import napari
+    from napari.layers import Image, Labels, Points, Shapes
+    from napari.utils.colormaps.standardize_color import transform_color
+    # from napari._qt.widgets._slider_compat import QDoubleSlider
+    from qtpy.QtCore import Signal, Qt, QObject, QThread
+    from qtpy.QtWidgets import (
+        QVBoxLayout,
+        QHBoxLayout,
+        QLabel,
+        QDoubleSpinBox,
+        QCheckBox,
+        QPushButton,
+        QFrame,
+        QWidget,
+        QApplication,
+        QComboBox,
+        QSpinBox,
+        QSizePolicy
+    )
+    from threading import Thread
+    import cv2
+    import numpy as np
+    import skimage.measure, skimage.morphology
+    from scipy.ndimage import gaussian_filter, zoom
+    import itertools
+    import colorsys
+    from random import shuffle, seed
+    import SimpleITK as sitk
+
+
+    def pts_2_bb(p1, p2, image_size, scale=1.):
+        center = (p1 + p2) / 2
+        size = np.sqrt(((p1 - p2) ** 2).sum()) + 10
+        size = np.divide(size, scale)
+        bb = np.asarray(
+            np.where(list(itertools.product((False, True), repeat=3)), center + size / 2, center - size / 2))
+        bb = np.clip(bb, 0, np.asarray(image_size) - 1)
+        return bb
+
+
+    def get_bb_corners(bb):
+        return np.concatenate([bb.min(0, keepdims=True), bb.max(0, keepdims=True)])
+
+
+    def bb_2_slice(bb):
+        bb_corners = get_bb_corners(bb).round().astype(int)
+        return tuple(slice(bb_corners[0, i], bb_corners[1, i]) for i in range(3))
+
+
+    def color_to_hex_string(rgb_tuple):
+        return '#%.2X%.2X%.2X' % rgb_tuple
+
+
+    def generate_label_colors(n):
+        rgb_tuples = [colorsys.hsv_to_rgb(x * 1.0 / n, 1., 1.) for x in range(n)]
+        rgb_tuples = [(int(rgb_tuples[i][0] * 255), int(rgb_tuples[i][1] * 255), int(rgb_tuples[i][2] * 255)) for i in
+                      range(n)]
+        seed(0)
+        shuffle(rgb_tuples)
+        return rgb_tuples
+
+
+    def generate_sphere_mask(shape):
+        ndim = len(shape)
+        r = max(shape) // 2
+        mask = skimage.morphology.ball(r)
+        shape_diffs = tuple(shape[i] - mask.shape[i] for i in range(ndim))
+        crop_idx = tuple(
+            slice(max(0, round(-shape_diffs[i] / 2 + 0.1)), mask.shape[i] + min(0, round(shape_diffs[i] / 2 + 0.1))) for
+            i in range(ndim))
+        mask = mask[crop_idx]
+        mask = np.pad(mask, [(max(0, round(shape_diffs[i] / 2)), -min(0, round(-shape_diffs[i] / 2 + 0.1))) for i in
+                             range(ndim)])
+        assert mask.shape == shape
+        return mask
+
+
     class ColorPairsCallback:
         def __init__(self, n_colors=50):
             self.prev_selection = set()
@@ -124,6 +129,7 @@ if MinArea is not None:
                 self.prev_len = len(points_layer.data)
 
 
+    it = [-1]
     class EstimationWorker(QObject):
         image_data_received = Signal(str, "PyQt_PyObject", "PyQt_PyObject")
         mask_data_received = Signal("PyQt_PyObject", "PyQt_PyObject")
@@ -337,7 +343,7 @@ if MinArea is not None:
             print("callbacks attached in %d seconds" % (time.time() - start))
             timestamp = time.time()
             for i in range(len(self.points) // 2):
-                bounding_box = pts_2_bb(self.points[2 * i], self.points[2 * i + 1], self.image.shape, scale=(self.z_scale, 1, 1))
+                bounding_box = pts_2_bb(self.points[2 * i], self.points[2 * i + 1], self.image.shape)
                 bounding_box = np.clip(bounding_box, 0, np.asarray(self.image.shape) - 1).round().astype(int)
                 offset = bounding_box.min(0, keepdims=True)
                 bb_slice = bb_2_slice(bounding_box)
@@ -392,7 +398,6 @@ if MinArea is not None:
                 it[0] += 1
                 if it[0] % 100 == 0: #TODO undo
                     self.layer_invalidated.emit(name)
-                    tifffile.imwrite("C:\\Users\\Tejfel\\Downloads\\temp_tf_%.7d.tif" % it[0], self.viewer.layers[name].data)
             return update_viewer
 
         def data_finalizer(self, name):
@@ -443,6 +448,7 @@ if MinArea is not None:
             self.alpha_slider.setMinimum(0.)
             self.alpha_slider.setMaximum(1.)
             self.alpha_slider.setValue(0.01)
+            self.alpha_slider.setDecimals(3)
             self.alpha_slider.setOrientation(Qt.Horizontal)
             alpha_layout.addWidget(self.alpha_slider)
             params_layout.addLayout(alpha_layout)
@@ -465,6 +471,7 @@ if MinArea is not None:
             self.z_scale_spinbox.setMaximum(20)
             self.z_scale_spinbox.setSingleStep(1.)
             self.z_scale_spinbox.setValue(1.)
+            # self.z_scale_spinbox.valueChanged.connect(self) TODO
             z_scale_layout.addWidget(self.z_scale_spinbox)
             params_layout.addLayout(z_scale_layout)
 
@@ -803,16 +810,5 @@ if MinArea is not None:
             self.viewer.window.worker2 = Thread(target=self.calculate, args=[points, distance_map, translation, rotation])
             self.viewer.window.worker2.start()
 else:
-    class MinimalSurfaceWidget(QWidget):
-        def __init__(self, *args):
-            super().__init__()
-            layout = QVBoxLayout()
-            layout.addWidget(QLabel("Coming soon...", parent=self))
-            layout.addStretch()
-            self.setLayout(layout)
+    MinimalSurfaceWidget = None
 
-
-def data_event(arr, idx):
-    print(arr.shape, idx)
-
-it = [-1]
