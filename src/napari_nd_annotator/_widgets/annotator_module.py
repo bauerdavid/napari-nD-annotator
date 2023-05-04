@@ -13,7 +13,13 @@ import math
 from packaging import version
 
 if version.parse(napari.__version__) >= version.parse("0.4.15"):
-    from napari_bbox import BoundingBoxLayer
+    try:
+        from napari_bbox import BoundingBoxLayer
+    except ImportError:
+        BoundingBoxLayer = None
+else:
+    BoundingBoxLayer = None
+
 from .interpolation_widget import InterpolationWidget
 from .minimal_contour_widget import MinimalContourWidget
 from .minimal_surface_widget import MinimalSurfaceWidget
@@ -63,8 +69,9 @@ class AnnotatorWidget(QWidget):
         self.minimal_contour_widget = MinimalContourWidget(viewer)
         tabs_widget.addTab(self.minimal_contour_widget, "Minimal Contour")
 
-        self.minimal_surface_widget = MinimalSurfaceWidget(viewer, self.minimal_contour_widget)
-        tabs_widget.addTab(self.minimal_surface_widget, "Minimal Surface")
+        if MinimalSurfaceWidget is not None:
+            self.minimal_surface_widget = MinimalSurfaceWidget(viewer, self.minimal_contour_widget)
+            tabs_widget.addTab(self.minimal_surface_widget, "Minimal Surface")
         tabs_widget.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
         layout.addWidget(tabs_widget)
 
@@ -234,7 +241,7 @@ class AnnotatorWidget(QWidget):
         coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
         image_coords = tuple(coordinates[i] for i in layer._dims_displayed)
         slice_dims = tuple(coordinates[i] if i not in layer._dims_displayed else slice(None) for i in range(layer.ndim))
-        current_draw = np.zeros_like(layer.data[slice_dims], np.bool)
+        current_draw = np.zeros_like(layer.data[slice_dims], bool)
         start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
         cx = np.clip(cx, 0, current_draw.shape[0] - 1)
@@ -297,7 +304,7 @@ class AnnotatorWidget(QWidget):
         dialog.show()
 
     def init_bbox_layer(self):
-        if self.active_labels_layer is None or version.parse(napari.__version__) < version.parse("0.4.15"):
+        if self.active_labels_layer is None or BoundingBoxLayer is None:
             return
         if self._active_bbox_layer in self.viewer.layers:
             if (self.active_labels_layer is not None and self._active_bbox_layer.ndim == self.active_labels_layer.ndim
