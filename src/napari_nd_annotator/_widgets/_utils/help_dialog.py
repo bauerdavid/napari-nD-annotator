@@ -6,8 +6,8 @@ shortcuts = {
     "Q/Shift+Wheel " + u"\u2193": "Decrement selected label",
     "A/Ctrl+Wheel " + u"\u2191": "Previous slice",
     "D/Ctrl+Wheel " + u"\u2193": "Next slice",
-    "W/Ctrl+Wheel " + u"\u2191": "Increase paint brush size",
-    "S/Ctrl+Wheel " + u"\u2193": "Decrease paint brush size",
+    "W/Alt+Wheel " + u"\u2191": "Increase paint brush size",
+    "S/Alt+Wheel " + u"\u2193": "Decrease paint brush size",
     "Ctrl+Tab": "Jump from \"Anchors\" layer to the labels layer, or vice versa",
     "Ctrl+[1-10]": "Jump to the layer at the selected index"
 }
