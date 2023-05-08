@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel", "cython", "oldest-supported-numpy", "scipy", "napari"]
+requires = ["setuptools", "wheel", "cython", "oldest-supported-numpy", "scipy==1.9.1", "napari"]
 build-backend = "setuptools.build_meta"
 
 
