@@ -4,7 +4,7 @@ from cython.parallel cimport prange
 import numpy as np
 cimport numpy as np
 np.import_array()
-from libc.math cimport fabs, sqrt
+from libc.math cimport fabs, sqrt, cbrt
 from ._essentials import dt, magnitude, innerProduct, ReconstructionMethods
 from scipy.sparse.linalg import svds
 from scipy.sparse import csc_matrix
@@ -12,7 +12,6 @@ from scipy.optimize import minimize
 from scipy.integrate import solve_bvp
 from .rk import rk4
 from .interpHelper import *
-from scipy.special.cython_special cimport cbrt
 import time
 import matplotlib.pyplot as plt
 Q_interp = InterpHelper()
