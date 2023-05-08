@@ -25,9 +25,9 @@ def no_cythonize(extensions, **_ignore):
     return extensions
 
 extra_compile_args = ["/std:c++17", "/openmp"] if sys.platform == "win32"\
-    else ["-std=c++17", "-fopenmp"] if sys.platform == "darwin"\
+    else ["-std=c++17"] if sys.platform == "darwin"\
     else ["-std=c++17", "-fopenmp"]
-extra_link_args = [] if sys.platform == "win32" else ["-lgomp"]
+extra_link_args = [] if sys.platform in ["win32", "darwin"] else ["-lgomp"]
 extensions = [
     Extension(
         "napari_nd_annotator.minimal_contour._eikonal_wrapper",
