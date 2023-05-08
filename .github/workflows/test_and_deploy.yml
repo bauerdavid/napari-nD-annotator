@@ -40,6 +40,13 @@ jobs:
         uses: pypa/cibuildwheel@v2.10.2
         env:
           CIBW_SKIP: "cp311-* pp*"
+          CIBW_CONFIG_SETTINGS: "--only-binary=scipy"
+          CC: /usr/bin/clang
+          CXX: /usr/bin/clang++
+          CPPFLAGS: "-Xpreprocessor -fopenmp"
+          CFLAGS: "-Wno-implicit-function-declaration -I/usr/local/opt/libomp/include"
+          CXXFLAGS: "-I/usr/local/opt/libomp/include"
+          LDFLAGS: "-Wl,-rpath,/usr/local/opt/libomp/lib -L/usr/local/opt/libomp/lib -lomp"
 
       - uses: actions/upload-artifact@v3
         with:
@@ -58,7 +65,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.10.2
         env:
           CIBW_SKIP: "cp311-* pp* cp310-*i686 *musllinux* *s390x* *ppc64le*"
-          CIBW_CONFIG_SETTINGS: "only-binary=scipy"
+          CIBW_CONFIG_SETTINGS: "--only-binary=scipy"
 
       - uses: actions/upload-artifact@v3
         with:
@@ -77,6 +84,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.10.2
         env:
           CIBW_SKIP: "cp311-* cp310-win32 pp*"
+          CIBW_CONFIG_SETTINGS: "--only-binary=scipy"
 
       - uses: actions/upload-artifact@v3
         with:
