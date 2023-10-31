@@ -273,9 +273,6 @@ if MinArea is not None:
             self.z_scale = z_scale
 
         def hook_callbacks(self, estimator):
-            postscript = ""
-            estimator.hook_stage_data_init_event(MinArea.AREA_EIKONAL_STAGE,
-                                                 lambda arr, idx: print("area eikonal init", arr.shape, idx))
             # estimator.hook_stage_data_init_event(
             #     MinArea.AREA_EIKONAL_STAGE,
             #     lambda arr, idx: self.data_initializer(
@@ -474,7 +471,6 @@ if MinArea is not None:
                 it[0] += 1
                 if it[0] % 100 == 0: #TODO undo
                     self.layer_invalidated.emit(name)
-                    print("%s updated" % name)
             return update_viewer
 
         def data_finalizer(self, name):
