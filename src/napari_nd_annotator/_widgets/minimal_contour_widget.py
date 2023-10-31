@@ -1,6 +1,7 @@
 import warnings
 import napari
 import skimage.draw
+from napari._qt.layer_controls.qt_image_controls_base import _QDoubleRangeSlider
 from napari.layers.labels._labels_utils import get_dtype
 from napari.utils._dtype import get_dtype_limits
 from skimage.morphology import binary_dilation, binary_erosion
@@ -46,6 +47,14 @@ import colorsys
 GRADIENT_BASED = 0
 INTENSITY_BASED = 2
 
+ASSYM_GRADIENT_TEXT = "Gradient [assymetric]"
+SYM_GRADIENT_TEXT = "Gradient [symmetric]"
+HIGH_INTENSITY_TEXT = "High intensity"
+LOW_INTENSITY_TEXT = "Low intensity"
+CUSTOM_TEXT = "Custom"
+FEATURE_TEXTS = [ASSYM_GRADIENT_TEXT, SYM_GRADIENT_TEXT, HIGH_INTENSITY_TEXT, LOW_INTENSITY_TEXT, CUSTOM_TEXT]
+FEATURE_TYPES = [GRADIENT_BASED, INTENSITY_BASED, INTENSITY_BASED, INTENSITY_BASED, INTENSITY_BASED]
+
 DEMO_SIZE = 200
 
 
@@ -73,6 +82,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.draw_worker.done.connect(lambda: self.progress_dialog.setVisible(False))
         self.draw_thread.started.connect(self.draw_worker.run)
         self._img = None
+        self.apply_contrast_limits = True
         self._prev_img_layer = self.image.layer
         self._orig_image = self.image.layer.data if self.image.layer is not None else None
         self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
@@ -99,12 +109,13 @@ class MinimalContourWidget(WidgetWithLayerList):
         features_layout = QVBoxLayout()
         features_layout.addWidget(QLabel("Used feature"))
         self.feature_dropdown = QComboBox()
-        self.feature_dropdown.addItems(["High gradient", "High intensity", "Low intensity", "Custom"])
+        for text, value in zip(FEATURE_TEXTS, FEATURE_TYPES):
+            self.feature_dropdown.addItem(text, value)
         self.feature_dropdown.currentIndexChanged.connect(self.on_feature_change)
         features_layout.addWidget(self.feature_dropdown)
 
         self.feature_editor = ImageProcessingWidget(self._img, viewer)
-        self.feature_editor.setVisible(self.feature_dropdown.currentText() == "Custom")
+        self.feature_editor.setVisible(self.feature_dropdown.currentText() == CUSTOM_TEXT)
         self.feature_editor.script_worker.done.connect(self.set_features)
         def set_test_script():
             self.test_script = True
@@ -122,6 +133,9 @@ class MinimalContourWidget(WidgetWithLayerList):
                                       "closer to the Euclidean shortest path")
         self.calculator.set_param(self.param_spinbox.value())
         features_layout.addWidget(self.param_spinbox)
+        local_correction_checkbox = QCheckBox("Local intensity correction")
+        local_correction_checkbox.clicked.connect(lambda is_checked: self.calculator.set_use_local_maximum(is_checked))
+        features_layout.addWidget(local_correction_checkbox)
         features_widget.setLayout(features_layout)
         layout.addWidget(features_widget, 0, Qt.AlignTop)
 
@@ -293,7 +307,8 @@ class MinimalContourWidget(WidgetWithLayerList):
         viewer.dims.events.current_step.connect(self.delayed_set_image)
         viewer.dims.events.ndisplay.connect(self.set_image)
         viewer.dims.events.current_step.connect(self.update_demo_image)
-        self.viewer.layers.events.connect(self.move_temp_to_top)
+        self.viewer.layers.events.inserted.connect(self.move_temp_to_top)
+        self.viewer.layers.events.moved.connect(self.move_temp_to_top)
         self.viewer.bind_key("Control-Tab", overwrite=True)(self.swap_selection)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -448,11 +463,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.setFocus()
 
     def move_temp_to_top(self, e=None):
-        if e is not None and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded", "editable", "translate"]:
-            return
         layer_list = self.viewer.layers
         try:
-            with layer_list.events.moved.blocker(), layer_list.events.moving.blocker():
+            with layer_list.events.moved.blocker(self.move_temp_to_top):
                 temp_idx = layer_list.index(self.output)
                 if temp_idx != len(layer_list) - 1:
                     layer_list.move(temp_idx, -1)
@@ -486,11 +499,10 @@ class MinimalContourWidget(WidgetWithLayerList):
 
     def on_feature_change(self, _):
         current_text = self.feature_dropdown.currentText()
-        self.feature_editor.setVisible(current_text == "Custom")
-        if current_text.startswith("Low") != self.feature_inverted:
-            self.feature_inverted = current_text.startswith("Low")
+        self.feature_editor.setVisible(current_text == CUSTOM_TEXT)
+        self.feature_inverted = current_text == LOW_INTENSITY_TEXT
         self.set_image()
-        self.calculator.set_method(GRADIENT_BASED if "gradient" in current_text else INTENSITY_BASED)
+        self.calculator.set_method(self.feature_dropdown.currentData())
 
     def on_mouse_move(self, layer, event):
         if not self.move_mutex.tryLock():
@@ -599,6 +611,19 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self._prev_img_layer.data = self._orig_image
             self._orig_image = image_layer.data.copy() if image_layer is not None else None
         self._prev_img_layer = image_layer
+        if image_layer in self.viewer.window.qt_viewer.controls.widgets:
+            controls = self.viewer.window.qt_viewer.controls.widgets[image_layer]
+            for child in controls.children():
+                if type(child) == _QDoubleRangeSlider:
+                    try:
+                        child.sliderPressed.connect(self.on_contrast_slider_pressed, Qt.UniqueConnection)
+                    except TypeError:
+                        pass
+                    try:
+                        child.sliderReleased.connect(self.on_contrast_slider_released, Qt.UniqueConnection)
+                    except TypeError:
+                        pass
+                    break
 
     def set_image(self, *args):
         image_layer: Image = self.image.layer
@@ -617,18 +642,26 @@ class MinimalContourWidget(WidgetWithLayerList):
             image = image_layer._data_view.astype(float)
         if image.ndim == 2:
             image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
-        image = (image - image.min()) / (image.max() - image.min())
+        min_, max_ = image_layer.contrast_limits if self.apply_contrast_limits else (image.min(), image.max())
+        image = np.clip((image - min_) / (max_ - min_), 0, 1)
         if self.feature_inverted:
             image = 1 - image
-        if self.feature_editor.isVisible():
+        self._img = image
+        if self.blur_image_checkbox.isChecked():
+            image = self.blur_image(image).astype(float)
+        if self.feature_dropdown.currentText() == CUSTOM_TEXT:
             self.feature_editor.image = image
+            self.feature_editor.execute()
         else:
             grad_x, grad_y = self.feature_manager.get_features(self.image.layer)
-            if self.blur_image_checkbox.isChecked():
-                grad_x = self.blur_image(grad_x).astype(float)
-                grad_y = self.blur_image(grad_y).astype(float)
-            self.calculator.set_image(image, grad_x, grad_y)
-        self._img = image
+            if self.feature_dropdown.currentText() == SYM_GRADIENT_TEXT:
+                grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
+                grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
+                min_, max_ = grad_magnitude.min(), grad_magnitude.max()
+                grad_magnitude = (grad_magnitude - min_) / (max_ - min_)
+                self.calculator.set_image(np.concatenate([grad_magnitude[..., None]]*3, axis=-1), np.empty((0,0)), np.empty((0,0)))
+            else:
+                self.calculator.set_image(image, grad_x, grad_y)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             dims_displayed = list(image_layer._dims_displayed)
@@ -700,6 +733,9 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self.point_triangle[-1] = self.anchor_points.data[0]
                 self.point_triangle[0] = self.anchor_points.data[-1]
                 self.last_segment_length = None
+
+    def on_contrast_slider_released(self):
+        self.set_image()
 
     class DrawWorker(QObject):
         done = Signal("PyQt_PyObject")
@@ -817,11 +853,15 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             if self.blur_image_checkbox.isChecked() and self.blur_image_slider.value() > 0.:
-                slice_ = tuple(
-                    slice(None) if i in self.viewer.dims.displayed else self.viewer.dims.current_step[i]
-                    for i in range(self.viewer.dims.ndim)
-                )
+                if self.image.layer.data.ndim-(1 if self.image.layer.rgb else 0)>=3:
+                    slice_ = tuple(
+                        slice(None) if i in self.image.layer._dims_displayed else self.viewer.dims.current_step[i]
+                        for i in range(self.viewer.dims.ndim)
+                    )
+                else:
+                    slice_ = (slice(None), slice(None))
                 orig_image = self._orig_image[slice_]
+
                 if self.image.layer.rgb:
                     max_vals = orig_image.max((0, 1))
                     for i in range(3):
