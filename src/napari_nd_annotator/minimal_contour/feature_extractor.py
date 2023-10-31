@@ -1,6 +1,6 @@
 import napari
 import numpy as np
-from scipy.ndimage import gaussian_gradient_magnitude
+from scipy.ndimage import gaussian_gradient_magnitude, gaussian_filter
 from skimage.filters import sobel, sobel_h, sobel_v
 from scipy.signal import convolve2d
 import cv2
@@ -85,21 +85,18 @@ class FeatureExtractor:
                         self.outs[0][idx] = sobel_v(self.data[idx].astype(float))
                         self.outs[1][idx] = sobel_h(self.data[idx].astype(float))
                     else:
-                        # grad_r = gaussian_gradient_magnitude(self.data[idx + (0,)].astype(float), 5)
-                        # grad_g = gaussian_gradient_magnitude(self.data[idx + (1,)].astype(float), 5)
-                        # grad_b = gaussian_gradient_magnitude(self.data[idx + (2,)].astype(float), 5)
                         r, g, b = self.data[idx + (0,)].astype(float), self.data[idx + (1,)].astype(float), self.data[idx + (2,)].astype(float)
                         channels_v = []
                         channels_h = []
                         if np.any(r):
-                            channels_v.append(cv2.filter2D(r, -1, self.conv_filter_v).astype(float))
-                            channels_h.append(cv2.filter2D(r, -1, self.conv_filter_h))
+                            channels_v.append(gaussian_filter(r, 2, (0, 1)))
+                            channels_h.append(gaussian_filter(r, 2, (1, 0)))
                         if np.any(g):
-                            channels_v.append(cv2.filter2D(g, -1, self.conv_filter_v))
-                            channels_h.append(cv2.filter2D(g, -1, self.conv_filter_h))
+                            channels_v.append(gaussian_filter(g, 2, (0, 1)))
+                            channels_h.append(gaussian_filter(g, 2, (1, 0)))
                         if np.any(b):
-                            channels_v.append(cv2.filter2D(b, -1, self.conv_filter_v))
-                            channels_h.append(cv2.filter2D(b, -1, self.conv_filter_h))
+                            channels_v.append(gaussian_filter(b, 2, (0, 1)))
+                            channels_h.append(gaussian_filter(b, 2, (1, 0)))
                         self.outs[0][idx] = sum(channels_v)
                         self.outs[1][idx] = sum(channels_h)
 
