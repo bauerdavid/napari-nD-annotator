@@ -57,6 +57,7 @@ cdef extern from "Eikonal.h":
         vector[CVec2]& GetMinPath() nogil
         void CleanAll() nogil
         void CalcImageQuantAllMethods() nogil
+        # void SetUseLocalMaximum(bool) nogil
 
 cdef class MinimalContourCalculator:
     cdef vector[SControl*] eikonals
@@ -82,6 +83,11 @@ cdef class MinimalContourCalculator:
             control.SetParam(self.param)
             control.SetParam(0, 0)
             self.eikonals.push_back(control)
+
+    cpdef set_use_local_maximum(self, bool use_local_maximum):
+        cdef int i=0
+        #for i in range(self.eikonals.size()):
+            #self.eikonals[i].SetUseLocalMaximum(use_local_maximum)
 
     cpdef set_param(self, int param):
         cdef int i
