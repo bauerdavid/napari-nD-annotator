@@ -40,7 +40,7 @@ from ._utils.callbacks import (
     decrement_selected_label,
     LOCK_CHAR
 )
-
+from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed
 from ..minimal_contour import MinimalContourCalculator, FeatureManager
 import numpy as np
 from napari.layers import Image, Labels
@@ -664,7 +664,7 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self.calculator.set_image(image, grad_x, grad_y)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            dims_displayed = list(image_layer._dims_displayed)
+            dims_displayed = list(layer_dims_displayed(image_layer))
         self.anchor_points.translate = image_layer.translate[dims_displayed]
         self.from_e_points_layer.translate = image_layer.translate[dims_displayed]
         self.to_s_points_layer.translate = image_layer.translate[dims_displayed]
@@ -777,7 +777,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         if not self.labels.layer.visible:
             self.labels.layer.set_view_slice()
         self.progress_dialog.setVisible(True)
-        self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(self.labels.layer._dims_displayed)] for p in self.output.data])
+        self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(layer_dims_displayed(self.labels.layer))] for p in self.output.data])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.draw_worker.mask_shape = self.labels.layer._data_view.shape
@@ -855,7 +855,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             if self.blur_image_checkbox.isChecked() and self.blur_image_slider.value() > 0.:
                 if self.image.layer.data.ndim-(1 if self.image.layer.rgb else 0)>=3:
                     slice_ = tuple(
-                        slice(None) if i in self.image.layer._dims_displayed else self.viewer.dims.current_step[i]
+                        slice(None) if i in layer_dims_displayed(self.image.layer) else self.viewer.dims.current_step[i]
                         for i in range(self.viewer.dims.ndim)
                     )
                 else:

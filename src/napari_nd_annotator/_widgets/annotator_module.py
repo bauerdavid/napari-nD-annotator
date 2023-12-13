@@ -36,6 +36,7 @@ from ._utils.callbacks import (
     LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
+from .._helper_functions import layer_ndisplay, layer_dims_displayed
 def check_connectivity(event):
     layer = event.source
     current_slice = layer._slice.image.raw
@@ -230,12 +231,13 @@ class AnnotatorWidget(QWidget):
             output[cx, cy] = True
 
     def fill_holes(self, layer: Layer, event):
-        if layer.mode != "paint" or layer._ndisplay != 2:
+        if layer.mode != "paint" or layer_ndisplay(layer) != 2:
             return
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        image_coords = tuple(coordinates[i] for i in layer._dims_displayed)
-        slice_dims = tuple(coordinates[i] if i not in layer._dims_displayed else slice(None) for i in range(layer.ndim))
+        dims_displayed = layer_dims_displayed(layer)
+        image_coords = tuple(coordinates[i] for i in dims_displayed)
+        slice_dims = tuple(coordinates[i] if i not in dims_displayed else slice(None) for i in range(layer.ndim))
         current_draw = np.zeros_like(layer.data[slice_dims], bool)
         start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
@@ -246,7 +248,7 @@ class AnnotatorWidget(QWidget):
         while event.type == 'mouse_move':
             coordinates = layer.world_to_data(event.position)
             coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-            image_coords = tuple(coordinates[i] for i in layer._dims_displayed)
+            image_coords = tuple(coordinates[i] for i in dims_displayed)
             AnnotatorWidget.draw_line(prev_x, prev_y, image_coords[-2], image_coords[-1], layer.brush_size, current_draw)
             prev_x, prev_y = image_coords
             yield
@@ -257,7 +259,7 @@ class AnnotatorWidget(QWidget):
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(
             max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        image_coords = tuple(coordinates[i] for i in layer._dims_displayed)
+        image_coords = tuple(coordinates[i] for i in dims_displayed)
         prev_x, prev_y = image_coords
         AnnotatorWidget.draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
         cx, cy = draw.disk((prev_x, prev_y), layer.brush_size/2)

@@ -5,7 +5,6 @@ except ImportError:
 
 
 if MinArea is not None:
-    import tifffile
     from time import sleep
     from copy import deepcopy
     from collections.abc import Iterable
@@ -16,6 +15,7 @@ if MinArea is not None:
     QSymmetricDoubleRangeSlider, ImageProcessingWidget
     from ._utils.delayed_executor import DelayedExecutor
     from ._utils.callbacks import keep_layer_on_top
+    from .._helper_functions import layer_dims_displayed
     import napari
     from napari.layers import Image, Labels, Points, Shapes, Layer
     from napari.utils.colormaps.standardize_color import transform_color
@@ -176,6 +176,7 @@ if MinArea is not None:
             self.blur_func = None
             self.init_slice_annotation_fun = None
             self.finish_slice_annotation_fun = None
+            self.bb_layer = None
             self.slice_image_layer = None
             self.slice_labels_layer = None
             self.slice_annotation = None
@@ -219,7 +220,7 @@ if MinArea is not None:
             self.prev_camera_zoom = self.viewer.camera.zoom
             self.prev_camera_angles = self.viewer.camera.angles
             self.viewer.dims.ndisplay = 2
-            visible_extent = self.slice_labels_layer.extent.world[:, self.slice_labels_layer._dims_displayed]
+            visible_extent = self.slice_labels_layer.extent.world[:, layer_dims_displayed(self.slice_labels_layer)]
             self.viewer.camera.center = visible_extent.mean(0)
             self.viewer.camera.zoom = np.min(np.divide(self.viewer._canvas_size, visible_extent.max(0)-visible_extent.min(0)))*0.95
             self.slice_labels_layer.brush_size = 1
@@ -440,7 +441,8 @@ if MinArea is not None:
                     if self.stop_requested:
                         show_info("Stopped calculation")
                         break
-                    self.bb_layer.data = [bounding_box]
+                    if self.bb_layer is not None:
+                        self.bb_layer.data = [bounding_box]
                     normal_vector = point2 - point1
                     normal_vector /= (np.sqrt((normal_vector**2).sum()))
                     max_dim = np.argmax(np.abs(normal_vector))
@@ -1028,10 +1030,11 @@ if MinArea is not None:
             estimation_thread.started.connect(estimation_worker.run)
             estimation_thread.finished.connect(estimation_worker.deleteLater)
             estimation_thread.finished.connect(estimation_thread.deleteLater)
-            estimation_worker.bb_layer = BoundingBoxLayer(
-                [[[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]], scale=(z_scale, 1., 1.))
-            self.viewer.add_layer(estimation_worker.bb_layer)
-            estimation_thread.finished.connect(lambda: self.viewer.layers.remove(estimation_worker.bb_layer))
+            if BoundingBoxLayer is not None:
+                estimation_worker.bb_layer = BoundingBoxLayer(
+                    [[[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]], scale=(z_scale, 1., 1.))
+                self.viewer.add_layer(estimation_worker.bb_layer)
+                estimation_thread.finished.connect(lambda: self.viewer.layers.remove(estimation_worker.bb_layer))
             estimation_thread.start()
             # viewer.add_image(data)
 

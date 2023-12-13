@@ -8,7 +8,8 @@ import random
 import string
 import shutil
 from .feature_extractor import FeatureExtractor
-from napari import Viewer
+from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed
+from napari import Viewer, layers
 from typing import Union, Optional
 import glob
 TEMP_SUFFIX = "_nd_annotator"
@@ -28,11 +29,11 @@ class FeatureManager:
         self.feature_extractor = FeatureExtractor()
         atexit.register(self.clean)
 
-    def get_features(self, layer, block=True):
+    def get_features(self, layer: layers.Layer, block=True):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            dims_displayed = tuple(layer._dims_displayed)
-            dims_not_displayed = tuple(layer._dims_not_displayed)
+            dims_displayed = tuple(layer_dims_displayed(layer))
+            dims_not_displayed = tuple(layer_dims_not_displayed(layer))
         if layer != self.layer or dims_displayed != self.dims_displayed:
             self.init_file(layer, dims_displayed)
         with warnings.catch_warnings():
@@ -95,7 +96,7 @@ class FeatureManager:
         else:
             self.memmaps.append(np.memmap(path_v, shape=shape, dtype=float))
             self.memmaps.append(np.memmap(path_h, shape=shape, dtype=float))
-            self.feature_extractor.done_mask = np.ones([shape[i] for i in layer._dims_not_displayed], bool)
+            self.feature_extractor.done_mask = np.ones([shape[i] for i in layer_dims_not_displayed(layer)], bool)
 
     def generate_filename(self, prefix, dims_displayed=None, suffix=''):
         if dims_displayed is None:
@@ -106,7 +107,7 @@ class FeatureManager:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             slice_indices = layer._slice_indices
-            dims_displayed = layer._dims_displayed
+            dims_displayed = layer_dims_displayed(layer)
         self.feature_extractor.start_jobs(layer.data, self.memmaps, slice_indices, dims_displayed, layer.rgb)
 
     @staticmethod
