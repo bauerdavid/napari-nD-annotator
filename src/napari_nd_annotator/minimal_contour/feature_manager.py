@@ -49,12 +49,30 @@ class FeatureManager:
             idx = tuple(layer._slice_indices[i] if i in dims_not_displayed else slice(None) for i in range(layer.ndim))
         return self.memmaps[0][idx], self.memmaps[1][idx]
 
-    def init_file(self, layer, dims_displayed):
-        self.layer = layer
-        self.dims_displayed = dims_displayed
+    def clear_memmap(self):
         while len(self.memmaps) > 0:
             # TODO check if it is safe to close
             del self.memmaps[0]
+
+    def remove_features(self, layer):
+        print(layer)
+        if self.layer == layer:
+            self.layer = None
+            self.clear_memmap()
+            self.feature_extractor.done_mask = None
+        if layer not in self.prefix_map:
+            return
+        filename = self.prefix_map[layer]
+        if layer in self.slices_calculated:
+            del self.slices_calculated[layer]
+        files = glob.glob(os.path.join(self.temp_folder, self.generate_filename(filename)))
+        for file in files:
+            os.remove(file)
+
+    def init_file(self, layer, dims_displayed):
+        self.layer = layer
+        self.dims_displayed = dims_displayed
+        self.clear_memmap()
         if layer in self.prefix_map:
             filename = self.prefix_map[layer]
         else:
@@ -79,7 +97,9 @@ class FeatureManager:
             self.memmaps.append(np.memmap(path_h, shape=shape, dtype=float))
             self.feature_extractor.done_mask = np.ones([shape[i] for i in layer._dims_not_displayed], bool)
 
-    def generate_filename(self, prefix, dims_displayed, suffix=''):
+    def generate_filename(self, prefix, dims_displayed=None, suffix=''):
+        if dims_displayed is None:
+            dims_displayed = "*"
         return os.path.join(self.temp_folder, "tmp_ftrs_%s_%s%s.dat" % (prefix, "_".join(str(d) for d in dims_displayed), suffix))
 
     def start_feature_calculation(self, layer):
