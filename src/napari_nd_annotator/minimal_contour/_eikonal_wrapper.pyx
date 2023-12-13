@@ -151,7 +151,7 @@ cdef class MinimalContourCalculator:
         cdef int i
         for i in range(len(self.method_initialized)):
             self.method_initialized[i] = False
-        if gradx!=EMPTY and grady!=EMPTY:
+        if not np.array_equal(gradx, EMPTY) and not np.array_equal(grady,EMPTY):
             if self.egradx.GetWidth() != w or self.egrady.GetHeight() != h:
                 self.egradx.Set(w, h)
                 self.egrady.Set(w, h)
