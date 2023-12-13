@@ -835,7 +835,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         if self.labels.layer is None:
             return
         self.selected_id_label.setText(str(self.labels.layer.selected_label))
-        bg_color = self.labels.layer._selected_color
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            bg_color = self.labels.layer._selected_color
         if bg_color is None:
             bg_color = np.ones(4)
         h, s, v = colorsys.rgb_to_hsv(*bg_color[:-1])
