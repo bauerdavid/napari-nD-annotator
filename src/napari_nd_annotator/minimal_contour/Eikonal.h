@@ -65,6 +65,7 @@ public:
 	    mStartY = startY;
 	    mEndX = endX;
 	    mEndY = endY;
+	    GetMaxAuxGrad();
 	}
     virtual void CalcImageQuant() = 0;
 protected:
@@ -173,7 +174,10 @@ protected:
 	void GradientCorrection(CVec2 &dir, int x, int y) {
 		SWorkImg<double> &tangx = *(m_pTang[0]);
 		SWorkImg<double> &tangy = *(m_pTang[1]);
-		dir.x += tangx[y][x]; dir.y += tangy[y][x];
+        double grad_magnitude = sqrt(tangx[y][x]*tangx[y][x]+tangy[y][x]*tangy[y][x]);
+        double exp_mul = (1.0-exp(-grad_magnitude*m_expfac/m_maxauxgrad))/grad_magnitude;
+
+		dir.x += tangx[y][x]*exp_mul; dir.y += tangy[y][x]*exp_mul;
 	}
 		
 };

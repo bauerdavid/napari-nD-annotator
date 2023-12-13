@@ -82,16 +82,10 @@ def lock_layer(event):
 
 def keep_layer_on_top(layer):
     def on_top_callback(e):
-        layers = e.source
-        if layer not in layers:
+        layer_list = e.source
+        if layer not in layer_list:
             return
-        if e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded", "editable", "translate"]:
-            return
-        layer_list = layers
-        with (
-            layer_list.events.moved.blocker(),
-            layer_list.events.moving.blocker()
-        ):
+        with layer_list.events.moved.blocker(keep_layer_on_top):
             try:
                 for i in reversed(range(len(layer_list))):
                     elem = layer_list[i]

@@ -11,7 +11,20 @@ import skimage
 import warnings
 import keyword
 
-from ._utils import ProgressWidget
+from napari_nd_annotator._widgets._utils import ProgressWidget
+
+
+def execute_script(script, image, other_locals=None):
+    if other_locals is None:
+        other_locals = dict()
+    locals = {"image": image} | other_locals
+    exec(script, {"np": np, "skimage": skimage}, locals)
+    if "features" in locals:
+        features = locals["features"]
+    else:
+        features = None
+        warnings.warn("The output should be stored in a variable called 'features'")
+    return features
 
 
 class ScriptWorker(QObject):
@@ -24,17 +37,9 @@ class ScriptWorker(QObject):
             raise ValueError("No script was set!")
         if self.image is None:
             raise ValueError("'image' was None!")
-        locals = {"image": self.image}
         try:
-            exec(self.script, {"np": np, "skimage": skimage}, locals)
-            if "features" in locals:
-                features = locals["features"]
-                if features is not None and features.ndim == 2:
-                    features = np.concatenate([features[..., np.newaxis]] * 3, -1)
-                self.done.emit(features)
-            else:
-                warnings.warn("The output should be stored in a variable called 'features'")
-                self.done.emit(None)
+            features = execute_script(self.script, self.image)
+            self.done.emit(features)
         except Exception as e:
             self.done.emit(None)
             raise e
@@ -117,11 +122,10 @@ class CodeEditor(QPlainTextEdit):
 
 
 class ImageProcessingWidget(QWidget):
-    try_script = Signal()
-
-    def __init__(self, image, viewer: napari.Viewer):
+    def __init__(self, image, viewer: napari.Viewer, editor_key="img_proc_script"):
         super().__init__()
         self.viewer = viewer
+        self._editor_key = editor_key
         self.progress_dialog = ProgressWidget(message="Calculating feature, please wait...")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -136,9 +140,9 @@ class ImageProcessingWidget(QWidget):
         self.script_thread.started.connect(self.script_worker.run)
         self.script_thread.finished.connect(lambda: self.progress_dialog.setVisible(False))
         layout = QVBoxLayout()
-        self.text_settings = QtCore.QSettings()
+        self.text_settings = QtCore.QSettings("BIOMAG", "Annotation Toolbox")
         self.text_edit = CodeEditor()
-        self.text_edit.document().setPlainText(self.text_settings.value("img_proc_script", ""))
+        self.text_edit.document().setPlainText(self.text_settings.value(self._editor_key, ""))
         self.highlighter = PythonHighlighter(self.text_edit.document())
         font_size = self.text_settings.value("script_font_size")
         if font_size:
@@ -181,13 +185,13 @@ class ImageProcessingWidget(QWidget):
         self.features = image
 
     def run_script(self):
-        self.run_button.setEnabled(False)
-        self.try_button.setEnabled(False)
         script = self.text_edit.document().toPlainText()
-        self.text_settings.setValue("img_proc_script", script)
+        self.text_settings.setValue(self._editor_key, script)
         if self.image is None:
             warnings.warn("image is None")
             return None
+        self.run_button.setEnabled(False)
+        self.try_button.setEnabled(False)
         self.script_worker.script = script
         self.script_worker.image = self.image.copy() if self.image is not None else None
         self.progress_dialog.setVisible(True)
@@ -208,17 +212,24 @@ class ImageProcessingWidget(QWidget):
             if "Feature map" not in self.viewer.layers:
                 self.viewer.add_image(
                     features,
-                    name="Feature map",
-                    rgb=True
+                    name="Feature map"
                 )
             else:
                 self.viewer.layers["Feature map"].data = features
-        self.script_worker.done.disconnect(self.display_features)
 
     def try_code(self):
-        self.try_script.emit()
-        self.script_worker.done.connect(self.display_features)
-        self.run_script()
+        features = self.execute_script()
+        self.display_features(features)
+
+    def execute_script(self, image=None):
+        if image is None:
+            image = self.image
+        script = self.text_edit.document().toPlainText()
+        self.text_settings.setValue(self._editor_key, script)
+        return execute_script(script, image)
+
+    def calculate_features(self, image):
+        return execute_script()
 
     def increase_font_size(self):
         font = self.text_edit.font()

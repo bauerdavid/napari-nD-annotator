@@ -58,7 +58,8 @@ class AnnotatorWidget(QWidget):
         self.viewer = viewer
         self.viewer.layers.selection.events.connect(self.on_layer_selection_change)
         self.viewer.layers.selection.events.connect(lock_layer)
-        self.viewer.layers.events.connect(self.move_bbox_to_top)
+        self.viewer.layers.events.inserted.connect(self.move_bbox_to_top)
+        self.viewer.layers.events.moved.connect(self.move_bbox_to_top)
         self.fill_objects_checkbox.clicked.connect(self.set_fill_objects)
         layout.addWidget(self.fill_objects_checkbox)
 
@@ -87,7 +88,7 @@ class AnnotatorWidget(QWidget):
         self.installEventFilter(self)
         self.set_fill_objects(True)
         self.on_layer_selection_change()
-        self.init_bbox_layer()
+        # self.init_bbox_layer()
 
     def eventFilter(self, source: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Hide:
@@ -113,7 +114,7 @@ class AnnotatorWidget(QWidget):
         self._active_labels_layer = labels_layer
         self.set_fill_objects(self.fill_objects)
         self.set_labels_callbacks()
-        self.init_bbox_layer()
+        # self.init_bbox_layer()
 
     def unset_labels_callbacks(self):
         if self.active_labels_layer is None:
@@ -148,14 +149,8 @@ class AnnotatorWidget(QWidget):
     def move_bbox_to_top(self, e=None):
         if self._active_bbox_layer not in self.viewer.layers:
             return
-        if e is not None\
-                and e.type in ["highlight", "mode", "set_data", "data", "thumbnail", "loaded", "reordered", "editable", "translate"]:
-            return
         layer_list = self.viewer.layers
-        with (
-            layer_list.events.moved.blocker(),
-            layer_list.events.moving.blocker()
-        ):
+        with layer_list.events.moved.blocker(self.move_bbox_to_top):
             try:
                 for i in reversed(range(len(layer_list))):
                     layer = layer_list[i]

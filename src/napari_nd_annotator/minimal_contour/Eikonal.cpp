@@ -120,9 +120,8 @@ void CEikonal::GetMaxAuxGrad()
         }
 #pragma omp critical(maxauxgrad)
     if(temp_max > m_maxauxgrad) m_maxauxgrad = temp_max;
-    if(temp_min < minauxgrad) minauxgrad = temp_min;
     }
-	m_maxauxgrad = sqrt(m_maxauxgrad) - sqrt(minauxgrad);
+	m_maxauxgrad = sqrt(m_maxauxgrad);
 }
 
 void CEikonal::InitImageQuant0(SWorkImg<double> &img)
@@ -141,7 +140,7 @@ void CRanders::InitImageQuantGrad0(SWorkImg<double> &gradx, SWorkImg<double> &gr
 	m_aux[1] = gradx;
 	m_aux[0] = grady;
 	m_aux[1] *= -1;
-	GetMaxAuxGrad();
+	//GetMaxAuxGrad();
 	CalcImageQuant();
 }
 
@@ -391,13 +390,24 @@ void CRanders::DistanceCalculator()
             if (gradlen < 1e-11) gradlen = 1e-11;
             double igradlen = 1.0 / gradlen;
             nx *= igradlen; ny *= igradlen;
+            double eikon;
+            double grad_magnitude = sqrt(tangx[yy][xx]*tangx[yy][xx]+tangy[yy][xx]*tangy[yy][xx]);
+            if(grad_magnitude>1e-11){
+                double exp_mul = (1.0-exp(-grad_magnitude*m_expfac/m_maxauxgrad))/grad_magnitude;
+                //double exp_mul = 1;
+                double Qn = (tangx[yy][xx] * nx + tangy[yy][xx] * ny) *exp_mul;
+                double Qt2 = (-tangx[yy][xx] * ny + tangy[yy][xx] * nx) *exp_mul;
+                //cout << "(" << xx <<", " << yy << "): [" << tangx[yy][xx]*exp_mul << ", " << tangy[yy][xx]*exp_mul <<"]" <<endl;
+                Qt2 *= Qt2;
+                eikon = 1 - Qt2;
+                if (eikon < 0) eikon = 0;
+                eikon = Qn + sqrt(eikon);
+                //if(omp_get_thread_num()==0)
+                    //cout << "(" << xx <<", " << yy << "): " << eikon <<endl;
+            } else {
+                eikon = 1;
+            }
 
-            double Qn = tangx[yy][xx] * nx + tangy[yy][xx] * ny;
-            double Qt2 = -tangx[yy][xx] * ny + tangy[yy][xx] * nx;
-            Qt2 *= Qt2;
-            double eikon(1 - Qt2);
-            if (eikon < 0) eikon = 0;
-            eikon = Qn + sqrt(eikon);
             double vnormed = gradlen / eikon;
 
             if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
@@ -429,28 +439,6 @@ void CRanders::CalcImageQuant()
 
 	*(m_pTang[0]) = m_aux[0];
 	*(m_pTang[1]) = m_aux[1]; // check
-	if (m_maxauxgrad < 1e-11) return; // essentially Euclidean space
-	int xs = m_pTang[0]->xs, ys = m_pTang[0]->ys;
-	SWorkImg<double> &tang0 = *(m_pTang[0]);
-	SWorkImg<double> &tang1 = *(m_pTang[1]);
-
-	maxgrab = m_expfac/m_maxauxgrad; // 0 - 8
-#pragma omp parallel for schedule(dynamic, m_spacex)
-    for(int yx =0; yx < xs*ys; yx++){
-        int xx = yx % xs;
-        int yy = yx / xs;
-        double q = tang0[yy][xx]*tang0[yy][xx]+tang1[yy][xx]*tang1[yy][xx];
-        q = sqrt(q);
-        if (q > 1e-11) {
-            tang0[yy][xx] /= q; tang1[yy][xx] /= q;
-            q *= maxgrab;
-            q = 1.0-((double)exp(-q));	// ~ 0 - 0.632
-            tang0[yy][xx] *= q; tang1[yy][xx] *= q;
-        }
-        else {
-            tang0[yy][xx] = tang1[yy][xx] = 0;
-        }
-    }
 }
 
 ////////////////////////////////////////////////////////////////
@@ -580,7 +568,7 @@ void CInhomog::DistanceCalculator()
 		double nx = 0.5f * (m_field[yy][xx + 1] - m_field[yy][xx - 1]);
 		double ny = 0.5f * (m_field[yy + 1][xx] - m_field[yy - 1][xx]);
 		double gradlen = sqrtf(nx * nx + ny * ny);
-
+        double q = 1./(0.01 + (1.0 - 0.01) * ((double)exp(-m_expfac * q/m_maxauxgrad)));
 		double vnormed = gradlen * data[yy][xx];
 		if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
 		if (maxv < vnormed) maxv = vnormed;
@@ -603,10 +591,11 @@ void CInhomog::CalcImageQuant()
 	SWorkImg<double>& data = *m_pData;
 	for (int yy = 0; yy < ys; ++yy) {
 		for (int xx = 0; xx < xs; ++xx) {
-			double q = m_aux[0][yy][xx];
+		    data[yy][xx] = m_aux[0][yy][xx];
+			//double q =
 			// intensity data
-			double dat = 0.01f + (1.0f - 0.01f) * ((double)exp(-m_expfac * q));
-			data[yy][xx] = 1.0f / dat;
+			//double dat = 0.01f + (1.0f - 0.01f) * ((double)exp(-m_expfac * q));
+			//data[yy][xx] = 1.0f / dat;
 		}
 	}
 }
