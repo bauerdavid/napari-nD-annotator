@@ -1,4 +1,3 @@
-
 try:
     import MinArea
 except ImportError:
@@ -6,14 +5,15 @@ except ImportError:
 
 
 if MinArea is not None:
+    import tifffile
     from time import sleep
     from copy import deepcopy
     from collections.abc import Iterable
-    import tifffile
     from napari.utils.notifications import show_info
     from napari.layers._source import layer_source
 
-    from ._utils import WidgetWithLayerList, CollapsibleWidget, CollapsibleWidgetGroup, ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider
+    from ._utils import WidgetWithLayerList, CollapsibleWidget, CollapsibleWidgetGroup, ProgressWidget, QDoubleSlider, \
+    QSymmetricDoubleRangeSlider, ImageProcessingWidget
     from ._utils.delayed_executor import DelayedExecutor
     from ._utils.callbacks import keep_layer_on_top
     import napari
@@ -33,7 +33,8 @@ if MinArea is not None:
         QApplication,
         QComboBox,
         QSpinBox,
-        QSizePolicy
+        QSizePolicy,
+        QStackedWidget
     )
     from threading import Thread
     import cv2
@@ -154,10 +155,16 @@ if MinArea is not None:
             self.viewer = viewer
             self.minimal_contour_widget = minimal_contour_widget
             self.minimal_surface_widget = minimal_surface_widget
+            self.estimators = None
+            self.bboxes = None
+            self.imgs = None
+            self.phis = None
+            self.pt_pairs = None
             self.stop_requested = False
             self.center_mat = None
             self.rotation_matrix = None
             self.translation_matrix = None
+            self.phi = None
             self.image = None
             self.points = None
             self.use_correction = None
@@ -174,6 +181,7 @@ if MinArea is not None:
             self.slice_annotation = None
             self.manual_annotation_done = False
             self.z_scale = None
+            self.use_gradient = None
             #create annotation dialogs
             self.manual_annotation_dialog = QWidget()
             layout = QVBoxLayout()
@@ -259,8 +267,9 @@ if MinArea is not None:
         def finish_minimal_contour_annotation(self):
             self.manual_annotation_dialog.hide()
 
-        def initialize(self, image, points, use_correction, beta, alpha, n_iter, use_meeting_plane_points, slice_annotation_method="Manual", blur_func=None, z_scale=1.):
+        def initialize(self, image, phi_func, points, use_correction, beta, alpha, n_iter, use_meeting_plane_points, slice_annotation_method="Manual", blur_func=None, z_scale=1., use_gradient=True):
             self.image = image
+            self.phi_func = phi_func
             self.points = points
             self.use_correction = use_correction
             self.beta = beta
@@ -271,8 +280,10 @@ if MinArea is not None:
             self.init_slice_annotation_fun = self.slice_annotation_methods[slice_annotation_method]
             self.finish_slice_annotation_fun = self.finish_annotation_methods[slice_annotation_method]
             self.z_scale = z_scale
+            self.use_gradient = use_gradient
 
-        def hook_callbacks(self, estimator):
+        def hook_callbacks(self, idx):
+            estimator = self.estimators[idx]
             # estimator.hook_stage_data_init_event(
             #     MinArea.AREA_EIKONAL_STAGE,
             #     lambda arr, idx: self.data_initializer(
@@ -361,10 +372,10 @@ if MinArea is not None:
 
             estimator.hook_transform_calculated_event(tform_calculated)
 
-            # def center_calculated(center):
-            #     self.center_mat = np.flip(center.copy())
-            #
-            # estimator.hook_plane_center_calculated_event(center_calculated)
+            def center_calculated(center):
+                self.center_mat = np.flip(center.copy())
+
+            estimator.hook_plane_center_calculated_event(center_calculated)
 
         def run(self):
             import time
@@ -379,44 +390,53 @@ if MinArea is not None:
             try:
                 start = time.time()
 
-                estimators = []
-                bboxes = []
-                imgs = []
-                pt_pairs = []
+                self.estimators = []
+                self.bboxes = []
+                self.imgs = []
+                self.phis = []
+                self.pt_pairs = []
                 for i in range(len(self.points) // 2):
                     estimator = MinArea.MinimalSurfaceCalculator()
+                    self.estimators.append(estimator)
                     estimator.set_initial_plane_calculator(self.segment_initial_slice)
                     estimator.set_using_meeting_points(self.use_meeting_plane_points)
-                    self.hook_callbacks(estimator)
+                    self.hook_callbacks(i)
                     bounding_box = pts_2_bb(self.points[2 * i], self.points[2 * i + 1], self.image.shape,
                                             [self.z_scale, 1, 1])
                     bounding_box = bounding_box.round().astype(int)
-                    bboxes.append(bounding_box)
+                    self.bboxes.append(bounding_box)
                     offset = bounding_box.min(0, keepdims=True)
                     bb_slice = bb_2_slice(bounding_box)
                     point1 = np.flip(self.points[2 * i] - offset).reshape(-1)
                     point2 = np.flip(self.points[2 * i + 1] - offset).reshape(-1)
                     point1[2] *= self.z_scale
                     point2[2] *= self.z_scale
-                    pt_pairs.append((point1, point2))
+                    self.pt_pairs.append((point1, point2))
                     data = self.image[bb_slice]
                     data = zoom(data, (self.z_scale, 1, 1))
-                    data = (data - data.min()) / (data.max() - data.min())
+                    data = (data - (min_ := data.min())) / (data.max() - min_)
                     if self.blur_func is not None:
                         data = self.blur_func(data)
-                    imgs.append(data)
-                    if self.use_meeting_plane_points:
-                        estimator.calc_eikonal_and_transport_init(data, point1, point2, self.use_correction, self.beta, self.alpha)
-
+                    if self.use_gradient:
+                        phi = sitk.GetArrayFromImage(sitk.GradientMagnitude(sitk.GetImageFromArray(data))).astype(float)
                     else:
-                        estimator.init_transport_slice(data, point1, point2)
-                    estimators.append(estimator)
-                self.slice_annotations_done.emit(len(estimators))
+                        phi = self.phi_func(data)
+                    alpha = (self.alpha - np.exp(-self.beta))/(1-np.exp(-self.beta))
+                    phi = alpha + (1-alpha)*np.exp(-self.beta*phi)
+                    phi = phi/phi.max()
+                    self.imgs.append(data)
+                    self.phis.append(phi)
+                    if self.use_meeting_plane_points:
+                        estimator.calc_eikonal_and_transport_init(phi, data, point1, point2, self.use_correction)
+                    else:
+                        estimator.init_transport_slice(phi, point1, point2)
+                self.slice_annotations_done.emit(len(self.estimators))
 
                 print("slice annotations finished in %.2f seconds" % (time.time() - start))
                 timestamp = time.time()
 
-                for i, (estimator, data, (point1, point2), bounding_box) in enumerate(zip(estimators, imgs, pt_pairs, bboxes)):
+                for i, (estimator, phi, data, (point1, point2), bounding_box)\
+                        in enumerate(zip(self.estimators, self.phis, self.imgs, self.pt_pairs, self.bboxes)):
                     if self.stop_requested:
                         show_info("Stopped calculation")
                         break
@@ -429,7 +449,7 @@ if MinArea is not None:
                     offset = np.clip(bounding_box.min(0), 0, np.asarray(self.image.shape) - 1)
                     # start = time.time()
 
-                    output = estimator.calculate(data, point1, point2, self.use_correction, self.beta, self.alpha, self.n_iter)
+                    output = estimator.calculate(phi, data, point1, point2, self.use_correction, self.n_iter)
                     segmented = (output >= 0)
                     labelled = skimage.measure.label(segmented)
                     obj_pixel = np.argwhere(output == output.max())[0]
@@ -569,13 +589,11 @@ if MinArea is not None:
 
         def on_layer_data_change(self, event):
             layer = event.source
-            print("on_layer_data_change")
             if layer not in self._ghost_layers:
                 print("%s not in ghost layers!" % layer.name if layer else None)
                 return
             ghost_layer = self._ghost_layers[event.source]
             if ghost_layer is None:
-                print("ghost_layer is None")
                 return
             ghost_layer.data = event.source.data
 
@@ -791,8 +809,13 @@ if MinArea is not None:
             params_layout = QVBoxLayout()
             self.image_feature_combobox = QComboBox(self)
             self.image_feature_combobox.addItem("Gradient")
+            self.image_feature_combobox.addItem("Custom")
             params_layout.addWidget(self.image_feature_combobox)
 
+
+            self.alpha_beta_widget = QWidget()
+            self.alpha_beta_widget.setContentsMargins(0, 0, 0, 0)
+            alpha_beta_layout = QVBoxLayout()
             alpha_layout = QHBoxLayout()
             alpha_layout.addWidget(QLabel("\u03B1", parent=self))
             self.alpha_slider = QDoubleSlider(parent=self)
@@ -802,7 +825,7 @@ if MinArea is not None:
             self.alpha_slider.setDecimals(3)
             self.alpha_slider.setOrientation(Qt.Horizontal)
             alpha_layout.addWidget(self.alpha_slider)
-            params_layout.addLayout(alpha_layout)
+            alpha_beta_layout.addLayout(alpha_layout)
 
             beta_layout = QHBoxLayout()
             beta_layout.addWidget(QLabel("\u03B2", parent=self))
@@ -813,8 +836,13 @@ if MinArea is not None:
             self.beta_spinner.setSingleStep(1.)
             self.beta_spinner.setSizePolicy(QSizePolicy.Policy.Expanding, self.beta_spinner.sizePolicy().verticalPolicy())
             beta_layout.addWidget(self.beta_spinner)
-            params_layout.addLayout(beta_layout)
+            alpha_beta_layout.addLayout(beta_layout)
 
+            self.alpha_beta_widget.setLayout(alpha_beta_layout)
+            params_layout.addWidget(self.alpha_beta_widget)
+            self.custom_feature_widget = ImageProcessingWidget(self.image.layer, self.viewer, "min_surf_script")
+            params_layout.addWidget(self.custom_feature_widget)
+            self.image_feature_combobox.currentTextChanged.connect(lambda t: self.custom_feature_widget.setVisible(t == "Custom"))
             iterations_layout = QHBoxLayout()
             iterations_layout.addWidget(QLabel("iterations", parent=self))
             self.iterations_slider = QSlider(parent=self)
@@ -929,6 +957,7 @@ if MinArea is not None:
             # self.slice_widget.clipping_widget.add_layer(self.points_layer)
             self.slice_widget.add_mouse_drag_callback(self.on_slice_clicked)
             self.image.combobox.currentIndexChanged.connect(self.set_slice_widget_image)
+            self.image.combobox.currentIndexChanged.connect(self.update_custom_feature_image)
             layout.addWidget(self.slice_widget)
             layout.addStretch()
             self.setLayout(layout)
@@ -974,6 +1003,7 @@ if MinArea is not None:
                 raise ValueError("Missing labels layer")
             image = self.image.layer
             image_data = image.data
+            phi_func = None if self.image_feature_combobox.currentText() == "Gradient" else self.custom_feature_widget.execute_script
             points = self.points_layer
             points_data = points.data.copy()
             z_scale = self.z_scale_spinbox.value()
@@ -981,9 +1011,10 @@ if MinArea is not None:
             beta = self.beta_spinner.value()
             n_iter = self.iterations_slider.value()
             use_correction = self.use_correction_checkbox.isChecked()
+            use_gradient = self.image_feature_combobox.currentText() == "Gradient"
             use_meeting_plane_points = self.use_meeting_points_checkbox.isChecked()
             estimation_worker = EstimationWorker(self.viewer, self.minimal_contour_widget, self)
-            estimation_worker.initialize(image_data, points_data, use_correction, beta, alpha, n_iter, use_meeting_plane_points, self.slice_segmentation_dropdown.currentText(), self.blur_image if self.blur_image_checkbox.isChecked() else None, z_scale)
+            estimation_worker.initialize(image_data, phi_func, points_data, use_correction, beta, alpha, n_iter, use_meeting_plane_points, self.slice_segmentation_dropdown.currentText(), self.blur_image if self.blur_image_checkbox.isChecked() else None, z_scale, use_gradient)
             estimation_worker.image_data_received.connect(self._add_image)
             estimation_worker.layer_invalidated.connect(self.refresh_layer)
             estimation_worker.mask_data_received.connect(self.mask_received)
@@ -1135,6 +1166,9 @@ if MinArea is not None:
         def set_slice_widget_image(self, _):
             self.slice_widget.layer = self.image.layer
 
+        def update_custom_feature_image(self, _):
+            self.custom_feature_widget.image = self.image.layer.data
+
         def on_slice_clicked(self, layer, event):
             start_point, end_point = layer.get_ray_intersections(
                 position=event.position,
@@ -1175,7 +1209,7 @@ if MinArea is not None:
             super().__init__(viewer, [("meeting_plane", Image), ("distance_map", Image), ("starting_points", Points)])
             self.shapes_data_received.connect(self.add_shapes)
             self.viewer = viewer
-            self.estimator = MinArea.Estimator()
+            self.estimator = MinArea.MinimalSurfaceCalculator()
             layout = QVBoxLayout()
 
             layout.addWidget(QLabel("Extract contour from meeting plane"))
@@ -1193,7 +1227,6 @@ if MinArea is not None:
             run_button.clicked.connect(self.show_shortest_paths)
             layout.addWidget(run_button)
             self.setLayout(layout)
-            self.update_layer_list(None)
 
         def add_shapes(self, layer_name, data, layer_args):
             if 'opacity' not in layer_args:
@@ -1201,20 +1234,16 @@ if MinArea is not None:
             self.viewer.add_layer(Shapes(data, name=layer_name, shape_type="path", **layer_args))
 
         def plane_2_contour(self):
-            if self.distance_map.layer is None or self.meeting_plane.layer is None:
+            if self.meeting_plane.layer is None:
                 return
             meeting_plane_layer = self.meeting_plane.layer
-            plane_mask = (meeting_plane_layer.data < 0).astype(np.uint8)
-            contour = np.squeeze(cv2.findContours(plane_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0][0])
+            plane_mask = (meeting_plane_layer.data > 0).astype(np.uint8)
+            contour = np.squeeze(cv2.findContours(np.squeeze(plane_mask), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0][0])
             contour = np.concatenate([np.fliplr(contour), np.ones([len(contour), 1])], axis=1)
             contour = contour @ meeting_plane_layer.rotate.T + meeting_plane_layer.translate
-            contour_layer = Points(contour, ndim=self.distance_map.ndim, name="contour points", size=2)
+            contour_layer = Points(contour, ndim=3, name="contour points", size=2)
             self.viewer.add_layer(contour_layer)
-            for i in range(self.points_layer_dropdown.count()):
-                item = self.points_layer_dropdown.itemText(i)
-                if item == contour_layer.name:
-                    self.points_layer_dropdown.setCurrentIndex(i)
-                    break
+            self.starting_points.layer = contour_layer
 
         def calculate(self, points, distance_map, translate, rotate):
             paths = []
