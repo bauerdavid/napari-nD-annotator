@@ -18,10 +18,16 @@ from qtpy.QtWidgets import (
     QSizePolicy
 )
 from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt, QEvent
-from qtpy.QtGui import QCursor, QKeyEvent, QPixmap, QImage
+from qtpy.QtGui import QCursor, QPixmap, QImage
 from superqt import QLargeIntSpinBox
-# from napari._qt.widgets._slider_compat import QDoubleSlider
-from ._utils import QDoubleSlider, ProgressWidget, WidgetWithLayerList, CollapsibleWidget, CollapsibleWidgetGroup
+from ._utils import(
+    QDoubleSlider,
+    ProgressWidget,
+    WidgetWithLayerList,
+    CollapsibleWidget,
+    CollapsibleWidgetGroup,
+    ImageProcessingWidget
+)
 from ._utils.changeable_color_box import QtChangeableColorBox
 from ._utils.callbacks import (
     extend_mask,
@@ -34,7 +40,6 @@ from ._utils.callbacks import (
     decrement_selected_label,
     LOCK_CHAR
 )
-from .image_processing_widget import ImageProcessingWidget
 
 from ..minimal_contour import MinimalContourCalculator, FeatureManager
 import numpy as np
@@ -96,7 +101,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.image.combobox.currentIndexChanged.connect(self.update_demo_image)
         self.prev_labels_layer = self.labels.layer
         self.feature_inverted = False
-        self.test_script = False
         self.prev_timer_id = None
         self.feature_manager = FeatureManager(viewer)
 
@@ -117,9 +121,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.feature_editor = ImageProcessingWidget(self._img, viewer)
         self.feature_editor.setVisible(self.feature_dropdown.currentText() == CUSTOM_TEXT)
         self.feature_editor.script_worker.done.connect(self.set_features)
-        def set_test_script():
-            self.test_script = True
-        self.feature_editor.try_script.connect(set_test_script)
         features_layout.addWidget(self.feature_editor)
 
         features_layout.addWidget(QLabel("Param"))
@@ -309,6 +310,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         viewer.dims.events.current_step.connect(self.update_demo_image)
         self.viewer.layers.events.inserted.connect(self.move_temp_to_top)
         self.viewer.layers.events.moved.connect(self.move_temp_to_top)
+        self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
         self.viewer.bind_key("Control-Tab", overwrite=True)(self.swap_selection)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -325,11 +327,10 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.set_image()
 
     def set_features(self, data):
-        if self.test_script:
-            self.test_script = False
-            return
         if data is None:
             return
+        if data.ndim == 2:
+            data = np.concatenate([data[..., np.newaxis]] * 3, -1)
         self.calculator.set_image(data, np.empty((0, 0,)), np.empty((0, 0,)))
 
     def change_point_size(self, size):
@@ -611,14 +612,13 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self._prev_img_layer.data = self._orig_image
             self._orig_image = image_layer.data.copy() if image_layer is not None else None
         self._prev_img_layer = image_layer
-        if image_layer in self.viewer.window.qt_viewer.controls.widgets:
-            controls = self.viewer.window.qt_viewer.controls.widgets[image_layer]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            qt_viewer = self.viewer.window.qt_viewer
+        if image_layer in qt_viewer.controls.widgets:
+            controls = qt_viewer.controls.widgets[image_layer]
             for child in controls.children():
                 if type(child) == _QDoubleRangeSlider:
-                    try:
-                        child.sliderPressed.connect(self.on_contrast_slider_pressed, Qt.UniqueConnection)
-                    except TypeError:
-                        pass
                     try:
                         child.sliderReleased.connect(self.on_contrast_slider_released, Qt.UniqueConnection)
                     except TypeError:
