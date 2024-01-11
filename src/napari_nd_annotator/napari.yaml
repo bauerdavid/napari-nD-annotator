@@ -4,7 +4,7 @@ contributions:
   commands: 
     - id: napari-nD-annotator.annotator_widget
       python_name: napari_nd_annotator:AnnotatorWidget
-      title: Annotator Toolbox
+      title: Annotation Toolbox
     - id: napari-nD-annotator.interpolation_widget
       python_name: napari_nd_annotator:InterpolationWidget
       title: Slice Interpolation
