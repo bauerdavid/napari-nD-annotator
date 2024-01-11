@@ -1,12 +1,13 @@
 from .interpolation_widget import InterpolationWidget
 from .projections import SliceDisplayWidget
 from .annotator_module import AnnotatorWidget
+from .minimal_surface_widget import MinimalSurfaceWidget
 
 import napari
 from packaging import version
 if version.parse(napari.__version__) >= version.parse("0.4.15"):
     from .object_list import ListWidgetBB
-    __all__ = ["InterpolationWidget", "SliceDisplayWidget", "AnnotatorWidget", "ListWidgetBB"]
+    __all__ = ["InterpolationWidget", "SliceDisplayWidget", "AnnotatorWidget", "MinimalSurfaceWidget", "ListWidgetBB"]
 else:
     if version.parse(napari.__version__) <= version.parse("0.4.12"):
         from napari.layers import Layer
@@ -31,4 +32,4 @@ else:
             return tuple(self._transforms[1:].simplified(coords))
         Layer.data_to_world = data_to_world
 
-    __all__ = ["InterpolationWidget", "SliceDisplayWidget", "AnnotatorWidget"]
+    __all__ = ["InterpolationWidget", "SliceDisplayWidget", "AnnotatorWidget", "MinimalSurfaceWidget"]
