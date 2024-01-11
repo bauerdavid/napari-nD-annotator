@@ -1,10 +1,10 @@
 try:
-    import MinArea
+    import minimal_surface
 except ImportError:
-    MinArea = None
+    minimal_surface = None
 
 
-if MinArea is not None:
+if minimal_surface is not None:
     from time import sleep
     from copy import deepcopy
     from collections.abc import Iterable
@@ -286,7 +286,7 @@ if MinArea is not None:
         def hook_callbacks(self, idx):
             estimator = self.estimators[idx]
             # estimator.hook_stage_data_init_event(
-            #     MinArea.AREA_EIKONAL_STAGE,
+            #     minimal_surface.AREA_EIKONAL_STAGE,
             #     lambda arr, idx: self.data_initializer(
             #         "Area Eikonal %d%s" % (0, postscript),
             #         0,
@@ -297,13 +297,13 @@ if MinArea is not None:
             #         }
             #     )(arr, idx)
             # )
-            # estimator.hook_stage_iteration_event(MinArea.AREA_EIKONAL_STAGE,
+            # estimator.hook_stage_iteration_event(minimal_surface.AREA_EIKONAL_STAGE,
             #                                      lambda idx: self.data_updater("Area Eikonal %d%s" % (0, postscript))(
             #                                          idx))
-            # estimator.hook_stage_finished_event(MinArea.AREA_EIKONAL_STAGE,
+            # estimator.hook_stage_finished_event(minimal_surface.AREA_EIKONAL_STAGE,
             #                                     lambda: self.data_finalizer("Area Eikonal %d%s" % (0, postscript))())
             # estimator.hook_stage_data_init_event(
-            #     MinArea.AREA_EIKONAL_STAGE,
+            #     minimal_surface.AREA_EIKONAL_STAGE,
             #     lambda arr, idx: self.data_initializer(
             #         "Area Eikonal %d%s" % (1, postscript),
             #         1,
@@ -314,18 +314,18 @@ if MinArea is not None:
             #         }
             #     )(arr, idx)
             # )
-            # estimator.hook_stage_iteration_event(MinArea.AREA_EIKONAL_STAGE,
+            # estimator.hook_stage_iteration_event(minimal_surface.AREA_EIKONAL_STAGE,
             #                                      lambda idx: self.data_updater("Area Eikonal %d%s" % (1, postscript))(
             #                                          idx))
-            # estimator.hook_stage_finished_event(MinArea.AREA_EIKONAL_STAGE,
+            # estimator.hook_stage_finished_event(minimal_surface.AREA_EIKONAL_STAGE,
             #                                     lambda: self.data_finalizer("Area Eikonal %d%s" % (1, postscript))())
-            # self.hook_callbacks(estimator, MinArea.AREA_EIKONAL_STAGE, "Area Eikonal 0", {'colormap': "plasma", 'translate': offset, "visible": False}, 0)
-            # self.hook_callbacks(estimator, MinArea.AREA_EIKONAL_STAGE, "Area Eikonal 1", {'colormap': "plasma", 'translate': offset, "visible": False}, 1)
-            # self.hook_callbacks(estimator, MinArea.ROTATED_AREA_EIKONAL_STAGE, "Rotated Area Eikonal", {'colormap': "plasma"}, 0)
-            # estimator.hook_stage_data_init_event(MinArea.PLANE_PHASEFIELD_STAGE,
+            # self.hook_callbacks(estimator, minimal_surface.AREA_EIKONAL_STAGE, "Area Eikonal 0", {'colormap': "plasma", 'translate': offset, "visible": False}, 0)
+            # self.hook_callbacks(estimator, minimal_surface.AREA_EIKONAL_STAGE, "Area Eikonal 1", {'colormap': "plasma", 'translate': offset, "visible": False}, 1)
+            # self.hook_callbacks(estimator, minimal_surface.ROTATED_AREA_EIKONAL_STAGE, "Rotated Area Eikonal", {'colormap': "plasma"}, 0)
+            # estimator.hook_stage_data_init_event(minimal_surface.PLANE_PHASEFIELD_STAGE,
             #                                      lambda arr, idx: print("plane phasefield eikonal init", arr.shape, idx))
             # estimator.hook_stage_data_init_event(
-            #     MinArea.PLANE_PHASEFIELD_STAGE,
+            #     minimal_surface.PLANE_PHASEFIELD_STAGE,
             #     lambda arr, idx: self.data_initializer("Plane PhaseField%s" % postscript,
             #                                            layer_args={
             #                                                'colormap': "plasma",
@@ -338,16 +338,16 @@ if MinArea is not None:
             #                                            }
             #                                            )(arr, idx)
             # )
-            # estimator.hook_stage_iteration_event(MinArea.PLANE_PHASEFIELD_STAGE,
+            # estimator.hook_stage_iteration_event(minimal_surface.PLANE_PHASEFIELD_STAGE,
             #                                      lambda idx: self.data_updater("Plane PhaseField%s" % postscript)(idx))
-            # estimator.hook_stage_finished_event(MinArea.PLANE_PHASEFIELD_STAGE,
+            # estimator.hook_stage_finished_event(minimal_surface.PLANE_PHASEFIELD_STAGE,
             #                                     lambda: self.data_finalizer("Plane PhaseField%s" % postscript)())
 
-            # estimator.hook_stage_data_init_event(MinArea.TRANSPORT_FUNCTION_STAGE,
+            # estimator.hook_stage_data_init_event(minimal_surface.TRANSPORT_FUNCTION_STAGE,
             #                                      lambda arr, idx: print("plane phasefield eikonal init", arr.shape, idx))
 
             # estimator.hook_stage_data_init_event(
-            #     MinArea.TRANSPORT_FUNCTION_STAGE,
+            #     minimal_surface.TRANSPORT_FUNCTION_STAGE,
             #     lambda arr, idx: self.data_initializer("Transport Function%s" % postscript,
             #                                            0,
             #                                            {
@@ -359,12 +359,12 @@ if MinArea is not None:
             #                                                "iso_threshold": 0.
             #                                            })(arr, idx)
             # )
-            # # estimator.hook_stage_data_init_event(MinArea.TRANSPORT_FUNCTION_STAGE, lambda arr, idx: print("tf init"))
-            # estimator.hook_stage_iteration_event(MinArea.TRANSPORT_FUNCTION_STAGE,
+            # # estimator.hook_stage_data_init_event(minimal_surface.TRANSPORT_FUNCTION_STAGE, lambda arr, idx: print("tf init"))
+            # estimator.hook_stage_iteration_event(minimal_surface.TRANSPORT_FUNCTION_STAGE,
             #                                      lambda idx: self.data_updater("Transport Function%s" % postscript)(
             #                                          idx))
-            # # estimator.hook_stage_iteration_event(MinArea.TRANSPORT_FUNCTION_STAGE, lambda idx: print("tf iter %d" % idx))
-            # estimator.hook_stage_finished_event(MinArea.TRANSPORT_FUNCTION_STAGE,
+            # # estimator.hook_stage_iteration_event(minimal_surface.TRANSPORT_FUNCTION_STAGE, lambda idx: print("tf iter %d" % idx))
+            # estimator.hook_stage_finished_event(minimal_surface.TRANSPORT_FUNCTION_STAGE,
             #                                     lambda: self.data_finalizer("Transport Function%s" % postscript)())
 
             def tform_calculated(rotation, translation):
@@ -397,7 +397,7 @@ if MinArea is not None:
                 self.phis = []
                 self.pt_pairs = []
                 for i in range(len(self.points) // 2):
-                    estimator = MinArea.MinimalSurfaceCalculator()
+                    estimator = minimal_surface.MinimalSurfaceCalculator()
                     self.estimators.append(estimator)
                     estimator.set_initial_plane_calculator(self.segment_initial_slice)
                     estimator.set_using_meeting_points(self.use_meeting_plane_points)
@@ -1212,7 +1212,7 @@ if MinArea is not None:
             super().__init__(viewer, [("meeting_plane", Image), ("distance_map", Image), ("starting_points", Points)])
             self.shapes_data_received.connect(self.add_shapes)
             self.viewer = viewer
-            self.estimator = MinArea.MinimalSurfaceCalculator()
+            self.estimator = minimal_surface.MinimalSurfaceCalculator()
             layout = QVBoxLayout()
 
             layout.addWidget(QLabel("Extract contour from meeting plane"))
