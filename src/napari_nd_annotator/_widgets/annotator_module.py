@@ -11,6 +11,7 @@ from skimage.draw import draw
 from scipy.ndimage import binary_fill_holes, find_objects
 import math
 from packaging import version
+import warnings
 
 if version.parse(napari.__version__) >= version.parse("0.4.15"):
     try:
@@ -237,8 +238,11 @@ class AnnotatorWidget(QWidget):
         coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
         dims_displayed = layer_dims_displayed(layer)
         image_coords = tuple(coordinates[i] for i in dims_displayed)
-        slice_dims = tuple(coordinates[i] if i not in dims_displayed else slice(None) for i in range(layer.ndim))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            slice_dims = layer._slice_indices
         current_draw = np.zeros_like(layer.data[slice_dims], bool)
+        current_draw = np.transpose(current_draw, layer._get_order()[:2])
         start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
         cx = np.clip(cx, 0, current_draw.shape[0] - 1)
@@ -269,6 +273,9 @@ class AnnotatorWidget(QWidget):
         binary_fill_holes(current_draw, output=current_draw, structure=s)
         if layer.preserve_labels:
             current_draw = current_draw & (layer.data[slice_dims] == 0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            current_draw = np.transpose(current_draw, layer._get_order()[:2])
         self.drawn_region_history[self.history_idx] = current_draw
         self.drawn_slice_history[self.history_idx] = slice_dims
         self.values_history[self.history_idx] = layer.data[slice_dims][current_draw]
