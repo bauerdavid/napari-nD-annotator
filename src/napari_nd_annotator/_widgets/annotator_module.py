@@ -241,8 +241,8 @@ class AnnotatorWidget(QWidget):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             slice_dims = layer._slice_indices
-        current_draw = np.zeros_like(layer.data[slice_dims], bool)
-        current_draw = np.transpose(current_draw, layer._get_order()[:2])
+            current_draw = np.zeros_like(layer.data[slice_dims], bool)
+            current_draw = np.transpose(current_draw, layer._get_order()[:2])
         start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
         cx = np.clip(cx, 0, current_draw.shape[0] - 1)

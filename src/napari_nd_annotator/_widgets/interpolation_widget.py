@@ -18,6 +18,7 @@ from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
 from ..mean_contour._reconstruction import reconstruct
 from ..mean_contour._essentials import magnitude
+import warnings
 
 import matplotlib.pyplot as plt
 
@@ -98,7 +99,9 @@ class InterpolationWorker(QObject):
             data = self.layer.data.copy()
             selected_label = self.layer.selected_label
             method = self.method
-            layer_slice_template = list(self.layer._slice_indices)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                layer_slice_template = list(self.layer._slice_indices)
             prev_cnt = None
             prev_layer = None
             prev_mask = None
