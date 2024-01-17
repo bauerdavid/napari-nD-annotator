@@ -89,21 +89,16 @@ class InterpolationWorker(QObject):
     data: np.ndarray
     method: str
     max_iterations: int
-    dims_displayed: tuple
-    current_step: tuple
-    selected_label: int
+    layer: Labels
 
     def run(self):
         try:
             dimension = self.dimension
             n_contour_points = self.n_contour_points
-            data = self.data.copy()
+            data = self.layer.data.copy()
+            selected_label = self.layer.selected_label
             method = self.method
-            layer_slice_template = [
-                slice(None) if d in self.dims_displayed
-                    else None if d == dimension
-                    else self.current_step[d]
-                for d in range(data.ndim)]
+            layer_slice_template = list(self.layer._slice_indices)
             prev_cnt = None
             prev_layer = None
             prev_mask = None
@@ -112,7 +107,7 @@ class InterpolationWorker(QObject):
                 self.progress.emit(i)
                 layer_slice = layer_slice_template.copy()
                 layer_slice[dimension] = i
-                cur_mask = data[tuple(layer_slice)] == self.selected_label
+                cur_mask = data[tuple(layer_slice)] == selected_label
                 cur_mask = cur_mask.astype(np.uint8)
                 if cur_mask.max() == 0:
                     continue
@@ -121,8 +116,8 @@ class InterpolationWorker(QObject):
                 prev_layer_slice = layer_slice.copy()
                 prev_layer_slice[dimension] = i - 1
                 if i + 1 < data.shape[dimension] \
-                        and (data[tuple(prev_layer_slice)] == self.selected_label).max() > 0\
-                        and (data[tuple(next_layer_slice)] == self.selected_label).max() > 0:
+                        and (data[tuple(prev_layer_slice)] == selected_label).max() > 0\
+                        and (data[tuple(next_layer_slice)] == selected_label).max() > 0:
                     continue
                 cnt = contour_cv2_mask_uniform(cur_mask, n_contour_points)
                 centroid = cnt.mean(0)
@@ -163,16 +158,16 @@ class InterpolationWorker(QObject):
                             mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
                             mean_cnt = mean_cnt.astype(np.int32)
                             mask = np.zeros_like(data[tuple(inter_layer_slice)])
-                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(self.selected_label), -1)
+                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
                         elif method == CONTOUR_BASED:
                             mean_cnt = (prev_w * prev_cnt + cur_w * cnt)/(prev_w + cur_w)
                             mean_cnt = mean_cnt.astype(np.int32)
                             mask = np.zeros_like(data[tuple(inter_layer_slice)])
-                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(self.selected_label), -1)
+                            cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
                         elif method == DISTANCE_BASED:
                             mask = average_mask(prev_mask, cur_mask, prev_w, cur_w)
                             mask = mask.astype(np.uint8)
-                            mask[mask > 0] = self.selected_label
+                            mask[mask > 0] = selected_label
                         else:
                             raise ValueError("method should be one of %s" % ((RPSV, CONTOUR_BASED, DISTANCE_BASED),))
                         cur_slice = data[tuple(inter_layer_slice)]
@@ -286,11 +281,8 @@ class InterpolationWidget(QWidget):
     def prepare_interpolation_worker(self):
         self.interpolation_worker.dimension = self.dimension_dropdown.value()
         self.interpolation_worker.n_contour_points = self.n_points.value()
-        self.interpolation_worker.data = self.active_labels_layer.data
+        self.interpolation_worker.layer = self.active_labels_layer
         self.interpolation_worker.method = self.method_dropdown.currentText()
-        self.interpolation_worker.dims_displayed = self.viewer.dims.displayed
-        self.interpolation_worker.current_step = self.viewer.dims.current_step
-        self.interpolation_worker.selected_label = self.active_labels_layer.selected_label
         self.interpolation_worker.max_iterations = self.rpsv_iterations_spinbox.value()
 
     def interpolate(self, _=None):
