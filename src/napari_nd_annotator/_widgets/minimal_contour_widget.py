@@ -279,7 +279,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         for i in range(1, 10):
             viewer.bind_key("Control-%d" % i, overwrite=True)(change_layer_callback(i))
         self.from_e_points_layer = viewer.add_points(
-            ndim=2,
+            ndim=3,
             name="%s from E" % LOCK_CHAR,
             size=self.point_size_spinbox.value(),
             face_color="red",
@@ -287,7 +287,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         )
         self.from_e_points_layer.editable = False
         self.to_s_points_layer = viewer.add_points(
-            ndim=2,
+            ndim=3,
             name="%s to S" % LOCK_CHAR,
             size=self.point_size_spinbox.value(),
             face_color="gray",
@@ -295,18 +295,19 @@ class MinimalContourWidget(WidgetWithLayerList):
         )
         self.to_s_points_layer.editable = False
         self.output = viewer.add_points(
-            ndim=2,
+            ndim=3,
             name="%s temp" % LOCK_CHAR,
             size=self.point_size_spinbox.value(),
         )
         self.output.editable = False
-        self.anchor_points = self.viewer.add_points(ndim=2, name="Anchors [DO NOT ALTER]", symbol="x")
+        self.anchor_points = self.viewer.add_points(ndim=3, name="Anchors [DO NOT ALTER]", symbol="x")
         self.anchor_points.mode = "add"
         self.modifiers = None
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.delayed_set_image)
         viewer.dims.events.ndisplay.connect(self.set_image)
+        viewer.dims.events.order.connect(self.set_image)
         viewer.dims.events.current_step.connect(self.update_demo_image)
         self.viewer.layers.events.inserted.connect(self.move_temp_to_top)
         self.viewer.layers.events.moved.connect(self.move_temp_to_top)
@@ -406,12 +407,12 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.clear_all()
 
     def clear_all(self):
-        self.output.data = np.empty((0, 2), dtype=self.output.data.dtype)
+        self.output.data = np.empty((0, 3), dtype=self.output.data.dtype)
         with self.anchor_points.events.data.blocker():
-            self.anchor_points.data = np.empty((0, 2), dtype=self.output.data.dtype)
+            self.anchor_points.data = np.empty((0, 3), dtype=self.output.data.dtype)
         self.prev_n_anchor_points = 0
-        self.from_e_points_layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
-        self.to_s_points_layer.data = np.empty((0, 2), dtype=self.output.data.dtype)
+        self.from_e_points_layer.data = np.empty((0, 3), dtype=self.output.data.dtype)
+        self.to_s_points_layer.data = np.empty((0, 3), dtype=self.output.data.dtype)
         self.point_triangle[:] = -1
         self.prev_n_anchor_points = 0
 
@@ -513,10 +514,11 @@ class MinimalContourWidget(WidgetWithLayerList):
                 return
             if layer.mode != Mode.ADD:
                 return
-            self.point_triangle[1] = list(self.anchor_points.world_to_data([event.position[i] for i in range(len(event.position)) if i in event.dims_displayed]))
-            if np.any(self.point_triangle[1] < 0) or np.any(self.point_triangle[1] >= self.image_data.shape[:2]):
-                self.point_triangle[1] = np.clip(self.point_triangle[1], 0, np.subtract(self.image_data.shape[:2], 1))
-            if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= self.image_data.shape[:2]):
+            self.point_triangle[1] = np.asarray(event.position)[[i for i in layer_dims_displayed(self.anchor_points)]]
+            displayed_shape = np.asarray(self.image_data.shape)[:2]
+            if np.any(self.point_triangle[1] < 0) or np.any(self.point_triangle[1] >= displayed_shape):
+                self.point_triangle[1] = np.clip(self.point_triangle[1], 0, np.subtract(displayed_shape, 1))
+            if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= displayed_shape):
                 return
             if not self.ctrl_down:
                 if self.feature_editor.isVisible():
@@ -545,9 +547,16 @@ class MinimalContourWidget(WidgetWithLayerList):
                         int(self.point_triangle[1, 1])
                     )).T
                 ]
-            self.from_e_points_layer.data = np.flipud(results[0])
+            new_e_data = np.tile(np.where([i in layer_dims_displayed(self.anchor_points) for i in range(3)], np.nan, self.anchor_points.data[0]), [len(results[0]), 1])
+            new_s_data = np.tile(np.where([i in layer_dims_displayed(self.anchor_points) for i in range(3)], np.nan, self.anchor_points.data[0]), [len(results[1]), 1])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                new_e_data[np.isnan(new_e_data)] = np.flipud(results[0][:, self.image.layer._get_order()[:2]]).reshape(-1)
+                new_s_data[np.isnan(new_s_data)] = np.flipud(results[1][:, self.image.layer._get_order()[:2]]).reshape(-1)
+            
+            self.from_e_points_layer.data = new_e_data
+            self.to_s_points_layer.data = new_s_data
             self.from_e_points_layer.selected_data = {}
-            self.to_s_points_layer.data = np.flipud(results[1])
             self.to_s_points_layer.selected_data = {}
         finally:
             self.move_mutex.unlock()
@@ -654,6 +663,10 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.feature_editor.execute()
         else:
             grad_x, grad_y = self.feature_manager.get_features(self.image.layer)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                grad_x = grad_x.transpose(image_layer._get_order()[:2])
+                grad_y = grad_y.transpose(image_layer._get_order()[:2])
             if self.feature_dropdown.currentText() == SYM_GRADIENT_TEXT:
                 grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
                 grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
@@ -665,10 +678,10 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             dims_displayed = list(layer_dims_displayed(image_layer))
-        self.anchor_points.translate = image_layer.translate[dims_displayed]
-        self.from_e_points_layer.translate = image_layer.translate[dims_displayed]
-        self.to_s_points_layer.translate = image_layer.translate[dims_displayed]
-        self.output.translate = image_layer.translate[dims_displayed]
+        self.anchor_points.translate = image_layer.translate
+        self.from_e_points_layer.translate = image_layer.translate
+        self.to_s_points_layer.translate = image_layer.translate
+        self.output.translate = image_layer.translate
 
     def data_event(self, event):
         if event.source != self.anchor_points:
@@ -678,7 +691,7 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self.anchor_points.data = self.anchor_points.data[:-1]
                 self.remove_last_anchor = False
                 return
-        anchor_data = self.anchor_points.data
+        anchor_data = self.anchor_points.data # TODO check
         if len(anchor_data) < self.prev_n_anchor_points:
             with self.anchor_points.events.data.blocker():
                 self.clear_all()
@@ -687,7 +700,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.prev_n_anchor_points = len(anchor_data)
         if len(anchor_data) == 0:
             return
-        anchor_data[-1] = np.clip(anchor_data[-1], 0, np.subtract(self.image_data.shape[:2], 1))
+        anchor_data[-1, list(layer_dims_displayed(self.anchor_points))] = np.clip(anchor_data[-1, list(layer_dims_displayed(self.anchor_points))], 0, np.subtract(self.image.layer.data.shape[:self.image.layer.ndim], 1)[list(layer_dims_displayed(self.image.layer))])
         if len(anchor_data) > 1 and np.all(np.round(anchor_data[-1]) == np.round(anchor_data[-2])):
             with self.anchor_points.events.data.blocker():
                 self.anchor_points.data = self.anchor_points.data[:-1]
@@ -707,8 +720,8 @@ class MinimalContourWidget(WidgetWithLayerList):
                 self.last_added_with_shift = False
                 self.last_segment_length = len(self.from_e_points_layer.data)
 
-        self.point_triangle[-1] = self.anchor_points.data[0]
-        self.point_triangle[0] = self.anchor_points.data[-1]
+        self.point_triangle[-1] = self.anchor_points.data[0][list(layer_dims_displayed(self.anchor_points))]
+        self.point_triangle[0] = self.anchor_points.data[-1][list(layer_dims_displayed(self.anchor_points))]
 
     def on_double_click(self, *args):
         if self.shift_down and len(self.from_e_points_layer.data):
@@ -730,8 +743,8 @@ class MinimalContourWidget(WidgetWithLayerList):
                     else:
                         self.anchor_points.data = self.anchor_points.data[:-1]
                         self.output.data = self.output.data[:-self.last_segment_length]
-                self.point_triangle[-1] = self.anchor_points.data[0]
-                self.point_triangle[0] = self.anchor_points.data[-1]
+                self.point_triangle[-1] = self.anchor_points.data[0][list(layer_dims_displayed(self.anchor_points))]
+                self.point_triangle[0] = self.anchor_points.data[-1][list(layer_dims_displayed(self.anchor_points))]
                 self.last_segment_length = None
 
     def on_contrast_slider_released(self):
@@ -785,11 +798,15 @@ class MinimalContourWidget(WidgetWithLayerList):
 
     def smooth_fourier(self, points):
         coefficients=max(3, round(self.smooth_contour_spinbox.value()*len(points)))
-        center = points.mean(0)
-        points = points - center
-        tformed = scipy.fft.rfft(points, axis=0)
+        mask_2d = ~np.all(points == points.min(), axis=0)
+        points_2d = points[:, mask_2d]
+        center = points_2d.mean(0)
+        points_2d = points_2d - center
+        tformed = scipy.fft.rfft(points_2d, axis=0)
         tformed[0] = 0
-        return scipy.fft.irfft(tformed[:coefficients], len(points), axis=0) + center
+        inv_tformed = scipy.fft.irfft(tformed[:coefficients], len(points_2d), axis=0) + center
+        points[:, mask_2d] = inv_tformed
+        return points
 
     def extend_mask(self, _):
         if self.labels.layer is None:

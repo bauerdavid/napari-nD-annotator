@@ -38,7 +38,7 @@ class FeatureManager:
             self.init_file(layer, dims_displayed)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            idx = tuple(layer._slice_indices[i] for i in range(layer.ndim) if i in dims_not_displayed)
+            idx = tuple(layer._slice_indices[i] for  i in dims_not_displayed)
         # if not block and not self.slices_calculated[layer][dims_displayed][idx]:
         if not block and not self.feature_extractor.done_mask[idx]:
             raise ValueError("features not calculated for layer %s at %s" % (layer, idx))
@@ -47,7 +47,7 @@ class FeatureManager:
             pass
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            idx = tuple(layer._slice_indices[i] if i in dims_not_displayed else slice(None) for i in range(layer.ndim))
+            idx = tuple(layer._slice_indices)
         return self.memmaps[0][idx], self.memmaps[1][idx]
 
     def clear_memmap(self):
@@ -56,7 +56,6 @@ class FeatureManager:
             del self.memmaps[0]
 
     def remove_features(self, layer):
-        print(layer)
         if self.layer == layer:
             self.layer = None
             self.clear_memmap()
@@ -107,8 +106,8 @@ class FeatureManager:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             slice_indices = layer._slice_indices
-            dims_displayed = layer_dims_displayed(layer)
-        self.feature_extractor.start_jobs(layer.data, self.memmaps, slice_indices, dims_displayed, layer.rgb)
+            dims_not_displayed = layer_dims_not_displayed(layer)
+        self.feature_extractor.start_jobs(layer.data, self.memmaps, slice_indices, dims_not_displayed, layer.rgb)
 
     @staticmethod
     def random_prefix():

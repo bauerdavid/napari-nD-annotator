@@ -9,6 +9,7 @@ from qtpy.QtCore import QRunnable, QThreadPool, Signal, QObject, Slot
 import queue
 import threading
 import time
+import itertools
 
 
 class FeatureExtractor:
@@ -20,16 +21,13 @@ class FeatureExtractor:
         self.n_threads = self.pool.maxThreadCount() if max_threads is None else max_threads
         self.done_mask = None
 
-    def start_jobs(self, img, outs, current_slice=None, dims_displayed=None, rgb=None, f=None):
+    def start_jobs(self, img, outs, current_slice, dims_not_displayed=None, rgb=None, f=None):
         self.start = time.time()
         ndim = img.ndim - (1 if rgb else 0)
         current_slice = tuple(map(lambda s: 0 if type(s) == slice else s, current_slice))
-        dims_not_displayed = tuple(i for i in range(ndim) if i not in dims_displayed)
-        idx_list = np.indices((img.shape[i] if i in dims_not_displayed else 1 for i in range(ndim)))
-        idx_list = idx_list.reshape((idx_list.shape[0], -1)).T
-        if current_slice is not None:
-            order = np.argsort(np.abs(idx_list-current_slice).sum(1))
-            idx_list = idx_list[order]
+        idx_list = np.asarray(list(itertools.product(*[[-1] if i not in dims_not_displayed else range(img.shape[i]) for i in range(ndim)])))
+        order = np.argsort(np.abs(idx_list-current_slice).sum(1))
+        idx_list = idx_list[order]
         idx_list = list(map(lambda l: tuple(l[i] if i in dims_not_displayed else slice(None) for i in range(len(l))), idx_list))
         # viewer.dims.events.current_step.connect(on_current_step)
         self.init_runnables()
