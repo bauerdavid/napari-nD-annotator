@@ -408,8 +408,8 @@ if minimal_surface is not None:
                     self.bboxes.append(bounding_box)
                     offset = bounding_box.min(0, keepdims=True)
                     bb_slice = bb_2_slice(bounding_box)
-                    point1 = np.flip(self.points[2 * i] - offset).reshape(-1)
-                    point2 = np.flip(self.points[2 * i + 1] - offset).reshape(-1)
+                    point1 = (self.points[2 * i] - offset).reshape(-1)
+                    point2 = (self.points[2 * i + 1] - offset).reshape(-1)
                     point1[2] *= self.z_scale
                     point2[2] *= self.z_scale
                     self.pt_pairs.append((point1, point2))
@@ -433,7 +433,7 @@ if minimal_surface is not None:
                         estimator.init_transport_slice(phi, point1, point2)
                 self.slice_annotations_done.emit(len(self.estimators))
 
-                print("slice annotations finished in %.2f seconds" % (time.time() - start))
+                show_info("Slice annotations finished in %.2f seconds" % (time.time() - start))
                 timestamp = time.time()
 
                 for i, (estimator, phi, data, (point1, point2), bounding_box)\
@@ -443,10 +443,6 @@ if minimal_surface is not None:
                         break
                     if self.bb_layer is not None:
                         self.bb_layer.data = [bounding_box]
-                    normal_vector = point2 - point1
-                    normal_vector /= (np.sqrt((normal_vector**2).sum()))
-                    max_dim = np.argmax(np.abs(normal_vector))
-                    normal_vector *= np.sign(normal_vector[max_dim])
 
                     offset = np.clip(bounding_box.min(0), 0, np.asarray(self.image.shape) - 1)
                     # start = time.time()
@@ -644,10 +640,13 @@ if minimal_surface is not None:
 
             extent = np.asarray([[nan, nan, nan], [negnan, negnan, negnan]])
             for layer in self.layers:
-                extent[0] = np.minimum(extent[0], layer.extent.world[0])
-                extent[1] = np.maximum(extent[1], layer.extent.world[1])
+                layer_extent = layer.extent.world
+                if layer.ndim == 2:
+                    layer_extent = np.concatenate([np.asarray([[nan], [negnan]]), layer_extent], axis=1)
+                extent[0] = np.minimum(extent[0], layer_extent[0])
+                extent[1] = np.maximum(extent[1], layer_extent[1])
             for s_idx, slider in enumerate(self.sliders):
-                slider.setEnabled(True)
+                slider.setEnabled(not np.any(np.equal(extent[:, s_idx], np.asarray([nan, negnan]))))
                 slider.setMinimum(extent[0, s_idx])
                 slider.setMaximum(extent[1, s_idx])
             self.update_clipping_planes()
@@ -693,7 +692,7 @@ if minimal_surface is not None:
             dim_layout.addWidget(QLabel("Axis"))
             self.dim_spinbox = QSpinBox(self)
             self.dim_spinbox.setMaximum(0)
-            self.dim_spinbox.valueChanged.connect(self.update_data)
+            self.dim_spinbox.valueChanged.connect(lambda _: self.update_data())
             dim_layout.addWidget(self.dim_spinbox)
             layout.addLayout(dim_layout)
             pos_layout = QHBoxLayout()
@@ -1252,7 +1251,7 @@ if minimal_surface is not None:
             paths = []
             for point in points:
                 shortest_path = self.estimator.resolve_shortest_paths(point, distance_map).copy()
-                paths.append(np.fliplr(shortest_path))
+                paths.append(shortest_path)
             colors = generate_label_colors(len(paths))
             self.shapes_data_received.emit("Shortest path", paths, {
                 'translate': translate,
@@ -1269,7 +1268,7 @@ if minimal_surface is not None:
             translation = distance_map.translate
             rotation = distance_map.rotate
             distance_map = distance_map.data
-            points = np.fliplr(points.data - translation).astype(int)
+            points = (points.data - translation).astype(int)
             self.viewer.window.worker2 = Thread(target=self.calculate, args=[points, distance_map, translation, rotation])
             self.viewer.window.worker2.start()
 else:
