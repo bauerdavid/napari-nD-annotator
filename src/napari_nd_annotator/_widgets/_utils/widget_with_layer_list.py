@@ -116,6 +116,9 @@ class WidgetWithLayerList(QWidget):
                     if layer.name == self._layer_name:
                         self.combobox.setCurrentText(layer.name)
                 self.combobox.blockSignals(False)
+                if self._layer_name != self.combobox.currentText():
+                    self.combobox.currentTextChanged.emit(self.combobox.currentText())
+                    self.combobox.currentIndexChanged.emit(self.combobox.currentIndex())
                 if self.combobox.count() > 1 and (self.combobox.currentIndex() == 0 or self.layer not in filtered):
                     self.layer = filtered[0]
                 elif self.combobox.count() == 1:
