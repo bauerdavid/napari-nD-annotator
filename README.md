@@ -40,12 +40,42 @@ You can install `napari-nD-annotator` via [pip]:
 The plugin is also available in [napari-hub], to install it directly from napari, please refer to
 [plugin installation instructions] at the official [napari] website.
 
-> **Note**: The bounding box and object list functionality requires the <code>[napari-bbox]</code> Python package.
-> If you want to use bounding boxes, install <code>[napari-bbox]</code> separately either using [pip] or directly from napari.
-> You can also install it together with this plugin:
-> 
->     pip install napari-nD-annotator[all]
 
+### Optional packages
+There are some functionalities which require additional Python packages.
+
+#### Bounding boxes
+The bounding box and object list functionality requires the <code>[napari-bbox]</code> Python package.
+If you want to use these features, install <code>[napari-bbox]</code> separately either using [pip] or directly from napari.
+You can also install it together with this plugin:
+```
+pip install napari-nD-annotator[bbox]
+```
+> [!WARNING]
+> The <code>[napari-bbox]</code> plugin currently works only with `napari<=0.4.17`. Do not install it with newer versions.
+
+#### Minimal surface
+To use the minimal surface method, you will need the <code>[minimal-surface]</code> Python package as well. Please install it using [pip]:
+
+Separately:
+```
+pip install minimal-surface
+```
+
+Or bundled with the plugin:
+```
+pip install napari-nD-annotator[ms]
+```
+> [!WARNING]
+> The <code>[minimal-surface]</code> package is only available for Windows at the time. We are actively working on bringing it to Linux and Mac systems as well.
+
+#
+
+If you would like to install all optional packages, use
+```
+pip install napari-nD-annotator[all]
+```
+###
 If any problems occur during installation or while using the plugin, please [file an issue].
 
 ## Usage
@@ -165,3 +195,4 @@ If you encounter any problems, please [file an issue] along with a detailed desc
 [plugin installation instructions]: https://napari.org/plugins/find_and_install_plugin.html
 [file an issue]: https://github.com/bauerdavid/napari-nD-annotator/issues/new/choose
 [napari-bbox]: https://github.com/bauerdavid/napari-bbox
+[minimal-surface]: https://pypi.org/project/minimal-surface
