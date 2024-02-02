@@ -1,3 +1,9 @@
+import warnings
+
+from packaging import version
+
+from .._napari_version import NAPARI_VERSION
+
 try:
     import minimal_surface
 except ImportError:
@@ -104,35 +110,38 @@ if minimal_surface is not None:
             color_cycle = list(
                 map(lambda color_tuple: color_to_hex_string(color_tuple), generate_label_colors(n_colors)))
             self.color_cycle = itertools.cycle(color_cycle)
+            self._last_color = None
 
         def __call__(self, event):
+            if event.type != "data" or getattr(event, "action", "add") not in ["add", "added"]:
+                return
             points_layer = event.source
             if len(points_layer.selected_data) > 1:
                 points_layer.selected_data = self.prev_selection
                 points_layer.refresh()
                 return
             self.prev_selection = points_layer.selected_data.copy()
-            if event.type == "data":
-                if len(points_layer.data) > self.prev_len:
-                    if len(points_layer.data) % 2 == 1:
-                        points_layer.current_face_color = next(self.color_cycle)
-                        points_layer.face_color[-1] = transform_color(points_layer.current_face_color)
-                    self.prev_data = points_layer.data.copy()
-                else:
-                    removed_idx = np.squeeze(np.argwhere(
-                        np.all(np.any(~np.equal(self.prev_data[np.newaxis], points_layer.data[:, np.newaxis]), -1),
-                               axis=0)))
-                    if removed_idx.ndim == 0:
-                        removed_idx = int(removed_idx)
-                        points_layer.selected_data.clear()
-                        if removed_idx % 2 == 0 and removed_idx < len(points_layer.data):
-                            points_layer.selected_data.add(removed_idx)
-                        elif removed_idx % 2 == 1:
-                            points_layer.selected_data.add(removed_idx - 1)
-                        points_layer.remove_selected()
-                points_layer.refresh()
-                self.prev_data = points_layer.data
-                self.prev_len = len(points_layer.data)
+            if len(points_layer.data) > self.prev_len:
+                if len(points_layer.data) % 2 == 1:
+                    self._last_color = next(self.color_cycle)
+                    # points_layer.current_face_color = new_color
+                points_layer.face_color[-1] = transform_color(self._last_color)
+                self.prev_data = points_layer.data.copy()
+            elif len(points_layer.data):
+                removed_idx = np.squeeze(np.argwhere(
+                    np.all(np.any(~np.equal(self.prev_data[np.newaxis], points_layer.data[:, np.newaxis]), -1),
+                           axis=0)))
+                if removed_idx.ndim == 0:
+                    removed_idx = int(removed_idx)
+                    points_layer.selected_data.clear()
+                    if removed_idx % 2 == 0 and removed_idx < len(points_layer.data):
+                        points_layer.selected_data.add(removed_idx)
+                    elif removed_idx % 2 == 1:
+                        points_layer.selected_data.add(removed_idx - 1)
+                    points_layer.remove_selected()
+            points_layer.refresh()
+            self.prev_data = points_layer.data
+            self.prev_len = len(points_layer.data)
 
 
     it = [-1]
@@ -222,7 +231,9 @@ if minimal_surface is not None:
             self.viewer.dims.ndisplay = 2
             visible_extent = self.slice_labels_layer.extent.world[:, layer_dims_displayed(self.slice_labels_layer)]
             self.viewer.camera.center = visible_extent.mean(0)
-            self.viewer.camera.zoom = np.min(np.divide(self.viewer._canvas_size, visible_extent.max(0)-visible_extent.min(0)))*0.95
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.viewer.camera.zoom = np.min(np.divide(self.viewer._canvas_size, visible_extent.max(0)-visible_extent.min(0)))*0.95
             self.slice_labels_layer.brush_size = 1
             self.slice_labels_layer.mode = "paint"
             self.init_slice_annotation_fun()
@@ -539,6 +550,7 @@ if minimal_surface is not None:
             self.setLayout(layout)
             self.initialize_clipping_planes()
             self.layers = layers
+            self._viewer.dims.events.ndisplay.connect(self.on_ndisplay_changed)
 
         @property
         def layers(self):
@@ -619,9 +631,14 @@ if minimal_surface is not None:
                     state["name"] = u"\U0001F47B " + layer.name
                     state["opacity"] /= 2.
                     state["experimental_clipping_planes"] = []
+                    if NAPARI_VERSION <= version.parse("0.4.16") and "interpolation" in state:
+                        interpolation = state["interpolation"]
+                        state["interpolation"] = "nearest"
                     with layer_source(parent=layer):
                         new = Layer.create(deepcopy(data), state, type_str)
                     self._viewer.add_layer(new)
+                    if NAPARI_VERSION <= version.parse("0.4.16"):
+                        new.interpolation = interpolation
                     self._viewer.layers.link_layers([layer, new])
                     self._viewer.layers.unlink_layers([layer, new], ["opacity", "experimental_clipping_planes", "blending"])
                     self._viewer.layers.move(self._viewer.layers.index(new), self._viewer.layers.index(layer)+1)
@@ -629,6 +646,19 @@ if minimal_surface is not None:
                 elif ghost is not None and self.n_checked == 0:
                     self._viewer.layers.remove(ghost)
                     self._ghost_layers[layer] = None
+
+        def remove_ghost_layers(self):
+            for layer in self._layers:
+                ghost = self._ghost_layers[layer]
+                if ghost is not None:
+                    self._viewer.layers.remove(ghost)
+                    self._ghost_layers[layer] = None
+
+        def on_ndisplay_changed(self, e):
+            if e.value == 2:
+                self.remove_ghost_layers()
+            else:
+                self.update_ghost_layers()
 
         def update_ranges(self):
             if not self.layers:
@@ -734,7 +764,7 @@ if minimal_surface is not None:
         def scroll_slice(self, layer, event):
             if "Alt" not in event.modifiers:
                 return
-            self.position_slider.setValue(self.position-event.delta[0])
+            self.position_slider.setValue(int(self.position-event.delta[0]))
 
         def set_widget_enabled(self):
             is_enabled = self.layer is not None and self.viewer.dims.ndisplay == 3
@@ -1169,7 +1199,8 @@ if minimal_surface is not None:
             self.slice_widget.layer = self.image.layer
 
         def update_custom_feature_image(self, _):
-            self.custom_feature_widget.image = self.image.layer.data
+            if self.image.layer is not None:
+                self.custom_feature_widget.image = self.image.layer.data
 
         def on_slice_clicked(self, layer, event):
             start_point, end_point = layer.get_ray_intersections(

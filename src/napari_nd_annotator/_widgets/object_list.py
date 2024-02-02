@@ -38,6 +38,7 @@ def slice_len(slice_, count=None):
         count = slice_.stop
     return len(range(*slice_.indices(count)))
 
+
 if BoundingBoxLayer:
     class QObjectWidget(QWidget):
         def __init__(self, icon=None, name="Object", index=0, bounding_box=None, parent=None):
@@ -103,7 +104,7 @@ if BoundingBoxLayer:
 
         @property
         def idx(self):
-            return int(self.object_item.id_label.text().split(":")[-1])
+            return int(float(self.object_item.id_label.text().split(":")[-1]))
 
         @idx.setter
         def idx(self, idx):
@@ -124,7 +125,7 @@ if BoundingBoxLayer:
                 self._icon = self._icon[..., :-1]
             scale = 64 / max(self._icon.shape[1], self._icon.shape[0])
             out_size = (int(self._icon.shape[1]*scale), int(self._icon.shape[0]*scale))
-            self._resized_icon = cv2.resize(self._icon, out_size, interpolation=cv2.INTER_LANCZOS4)
+            self._resized_icon = cv2.resize(self._icon, out_size, interpolation=cv2.INTER_NEAREST_EXACT)
             img = QImage(self._resized_icon, self._resized_icon.shape[1], self._resized_icon.shape[0], self._resized_icon.shape[1] * 3, QImage.Format.Format_RGB888)
             self.pixmap = QPixmap()
             self.pixmap = self.pixmap.fromImage(img, Qt.ImageConversionFlag.ColorOnly)
@@ -153,7 +154,7 @@ if BoundingBoxLayer:
         @property
         def bbox_idx(self):
             bbox_idx = tuple(
-                slice(self.bounding_box[0, d], self.bounding_box[1, d]) for d in range(self.bounding_box.shape[1]))
+                slice(self.bounding_box[0, d], self.bounding_box[1, d]+1) for d in range(self.bounding_box.shape[1]))
             return bbox_idx
 
         @property
@@ -239,7 +240,7 @@ if BoundingBoxLayer:
         def update_icon(self):
             visible_dims = list(self.viewer.dims.displayed)[-2:]
             bbox_idx = tuple(
-                slice(max(self.bounding_box[0, d], 0), self.bounding_box[1, d]) if d in visible_dims
+                slice(max(self.bounding_box[0, d], 0), self.bounding_box[1, d]+1) if d in visible_dims
                 else self.bounding_box[:, d].mean().astype(int)
                 for d in range(self.bounding_box.shape[1])
             )
@@ -307,9 +308,9 @@ if BoundingBoxLayer:
                     self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
                 if self._on_bb_double_click not in self._bounding_box_layer.mouse_double_click_callbacks:
                     self._bounding_box_layer.mouse_double_click_callbacks.append(self._on_bb_double_click)
-                # self._bounding_box_layer.events.connect(self.on_layer_event)
-                if "label" not in self._bounding_box_layer.current_properties:
-                    self._bounding_box_layer.current_properties |= {"label": 0}
+                if "label" not in self._bounding_box_layer.features:
+                    self._bounding_box_layer.features = {"label": np.arange(len(new_layer.data))}
+                self._bounding_box_layer.current_properties |= {"label": 0}
                 self._bounding_box_layer.refresh_text()
                 if len(self._bounding_box_layer.data) > 0:
                     self._bounding_box_layer.text = {
@@ -453,6 +454,7 @@ if BoundingBoxLayer:
                     del text["values"]
                 text["text"] = "{label:d}"
                 layer.text = text
+                layer.refresh_text()
             while event.type == "mouse_move":
                 yield
             self._mouse_down = False
@@ -466,9 +468,9 @@ if BoundingBoxLayer:
             if len(new_data) > 0 and (np.any(np.all(new_data > im_size, 1))\
                     or np.any(np.all(new_data < 0, 1))):
                 layer.data = previous_data
-            if np.shape(previous_data) != np.shape(layer.data):
-                if len(new_data) > len(previous_data):
-                    layer.data = [np.clip(data, 0, np.asarray(im_size) - 1) for data in new_data]
+            if len(new_data) > len(previous_data):
+                layer.data[-1][:] = np.clip(layer.data[-1], 0, np.asarray(self.image_layer.data.shape) - 1)
+                layer.data = layer.data
             self.update_items()
             if self.projections_widget is not None:
                 for p in self.projections_widget.projections:
@@ -576,7 +578,7 @@ if BoundingBoxLayer:
             if self.list_widget is None:
                 self.create_list_widget()
             self.list_widget.bounding_box_layer = self.bounding_box.layer
-            if "label" in self.bounding_box.layer.features:
+            if "label" in self.bounding_box.layer.features and len(self.bounding_box.layer.features):
                 self.reset_index(max(self.bounding_box.layer.features["label"]) + 1)
             else:
                 self.reset_index()
@@ -654,7 +656,7 @@ if BoundingBoxLayer:
             bounding_box_corners = np.reshape(data, (len(data), 2, -1))
             mask = np.asarray(list(itertools.product((False, True), repeat=bounding_box_corners[0].shape[1])))
             bounding_boxes = np.asarray([np.where(mask, bbc[1], bbc[0]) for bbc in bounding_box_corners])
-            bounding_box_layer = BoundingBoxLayer(bounding_boxes, name=os.path.basename(filename), edge_color="green", face_color="transparent", features={"label": idxs})
+            bounding_box_layer = BoundingBoxLayer(bounding_boxes, name=os.path.basename(filename), edge_color="green", face_color="transparent", features={"label": np.asarray(idxs, dtype=int)})
             self.viewer.add_layer(bounding_box_layer)
             self.bounding_box.layer = bounding_box_layer
 
@@ -680,7 +682,7 @@ if BoundingBoxLayer:
                 bbs.append(bb)
                 ids.append(i+1)
             bb_layer.data = bbs
-            bb_layer.features["label"] = ids
+            bb_layer.features["label"] = np.asarray(ids, dtype=int)
             self.viewer.add_layer(bb_layer)
             self.bounding_box.layer = bb_layer
 

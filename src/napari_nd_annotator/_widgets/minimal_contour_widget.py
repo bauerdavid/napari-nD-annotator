@@ -306,11 +306,11 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox.valueChanged.connect(self.change_point_size)
         self.change_point_size(self.point_size_spinbox.value())
         viewer.dims.events.current_step.connect(self.delayed_set_image)
-        viewer.dims.events.ndisplay.connect(self.set_image)
-        viewer.dims.events.order.connect(self.set_image)
-        viewer.dims.events.current_step.connect(self.update_demo_image)
-        self.viewer.layers.events.inserted.connect(self.move_temp_to_top)
-        self.viewer.layers.events.moved.connect(self.move_temp_to_top)
+        viewer.dims.events.ndisplay.connect(self.set_image, position="last")
+        viewer.dims.events.order.connect(self.set_image, position="last")
+        viewer.dims.events.current_step.connect(self.update_demo_image, position="last")
+        self.viewer.layers.events.inserted.connect(self.move_temp_to_top, position="last")
+        self.viewer.layers.events.moved.connect(self.move_temp_to_top, position="last")
         self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
         self.viewer.bind_key("Control-Tab", overwrite=True)(self.swap_selection)
         with warnings.catch_warnings():
@@ -570,7 +570,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         elif self.alt_down:
             diff = delta[0]
             diff *= min(max(1, self.labels.layer.brush_size//10), 5)
-            self.labels.layer.brush_size = max(0, self.labels.layer.brush_size + diff)
+            self.labels.layer.brush_size = max(1, self.labels.layer.brush_size + diff)
 
     def set_callbacks(self):
         if self.anchor_points is None:
@@ -663,21 +663,19 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.feature_editor.execute()
         else:
             grad_x, grad_y = self.feature_manager.get_features(self.image.layer)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                grad_x = grad_x.transpose(image_layer._get_order()[:2])
-                grad_y = grad_y.transpose(image_layer._get_order()[:2])
-            if self.feature_dropdown.currentText() == SYM_GRADIENT_TEXT:
-                grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
-                grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
-                min_, max_ = grad_magnitude.min(), grad_magnitude.max()
-                grad_magnitude = (grad_magnitude - min_) / (max_ - min_)
-                self.calculator.set_image(np.concatenate([grad_magnitude[..., None]]*3, axis=-1), np.empty((0,0)), np.empty((0,0)))
-            else:
-                self.calculator.set_image(image, grad_x, grad_y)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            dims_displayed = list(layer_dims_displayed(image_layer))
+            if grad_x is not None:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    grad_x = grad_x.transpose(image_layer._get_order()[:2])
+                    grad_y = grad_y.transpose(image_layer._get_order()[:2])
+                if self.feature_dropdown.currentText() == SYM_GRADIENT_TEXT:
+                    grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
+                    grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
+                    min_, max_ = grad_magnitude.min(), grad_magnitude.max()
+                    grad_magnitude = (grad_magnitude - min_) / (max_ - min_)
+                    self.calculator.set_image(np.concatenate([grad_magnitude[..., None]]*3, axis=-1), np.empty((0,0)), np.empty((0,0)))
+                else:
+                    self.calculator.set_image(image, grad_x, grad_y)
         self.anchor_points.translate = image_layer.translate
         self.from_e_points_layer.translate = image_layer.translate
         self.to_s_points_layer.translate = image_layer.translate
@@ -714,11 +712,13 @@ class MinimalContourWidget(WidgetWithLayerList):
             if len(self.to_s_points_layer.data):
                 self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
                 self.last_segment_length = len(self.to_s_points_layer.data)
+                self.to_s_points_layer.data = np.empty((0, 3))
         else:
             if len(self.from_e_points_layer.data):
                 self.output.data = np.concatenate([self.output.data, self.from_e_points_layer.data], 0)
                 self.last_added_with_shift = False
                 self.last_segment_length = len(self.from_e_points_layer.data)
+                self.from_e_points_layer.data = np.empty((0, 3))
 
         self.point_triangle[-1] = self.anchor_points.data[0][list(layer_dims_displayed(self.anchor_points))]
         self.point_triangle[0] = self.anchor_points.data[-1][list(layer_dims_displayed(self.anchor_points))]
