@@ -8,7 +8,7 @@ import random
 import string
 import shutil
 from .feature_extractor import FeatureExtractor
-from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed
+from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay
 from napari import Viewer, layers
 from typing import Union, Optional
 import glob
@@ -30,6 +30,8 @@ class FeatureManager:
         atexit.register(self.clean)
 
     def get_features(self, layer: layers.Layer, block=True):
+        if layer_ndisplay(layer) == 3:
+            return None, None
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             dims_displayed = tuple(layer_dims_displayed(layer))
@@ -38,7 +40,7 @@ class FeatureManager:
             self.init_file(layer, dims_displayed)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            idx = tuple(layer._slice_indices[i] for  i in dims_not_displayed)
+            idx = tuple(layer._slice_indices[i] for i in dims_not_displayed)
         # if not block and not self.slices_calculated[layer][dims_displayed][idx]:
         if not block and not self.feature_extractor.done_mask[idx]:
             raise ValueError("features not calculated for layer %s at %s" % (layer, idx))
