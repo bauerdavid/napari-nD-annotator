@@ -874,6 +874,7 @@ if minimal_surface is not None:
             self.custom_feature_widget = ImageProcessingWidget(self.image.layer, self.viewer, "min_surf_script")
             params_layout.addWidget(self.custom_feature_widget)
             self.image_feature_combobox.currentTextChanged.connect(lambda t: self.custom_feature_widget.setVisible(t == "Custom"))
+            self.custom_feature_widget.setVisible(self.image_feature_combobox.currentText() == "Custom")
             iterations_layout = QHBoxLayout()
             iterations_layout.addWidget(QLabel("iterations", parent=self))
             self.iterations_slider = QSlider(parent=self)
