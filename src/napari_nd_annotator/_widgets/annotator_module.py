@@ -38,9 +38,6 @@ from ._utils.callbacks import (
 )
 from ._utils.help_dialog import HelpDialog
 from .._helper_functions import layer_ndisplay, layer_dims_displayed
-def check_connectivity(event):
-    layer = event.source
-    current_slice = layer._slice.image.raw
 
 
 class AnnotatorWidget(QWidget):
@@ -121,8 +118,6 @@ class AnnotatorWidget(QWidget):
     def unset_labels_callbacks(self):
         if self.active_labels_layer is None:
             return
-        if check_connectivity in self.active_labels_layer.events.data.callbacks:
-            self.active_labels_layer.events.data.disconnect(check_connectivity)
         self.active_labels_layer.bind_key("Control-+", overwrite=True)(None)
         self.active_labels_layer.bind_key("Control--", overwrite=True)(None)
         self.active_labels_layer.bind_key("Q", overwrite=True)(None)
@@ -133,8 +128,6 @@ class AnnotatorWidget(QWidget):
     def set_labels_callbacks(self):
         if self.active_labels_layer is None:
             return
-        if check_connectivity not in self.active_labels_layer.events.data.callbacks:
-            self.active_labels_layer.events.data.connect(check_connectivity)
         if self.start_update_bbox not in self.active_labels_layer.events.selected_label.callbacks:
             self.active_labels_layer.events.selected_label.connect(self.start_update_bbox)
             self.active_labels_layer.events.data.connect(self.start_update_bbox)
