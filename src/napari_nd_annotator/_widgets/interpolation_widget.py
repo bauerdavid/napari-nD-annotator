@@ -13,6 +13,7 @@ from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
+from ._utils.persistent_widget_state import PersistentWidget
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
@@ -185,14 +186,13 @@ class InterpolationWorker(QObject):
             raise e
 
 
-class InterpolationWidget(QWidget):
+class InterpolationWidget(PersistentWidget):
     def __init__(self, viewer: Viewer):
-        super().__init__()
+        super().__init__("nd_annotator_interp")
         self.viewer = viewer
         self.progress_dialog = ProgressWidget(self, message="Interpolating slices...")
         layout = QVBoxLayout()
         self._active_labels_layer = None
-
         self.interpolation_thread = QThread()
         self.interpolation_worker = InterpolationWorker()
         self.interpolation_worker.moveToThread(self.interpolation_thread)
@@ -207,8 +207,10 @@ class InterpolationWidget(QWidget):
         self.dimension_dropdown.setMaximum(0)
         self.dimension_dropdown.setToolTip("Dimension along which slices will be interpolated")
         layout.addWidget(self.dimension_dropdown)
+        self.add_stored_widget("dimension_dropdown")
 
         layout.addWidget(QLabel("Method"))
+        self.rpsv_widget = QWidget()
         self.method_dropdown = QComboBox()
         self.method_dropdown.addItem(CONTOUR_BASED)
         self.method_dropdown.addItem(DISTANCE_BASED)
@@ -219,7 +221,7 @@ class InterpolationWidget(QWidget):
                                         "%s: shape-aware mean of contours" % (CONTOUR_BASED, DISTANCE_BASED, RPSV))
         self.method_dropdown.currentTextChanged.connect(lambda _: self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV"))
         layout.addWidget(self.method_dropdown)
-
+        self.add_stored_widget("method_dropdown")
         layout.addWidget(QLabel("# contour points"))
         self.n_points = QSpinBox()
         self.n_points.setMinimum(10)
@@ -227,8 +229,7 @@ class InterpolationWidget(QWidget):
         self.n_points.setValue(300)
         self.n_points.setToolTip("Number of contour points sampled. Used only for\"%s\" and \"%s\" methods" % (RPSV, CONTOUR_BASED))
         layout.addWidget(self.n_points)
-
-        self.rpsv_widget = QWidget()
+        self.add_stored_widget("n_points")
         rpsv_layout = QVBoxLayout()
         rpsv_layout.addWidget(QLabel("max iterations"))
         self.rpsv_iterations_spinbox = QSpinBox()
@@ -237,6 +238,7 @@ class InterpolationWidget(QWidget):
         self.rpsv_iterations_spinbox.setValue(20)
         self.rpsv_iterations_spinbox.setToolTip("Maximum number of iterations for RPSV. Can be fewer if points converge.")
         rpsv_layout.addWidget(self.rpsv_iterations_spinbox)
+        self.add_stored_widget("rpsv_iterations_spinbox")
         self.rpsv_widget.setLayout(rpsv_layout)
         self.rpsv_widget.setVisible(self.method_dropdown.currentText() == RPSV)
         rpsv_layout.setContentsMargins(0, 0, 0, 0)

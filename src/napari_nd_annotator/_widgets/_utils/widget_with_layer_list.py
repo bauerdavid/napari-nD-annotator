@@ -1,12 +1,14 @@
 import napari
-from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QPushButton, QSizePolicy, QScrollArea
+from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QSizePolicy, QScrollArea
 from qtpy.QtCore import Qt
 from keyword import iskeyword
 
+from napari_nd_annotator._widgets._utils.persistent_widget_state import PersistentWidget
 
-class WidgetWithLayerList(QWidget):
-    def __init__(self, viewer: napari.Viewer, layers, add_layers=True, scrollable=True, **kwargs):
-        super().__init__(**kwargs)
+
+class WidgetWithLayerList(PersistentWidget):
+    def __init__(self, viewer: napari.Viewer, layers, persistence_id=None, add_layers=True, scrollable=True, **kwargs):
+        super().__init__(persistence_id, **kwargs)
         layout = QVBoxLayout()
         layers_layout = QVBoxLayout()
         if scrollable:

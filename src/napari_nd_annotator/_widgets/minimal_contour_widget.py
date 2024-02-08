@@ -74,7 +74,7 @@ def bbox_around_points(pts):
 
 class MinimalContourWidget(WidgetWithLayerList):
     def __init__(self, viewer: napari.Viewer):
-        super().__init__(viewer, [("image", Image), ("labels", Labels)])
+        super().__init__(viewer, [("image", Image), ("labels", Labels)], "nd_annotator_mc")
         self.viewer = viewer
         self.calculator = MinimalContourCalculator(None, 3)
         self.progress_dialog = ProgressWidget(message="Drawing mask...")
@@ -112,13 +112,13 @@ class MinimalContourWidget(WidgetWithLayerList):
         features_widget = CollapsibleWidget("Image features")
         features_layout = QVBoxLayout()
         features_layout.addWidget(QLabel("Used feature"))
+        self.feature_editor = ImageProcessingWidget(self._img, viewer)
         self.feature_dropdown = QComboBox()
         for text, value in zip(FEATURE_TEXTS, FEATURE_TYPES):
             self.feature_dropdown.addItem(text, value)
         self.feature_dropdown.currentIndexChanged.connect(self.on_feature_change)
         features_layout.addWidget(self.feature_dropdown)
-
-        self.feature_editor = ImageProcessingWidget(self._img, viewer)
+        self.add_stored_widget("feature_dropdown")
         self.feature_editor.setVisible(self.feature_dropdown.currentText() == CUSTOM_TEXT)
         self.feature_editor.script_worker.done.connect(self.set_features)
         features_layout.addWidget(self.feature_editor)
@@ -134,6 +134,7 @@ class MinimalContourWidget(WidgetWithLayerList):
                                       "closer to the Euclidean shortest path")
         self.calculator.set_param(self.param_spinbox.value())
         features_layout.addWidget(self.param_spinbox)
+        self.add_stored_widget("param_spinbox")
         local_correction_checkbox = QCheckBox("Local intensity correction")
         local_correction_checkbox.clicked.connect(lambda is_checked: self.calculator.set_use_local_maximum(is_checked))
         features_layout.addWidget(local_correction_checkbox)
@@ -146,9 +147,9 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.blur_image_checkbox.setChecked(True)
         self.blur_image_checkbox.clicked.connect(self.set_use_smoothing)
         self.blur_image_checkbox.setToolTip("When checked, the image will be blurred\n"
-                                              "before calculating minimal contour")
+                                            "before calculating minimal contour")
         blur_layout.addWidget(self.blur_image_checkbox)
-
+        self.add_stored_widget("blur_image_checkbox")
         blur_image_widget = QWidget()
         blur_image_layout = QVBoxLayout()
         blur_image_layout.setContentsMargins(0, 0, 0, 0)
@@ -156,10 +157,10 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.blur_image_slider = QDoubleSlider(parent=self)
         self.blur_image_slider.setMaximum(20)
         self.blur_image_slider.setOrientation(Qt.Horizontal)
-        self.blur_image_slider.valueChanged.connect(self.update_demo_image)
         self.blur_image_slider.setVisible(self.blur_image_checkbox.isChecked())
         blur_image_layout.addWidget(self.blur_image_slider)
-
+        self.add_stored_widget("blur_image_slider")
+        self.blur_image_slider.valueChanged.connect(self.update_demo_image)
         demo_widget = CollapsibleWidget("Example", self)
         self.demo_image = QLabel()
         self.update_demo_image()
@@ -193,9 +194,11 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.smooth_contour_spinbox.setToolTip("Number of Fourier coefficients to approximate the contour.\n"
                                                "Lower number -> smoother contour\n"
                                                "Higher number -> more faithful to the original")
+        self.add_stored_widget("smooth_contour_checkbox")
         self.smooth_contour_spinbox.setVisible(self.smooth_contour_checkbox.isChecked())
         smooth_contour_layout.addWidget(self.smooth_contour_checkbox)
         smooth_contour_layout.addWidget(self.smooth_contour_spinbox)
+        self.add_stored_widget("smooth_contour_spinbox")
         contour_layout.addLayout(smooth_contour_layout)
 
         point_size_layout = QHBoxLayout()
@@ -206,6 +209,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox.setValue(2)
         self.point_size_spinbox.setToolTip("Point size for contour display.")
         point_size_layout.addWidget(self.point_size_spinbox)
+        self.add_stored_widget("point_size_spinbox")
         contour_layout.addLayout(point_size_layout)
         contour_widget.setLayout(contour_layout)
         layout.addWidget(contour_widget, 0, Qt.AlignTop)

@@ -526,7 +526,7 @@ if BoundingBoxLayer:
 
     class ListWidgetBB(WidgetWithLayerList):
         def __init__(self, viewer: Viewer):
-            super().__init__(viewer, [("bounding_box", BoundingBoxLayer), ("image", Image), ("labels", Labels)], False)
+            super().__init__(viewer, [("bounding_box", BoundingBoxLayer), ("image", Image), ("labels", Labels)], add_layers=False)
             layout = QVBoxLayout()
             self.viewer = viewer
             self.prev_n_layers = len(viewer.layers)

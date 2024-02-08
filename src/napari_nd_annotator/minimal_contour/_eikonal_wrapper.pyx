@@ -124,7 +124,6 @@ cdef class MinimalContourCalculator:
     @cython.wraparound(False)
     cpdef set_image(self, np.ndarray[np.float_t, ndim=3] image, np.ndarray[np.float_t, ndim=2] gradx, np.ndarray[np.float_t, ndim=2] grady):
         if image is None:
-            print("Image was None!")
             return
         if image.shape[2] != 3:
             print("image should have 3 channels")

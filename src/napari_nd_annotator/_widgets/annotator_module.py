@@ -37,18 +37,20 @@ from ._utils.callbacks import (
     LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
+from ._utils.persistent_widget_state import PersistentWidget
 from .._helper_functions import layer_ndisplay, layer_dims_displayed
 
 
-class AnnotatorWidget(QWidget):
+class AnnotatorWidget(PersistentWidget):
     def __init__(self, viewer: Viewer):
-        super().__init__()
+        super().__init__("nd_annotator")
         self.history_idx = 0
         layout = QVBoxLayout()
         self.fill_objects_checkbox = QCheckBox("autofill objects")
         self.fill_objects_checkbox.setChecked(True)
         self.fill_objects_checkbox.setToolTip("When drawing labels,"
                                               " close the drawn curve and fill its area after releasing the mouse")
+        self.add_stored_widget("fill_objects_checkbox")
         self._active_labels_layer = None
         self._active_bbox_layer = None
         self.drawn_region_history = dict()

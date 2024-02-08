@@ -820,7 +820,7 @@ if minimal_surface is not None:
 
     class MinimalSurfaceWidget(WidgetWithLayerList):
         def __init__(self, viewer: napari.Viewer, minimal_contour_widget):
-            super().__init__(viewer, [("image", Image), ("labels", Labels)])
+            super().__init__(viewer, [("image", Image), ("labels", Labels)], "nd_annotator_ms")
             self.labels.combobox.currentIndexChanged.connect(self.on_labels_changed)
             self._prev_labels = None
             self.blurred_layer = None
@@ -842,8 +842,7 @@ if minimal_surface is not None:
             self.image_feature_combobox.addItem("Gradient")
             self.image_feature_combobox.addItem("Custom")
             params_layout.addWidget(self.image_feature_combobox)
-
-
+            self.add_stored_widget("image_feature_combobox")
             self.alpha_beta_widget = QWidget()
             self.alpha_beta_widget.setContentsMargins(0, 0, 0, 0)
             alpha_beta_layout = QVBoxLayout()
@@ -856,6 +855,7 @@ if minimal_surface is not None:
             self.alpha_slider.setDecimals(3)
             self.alpha_slider.setOrientation(Qt.Horizontal)
             alpha_layout.addWidget(self.alpha_slider)
+            self.add_stored_widget("alpha_slider")
             alpha_beta_layout.addLayout(alpha_layout)
 
             beta_layout = QHBoxLayout()
@@ -867,6 +867,7 @@ if minimal_surface is not None:
             self.beta_spinner.setSingleStep(1.)
             self.beta_spinner.setSizePolicy(QSizePolicy.Policy.Expanding, self.beta_spinner.sizePolicy().verticalPolicy())
             beta_layout.addWidget(self.beta_spinner)
+            self.add_stored_widget("beta_spinner")
             alpha_beta_layout.addLayout(beta_layout)
 
             self.alpha_beta_widget.setLayout(alpha_beta_layout)
@@ -883,6 +884,7 @@ if minimal_surface is not None:
             self.iterations_slider.setValue(1000)
             self.iterations_slider.setOrientation(Qt.Horizontal)
             iterations_layout.addWidget(self.iterations_slider)
+            self.add_stored_widget("iterations_slider")
             params_layout.addLayout(iterations_layout)
 
             z_scale_layout = QHBoxLayout()
@@ -894,12 +896,13 @@ if minimal_surface is not None:
             self.z_scale_spinbox.setValue(1.)
             # self.z_scale_spinbox.valueChanged.connect(self) TODO
             z_scale_layout.addWidget(self.z_scale_spinbox)
+            self.add_stored_widget("z_scale_spinbox")
             params_layout.addLayout(z_scale_layout)
 
             self.use_correction_checkbox = QCheckBox("Use correction")
             self.use_correction_checkbox.setChecked(True)
             params_layout.addWidget(self.use_correction_checkbox)
-
+            self.add_stored_widget("use_correction_checkbox")
             params_widget.setLayout(params_layout)
             layout.addWidget(params_widget, 0, Qt.AlignTop)
 
@@ -909,6 +912,7 @@ if minimal_surface is not None:
             self.blur_image_checkbox = QCheckBox("Blur image")
             self.blur_image_checkbox.clicked.connect(self.on_blur_checked)
             blurring_layout.addWidget(self.blur_image_checkbox)
+            self.add_stored_widget("blur_image_checkbox")
             self.blurring_type_widget = QWidget()
             blurring_type_layout = QVBoxLayout()
             blurring_type_layout.setContentsMargins(0, 0, 0, 0)
@@ -918,6 +922,7 @@ if minimal_surface is not None:
             self.blurring_type_combobox.setSizePolicy(QSizePolicy.Policy.Ignored, self.blurring_type_combobox.sizePolicy().verticalPolicy())
             self.blurring_type_combobox.currentTextChanged.connect(self.update_blurred_layer)
             blurring_type_layout.addWidget(self.blurring_type_combobox)
+            self.add_stored_widget("blurring_type_combobox")
             self.blurring_type_widget.setLayout(blurring_type_layout)
             blurring_layout.addWidget(self.blurring_type_widget)
             self.cad_widget = QWidget()
@@ -934,6 +939,7 @@ if minimal_surface is not None:
             self.blur_conductance_spinbox.setValue(9.)
             self.blur_conductance_spinbox.valueChanged.connect(delayed_updater)
             conductance_layout.addWidget(self.blur_conductance_spinbox)
+            self.add_stored_widget("blur_conductance_spinbox")
             cad_layout.addLayout(conductance_layout)
 
             iterations_layout = QHBoxLayout()
@@ -944,6 +950,7 @@ if minimal_surface is not None:
             self.blur_n_iterations_spinbox.setValue(10)
             self.blur_n_iterations_spinbox.valueChanged.connect(delayed_updater)
             iterations_layout.addWidget(self.blur_n_iterations_spinbox)
+            self.add_stored_widget("blur_n_iterations_spinbox")
             cad_layout.addLayout(iterations_layout)
             self.cad_widget.setLayout(cad_layout)
             blurring_layout.addWidget(self.cad_widget)
@@ -958,6 +965,7 @@ if minimal_surface is not None:
             self.blur_sigma_slider.setOrientation(Qt.Horizontal)
             self.blur_sigma_slider.sliderReleased.connect(self.update_blurred_layer)
             gauss_layout.addWidget(self.blur_sigma_slider)
+            self.add_stored_widget("blur_sigma_slider")
             self.gauss_widget.setLayout(gauss_layout)
             blurring_layout.addWidget(self.gauss_widget)
             self.blurring_type_combobox.currentTextChanged.connect(self.on_blur_selection)
@@ -976,6 +984,7 @@ if minimal_surface is not None:
             self.slice_segmentation_dropdown = QComboBox()
             self.slice_segmentation_dropdown.addItems(EstimationWorker.ANNOTATION_METHODS)
             slice_annotation_layout.addWidget(self.slice_segmentation_dropdown)
+            self.add_stored_widget("slice_segmentation_dropdown")
             self.use_meeting_points_checkbox = QCheckBox("Slice from meeting points")
             self.use_meeting_points_checkbox.setChecked(True)
             slice_annotation_layout.addWidget(self.use_meeting_points_checkbox)
@@ -1240,7 +1249,7 @@ if minimal_surface is not None:
         shapes_data_received = Signal(str, "PyQt_PyObject", "PyQt_PyObject")
 
         def __init__(self, viewer: napari.Viewer):
-            super().__init__(viewer, [("meeting_plane", Image), ("distance_map", Image), ("starting_points", Points)])
+            super().__init__(viewer, [("meeting_plane", Image), ("distance_map", Image), ("starting_points", Points)], "nd_annotator_shortest_paths")
             self.shapes_data_received.connect(self.add_shapes)
             self.viewer = viewer
             self.estimator = minimal_surface.MinimalSurfaceCalculator()
