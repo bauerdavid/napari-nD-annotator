@@ -122,8 +122,8 @@ class CodeEditor(QPlainTextEdit):
 
 
 class ImageProcessingWidget(QWidget):
-    def __init__(self, image, viewer: napari.Viewer, editor_key="img_proc_script"):
-        super().__init__()
+    def __init__(self, image, viewer: napari.Viewer, editor_key="img_proc_script", parent=None):
+        super().__init__(parent=parent)
         self.viewer = viewer
         self._editor_key = editor_key
         self.progress_dialog = ProgressWidget(message="Calculating feature, please wait...")

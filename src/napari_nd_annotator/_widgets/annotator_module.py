@@ -61,14 +61,14 @@ class AnnotatorWidget(PersistentWidget):
         self.viewer.layers.selection.events.connect(lock_layer)
         self.viewer.layers.events.inserted.connect(self.move_bbox_to_top)
         self.viewer.layers.events.moved.connect(self.move_bbox_to_top)
-        self.fill_objects_checkbox.clicked.connect(self.set_fill_objects)
+
         layout.addWidget(self.fill_objects_checkbox)
 
-        tabs_widget = QTabWidget()
-        self.interpolation_widget = InterpolationWidget(viewer)
+        tabs_widget = QTabWidget(self)
+        self.interpolation_widget = InterpolationWidget(viewer, self)
         tabs_widget.addTab(self.interpolation_widget, "Interpolation")
 
-        self.minimal_contour_widget = MinimalContourWidget(viewer)
+        self.minimal_contour_widget = MinimalContourWidget(viewer, self)
         tabs_widget.addTab(self.minimal_contour_widget, "Minimal Contour")
 
         if MinimalSurfaceWidget is not None:
@@ -87,7 +87,8 @@ class AnnotatorWidget(PersistentWidget):
         layout.addLayout(help_layout)
         self.setLayout(layout)
         self.installEventFilter(self)
-        self.set_fill_objects(True)
+        self.fill_objects_checkbox.stateChanged.connect(self.set_fill_objects)
+        self.set_fill_objects(self.fill_objects_checkbox.isChecked())
         self.on_layer_selection_change()
         # self.init_bbox_layer()
 

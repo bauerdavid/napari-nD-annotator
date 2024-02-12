@@ -9,14 +9,14 @@ from napari_nd_annotator._widgets._utils.persistent_widget_state import Persiste
 class WidgetWithLayerList(PersistentWidget):
     def __init__(self, viewer: napari.Viewer, layers, persistence_id=None, add_layers=True, scrollable=True, **kwargs):
         super().__init__(persistence_id, **kwargs)
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
         layers_layout = QVBoxLayout()
         if scrollable:
-            self.scroll_area = QScrollArea()
+            self.scroll_area = QScrollArea(self)
             self.scroll_area.setWidgetResizable(True)
             self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
             self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.central_widget = QWidget()
+        self.central_widget = QWidget(self)
         self.viewer = viewer
         self.layers = dict()  # str -> QComboBox
         for layer in layers:  # every layer should be a tuple: (layer_name, layer_type) or (layer_name, layer_type, layer_display_name)
@@ -39,7 +39,6 @@ class WidgetWithLayerList(PersistentWidget):
             layout.addWidget(self.scroll_area)
         else:
             layout.addWidget(self.central_widget)
-        super().setLayout(layout)
 
     def setLayout(self, a0: 'QLayout') -> None:
         self.central_widget.setLayout(a0)

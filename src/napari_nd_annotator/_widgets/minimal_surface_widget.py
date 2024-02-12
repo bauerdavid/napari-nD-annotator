@@ -819,8 +819,8 @@ if minimal_surface is not None:
 
 
     class MinimalSurfaceWidget(WidgetWithLayerList):
-        def __init__(self, viewer: napari.Viewer, minimal_contour_widget):
-            super().__init__(viewer, [("image", Image), ("labels", Labels)], "nd_annotator_ms")
+        def __init__(self, viewer: napari.Viewer, minimal_contour_widget, parent=None):
+            super().__init__(viewer, [("image", Image), ("labels", Labels)], "nd_annotator_ms", parent=parent)
             self.labels.combobox.currentIndexChanged.connect(self.on_labels_changed)
             self._prev_labels = None
             self.blurred_layer = None
@@ -872,7 +872,7 @@ if minimal_surface is not None:
 
             self.alpha_beta_widget.setLayout(alpha_beta_layout)
             params_layout.addWidget(self.alpha_beta_widget)
-            self.custom_feature_widget = ImageProcessingWidget(self.image.layer, self.viewer, "min_surf_script")
+            self.custom_feature_widget = ImageProcessingWidget(self.image.layer, self.viewer, "min_surf_script", self)
             params_layout.addWidget(self.custom_feature_widget)
             self.image_feature_combobox.currentTextChanged.connect(lambda t: self.custom_feature_widget.setVisible(t == "Custom"))
             self.custom_feature_widget.setVisible(self.image_feature_combobox.currentText() == "Custom")
@@ -955,7 +955,7 @@ if minimal_surface is not None:
             self.cad_widget.setLayout(cad_layout)
             blurring_layout.addWidget(self.cad_widget)
 
-            self.gauss_widget = QWidget()
+            self.gauss_widget = QWidget(self)
             gauss_layout = QHBoxLayout()
             gauss_layout.setContentsMargins(0, 0, 0, 0)
             gauss_layout.addWidget(QLabel("Sigma", parent=self))

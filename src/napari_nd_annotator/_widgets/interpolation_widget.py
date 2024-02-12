@@ -187,8 +187,8 @@ class InterpolationWorker(QObject):
 
 
 class InterpolationWidget(PersistentWidget):
-    def __init__(self, viewer: Viewer):
-        super().__init__("nd_annotator_interp")
+    def __init__(self, viewer: Viewer, parent=None):
+        super().__init__("nd_annotator_interp", parent=parent)
         self.viewer = viewer
         self.progress_dialog = ProgressWidget(self, message="Interpolating slices...")
         layout = QVBoxLayout()
@@ -202,16 +202,16 @@ class InterpolationWidget(PersistentWidget):
         self.interpolation_worker.progress.connect(self.progress_dialog.setValue)
         self.interpolation_thread.started.connect(self.interpolation_worker.run)
         layout.addWidget(QLabel("dimension"))
-        self.dimension_dropdown = QSpinBox()
+        self.dimension_dropdown = QSpinBox(self)
         self.dimension_dropdown.setMinimum(0)
         self.dimension_dropdown.setMaximum(0)
         self.dimension_dropdown.setToolTip("Dimension along which slices will be interpolated")
         layout.addWidget(self.dimension_dropdown)
         self.add_stored_widget("dimension_dropdown")
 
-        layout.addWidget(QLabel("Method"))
-        self.rpsv_widget = QWidget()
-        self.method_dropdown = QComboBox()
+        layout.addWidget(QLabel("Method", self))
+        self.rpsv_widget = QWidget(self)
+        self.method_dropdown = QComboBox(self)
         self.method_dropdown.addItem(CONTOUR_BASED)
         self.method_dropdown.addItem(DISTANCE_BASED)
         self.method_dropdown.addItem(RPSV)
@@ -219,11 +219,10 @@ class InterpolationWidget(PersistentWidget):
                                         "%s: arithmetic mean of contour points\n"
                                         "%s: interpolation between distance maps\n"
                                         "%s: shape-aware mean of contours" % (CONTOUR_BASED, DISTANCE_BASED, RPSV))
-        self.method_dropdown.currentTextChanged.connect(lambda _: self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV"))
         layout.addWidget(self.method_dropdown)
         self.add_stored_widget("method_dropdown")
-        layout.addWidget(QLabel("# contour points"))
-        self.n_points = QSpinBox()
+        layout.addWidget(QLabel("# contour points", self))
+        self.n_points = QSpinBox(self)
         self.n_points.setMinimum(10)
         self.n_points.setMaximum(1000)
         self.n_points.setValue(300)
@@ -231,8 +230,8 @@ class InterpolationWidget(PersistentWidget):
         layout.addWidget(self.n_points)
         self.add_stored_widget("n_points")
         rpsv_layout = QVBoxLayout()
-        rpsv_layout.addWidget(QLabel("max iterations"))
-        self.rpsv_iterations_spinbox = QSpinBox()
+        rpsv_layout.addWidget(QLabel("max iterations", self))
+        self.rpsv_iterations_spinbox = QSpinBox(self)
         self.rpsv_iterations_spinbox.setMaximum(100)
         self.rpsv_iterations_spinbox.setMinimum(1)
         self.rpsv_iterations_spinbox.setValue(20)
@@ -245,15 +244,19 @@ class InterpolationWidget(PersistentWidget):
         self.rpsv_widget.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.rpsv_widget)
 
-        self.interpolate_button = QPushButton("Interpolate")
+        self.interpolate_button = QPushButton("Interpolate", self)
         self.interpolate_button.clicked.connect(self.interpolate)
         self.interpolation_worker.done.connect(lambda: self.interpolate_button.setEnabled(True))
         layout.addWidget(self.interpolate_button)
+        layout.addStretch()
+        self.method_dropdown.currentTextChanged.connect(lambda _: self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV"))
         self.viewer.layers.selection.events.connect(self.on_layer_selection_change)
         viewer.dims.events.order.connect(self.on_order_change)
         viewer.dims.events.ndisplay.connect(lambda _: self.interpolate_button.setEnabled(viewer.dims.ndisplay == 2))
         self.setLayout(layout)
-        layout.addStretch()
+        self.rpsv_widget.setVisible(self.method_dropdown.currentText() == "RPSV")
+        self.on_order_change()
+        self.interpolate_button.setEnabled(viewer.dims.ndisplay == 2)
         self.on_layer_selection_change()
 
     def on_layer_selection_change(self, event=None):
