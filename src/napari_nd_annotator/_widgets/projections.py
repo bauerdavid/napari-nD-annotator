@@ -224,7 +224,7 @@ class SliceDisplayWidget(QWidget):
                 flip = True
             else:
                 flip = False
-            slices = [int(viewer.dims.current_step[dim]-image_layer.translate[dim]) if dim in layer_dims_not_displayed(image_layer) else 0 for dim in range(viewer.dims.ndim)]
+            slices = [max(min(int(image_layer._slice_indices[dim]), image_layer.data.shape[dim]-1), 0) if dim in layer_dims_not_displayed(image_layer) else 0 for dim in range(viewer.dims.ndim)]
             projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, slices=slices, flip_image=flip, crosshair_color=self.overlay_color)
             grid_layout.setRowStretch(len(self.projections)//3, 1)
             grid_layout.setColumnStretch(len(self.projections)%3, 1)

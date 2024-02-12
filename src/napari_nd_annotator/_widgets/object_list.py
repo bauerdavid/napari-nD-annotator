@@ -212,6 +212,9 @@ if BoundingBoxLayer:
             self.parent.crop_image_layer, self.parent.crop_mask_layer = self.create_layers()
             self.parent.crop_image_layer.name = self.parent.crop_image_layer.name
             self.parent.crop_mask_layer.name = self.parent.crop_mask_layer.name
+            self.viewer.dims.set_point(
+                np.arange(self.parent.crop_image_layer.ndim, dtype=int),
+                np.mean(self.parent.crop_image_layer.extent.world, axis=0))
             self.parent.crop_mask_layer.events.set_data.connect(self.on_data_change)
             if self.image_layer.ndim > 2:
                 self.parent.projections_widget = SliceDisplayWidget(self.viewer, self.parent.crop_image_layer, self.parent.crop_mask_layer, self.channels_dim)
@@ -570,7 +573,7 @@ if BoundingBoxLayer:
                 self.create_list_widget()
             self.installEventFilter(self)
 
-        def bb_index_change(self, index):
+        def bb_index_change(self, _=None):
             if self.bounding_box.layer is None:
                 self.reset_index()
                 self.remove_list_widget()
@@ -583,12 +586,12 @@ if BoundingBoxLayer:
             else:
                 self.reset_index()
 
-        def mask_index_change(self, index):
+        def mask_index_change(self, _=None):
             if self.list_widget is not None and self.list_widget.mask_layer is not self.labels.layer:
                 self.list_widget.mask_layer = self.labels.layer
 
-        def img_index_change(self, index):
-            self.update_channels_dim(index)
+        def img_index_change(self, _=None):
+            self.update_channels_dim()
 
         @property
         def image_layer(self):
@@ -603,8 +606,8 @@ if BoundingBoxLayer:
                 self.viewer.add_layer(
                     BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent"))
 
-        def update_channels_dim(self, idx):
-            if idx == 0 or self.image_layer is None:
+        def update_channels_dim(self):
+            if self.image_layer is None:
                 return
             smallest_dim = np.argsort(self.image_layer.data.shape)[0]
             if self.image_layer.data.shape[smallest_dim] <= 3:
