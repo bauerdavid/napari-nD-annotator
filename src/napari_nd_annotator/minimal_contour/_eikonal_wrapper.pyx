@@ -130,6 +130,7 @@ cdef class MinimalContourCalculator:
             return
         cdef int w = image.shape[1]
         cdef int h = image.shape[0]
+        cdef np.ndarray[np.float_t, ndim=1] img_max = image.max(axis=(1, 2))
         if self.ered.GetWidth() != w or self.ered.GetHeight() != h:
             self.ered.Set(w, h)
             self.egreen.Set(w, h)
@@ -144,22 +145,35 @@ cdef class MinimalContourCalculator:
             g_ptr = self.egreen[y]
             b_ptr = self.eblue[y]
             for x in range(w):
-                r_ptr[x] = image[y, x, 0]
-                g_ptr[x] = image[y, x, 1]
-                b_ptr[x] = image[y, x, 2]
+                if y == 0 or y == h - 1 or x == 0 or x == w - 1:
+                    r_ptr[x] = img_max[0]
+                    g_ptr[x] = img_max[1]
+                    b_ptr[x] = img_max[2]
+                else:
+                    r_ptr[x] = image[y, x, 0]
+                    g_ptr[x] = image[y, x, 1]
+                    b_ptr[x] = image[y, x, 2]
         cdef int i
         for i in range(len(self.method_initialized)):
             self.method_initialized[i] = False
-        if not np.array_equal(gradx, EMPTY) and not np.array_equal(grady,EMPTY):
+        cdef float max_x
+        cdef float max_y
+        if gradx.size and grady.size:
             if self.egradx.GetWidth() != w or self.egrady.GetHeight() != h:
                 self.egradx.Set(w, h)
                 self.egrady.Set(w, h)
+            max_x = gradx.max()
+            max_y = grady.max()
             for y in prange(h, nogil=True):
                 r_ptr = self.egradx[y]
                 g_ptr = self.egrady[y]
                 for x in range(w):
-                    r_ptr[x] = gradx[y, x]
-                    g_ptr[x] = grady[y, x]
+                    if y == 0 or y == h-1 or x == 0 or x == w-1:
+                        r_ptr[x] = max_x/2
+                        g_ptr[x] = max_y/2
+                    else:
+                        r_ptr[x] = gradx[y, x]
+                        g_ptr[x] = grady[y, x]
             for i in range(self.eikonals.size()):
                 self.eikonals[i].CleanAll()
                 self.eikonals[i].SetParAll()

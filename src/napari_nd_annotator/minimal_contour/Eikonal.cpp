@@ -71,11 +71,15 @@ void CEikonal::SetStartStop(const CVec2 &reference,const CVec2 &target)
 
 	m_boundary.clear();
 
-	for (int yy = mStartY; yy < mEndY - 1; ++yy)
-		for (int xx = mStartX; xx < mEndX - 1; ++xx)
+	for (int yy = mStartY; yy < mEndY; ++yy)
+		for (int xx = mStartX; xx < mEndX; ++xx)
 			if (m_field[yy][xx] < m_minuplevel) {
-				if (m_distance[yy + 1][xx] >= 0 || m_distance[yy - 1][xx] >= 0
-				 || m_distance[yy][xx + 1] >= 0 || m_distance[yy][xx - 1] >= 0) {
+				if (
+				    (yy < mEndY-1 && m_distance[yy + 1][xx] >= 0)
+                    || (yy > mStartY && m_distance[yy - 1][xx] >= 0)
+                    || (xx < mEndX-1 && m_distance[yy][xx + 1] >= 0)
+                    || (xx > mStartX && m_distance[yy][xx - 1] >= 0)
+				 ) {
 					m_boundary.push_back(yy*0x10000+xx);
 				}
 			}
@@ -214,28 +218,28 @@ inline void CEikonal::UpdateDistanceMap(double maxv)
 		
 			int iy = yy, ix = xx;
 			++ix;
-			if (ix < mEndX - 1)
+			if (ix < mEndX)
 #if _VECTSWITCH
 				m_auxset.emplace_back(yy * 0x10000 + ix);
 #else
 				m_auxset.emplace(yy * 0x10000 + ix);
 #endif
 			ix -= 2;
-			if (ix > mStartX)
+			if (ix >= mStartX)
 #if _VECTSWITCH
 				m_auxset.emplace_back(yy * 0x10000 + ix);
 #else
 				m_auxset.emplace(yy * 0x10000 + ix);
 #endif
 			++iy;
-			if (iy < mEndY - 1)
+			if (iy < mEndY)
 #if _VECTSWITCH
 				m_auxset.emplace_back(iy * 0x10000 + xx);
 #else
 				m_auxset.emplace(iy * 0x10000 + xx);
 #endif
 			iy -= 2;
-			if (iy > mStartY)
+			if (iy >= mStartY)
 #if _VECTSWITCH
 				m_auxset.emplace_back(iy * 0x10000 + xx);
 #else
@@ -253,8 +257,8 @@ inline void CEikonal::UpdateDistanceMap(double maxv)
 		unsigned long cxy = *it;
 		int xx = cxy & 0xffff, yy = cxy >> 16;
 		if (m_field[yy][xx] < m_minuplevel)
-			if ((yy < mEndY - 1 && m_distance[yy + 1][xx] >= 0) || (yy > mStartY && m_distance[yy - 1][xx] >= 0)
-				|| (xx < mEndX - 1 && m_distance[yy][xx + 1] >= 0) || (xx > mStartX && m_distance[yy][xx - 1] >= 0))
+			if ((yy < mEndY && m_distance[yy + 1][xx] >= 0) || (yy >= mStartY && m_distance[yy - 1][xx] >= 0)
+				|| (xx < mEndX && m_distance[yy][xx + 1] >= 0) || (xx >= mStartX && m_distance[yy][xx - 1] >= 0))
 					m_boundary.push_back(cxy);
 	}
 
@@ -279,10 +283,10 @@ repall:
 	m_curpath.clear();
 
 	int ix(m_xdisto), iy(m_ydisto);
-	if (ix < mStartX+1) ix = mStartX+1;
-	else if (ix >= mEndX-1) ix = mEndX-2;
-	if (iy < mStartY+1) iy = mStartY+1;
-	else if (iy >= mEndY-1) iy = mEndY-2;
+	if (ix < mStartX) ix = mStartX;
+	else if (ix >= mEndX) ix = mEndX-1;
+	if (iy < mStartY) iy = mStartY;
+	else if (iy >= mEndY) iy = mEndY-1;
 
 	double sky = 1.2f * m_currentdistance;
 
@@ -316,10 +320,10 @@ reit:
 				double idlen = 1.0 / sqrt((double)(dx * dx + dy * dy));
 				double dd = sky;
 				int px = ix + dx, py = iy + dy;
-				if (px >= mStartX+1 && px < mEndX-1 && py >= mStartY+1 && py < mEndY-1)
+				if (px >= mStartX && px < mEndX && py >= mStartY && py < mEndY)
 					if (distance[py][px] >= 0) dd = distance[py][px];
 
-				dd -= distance[iy][ix] >= 0 ? distance[iy][ix] : sky;
+				dd -= distance[iy][ix] >= 0 ? distance[iy][ix] : -sky;
 				dd += dir.x * dx + dir.y * dy;
 				dd *= idlen;
 				if (dd < minv) {
