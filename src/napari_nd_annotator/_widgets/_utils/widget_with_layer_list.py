@@ -3,7 +3,7 @@ from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QSizePolicy, QScroll
 from qtpy.QtCore import Qt
 from keyword import iskeyword
 
-from napari_nd_annotator._widgets._utils.persistent_widget_state import PersistentWidget
+from napari_nd_annotator._widgets._utils.persistence import PersistentWidget
 
 
 class WidgetWithLayerList(PersistentWidget):

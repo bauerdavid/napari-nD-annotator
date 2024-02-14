@@ -2,7 +2,7 @@ import itertools
 
 import napari
 from qtpy.QtCore import QObject, QEvent, Qt
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QTabWidget, QPushButton, QSizePolicy
+from qtpy.QtWidgets import QVBoxLayout, QCheckBox, QTabWidget, QPushButton, QSizePolicy
 from napari import Viewer
 from napari.layers import Labels, Layer, Image
 from napari.qt.threading import create_worker
@@ -37,7 +37,7 @@ from ._utils.callbacks import (
     LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
-from ._utils.persistent_widget_state import PersistentWidget
+from napari_nd_annotator._widgets._utils.persistence import PersistentWidget
 from .._helper_functions import layer_ndisplay, layer_dims_displayed
 
 
@@ -47,7 +47,6 @@ class AnnotatorWidget(PersistentWidget):
         self.history_idx = 0
         layout = QVBoxLayout()
         self.fill_objects_checkbox = QCheckBox("autofill objects")
-        self.fill_objects_checkbox.setChecked(True)
         self.fill_objects_checkbox.setToolTip("When drawing labels,"
                                               " close the drawn curve and fill its area after releasing the mouse")
         self.add_stored_widget("fill_objects_checkbox")

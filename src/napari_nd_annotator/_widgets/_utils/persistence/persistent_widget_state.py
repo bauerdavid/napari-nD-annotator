@@ -9,6 +9,10 @@ from traceback import print_exc
 GETTER_FUN_NAMES = ["isChecked", "value", "text", "currentText"]
 SETTER_FUN_NAMES = ["setChecked", "setValue", "setText", "setCurrentText"]
 
+__location__ = os.path.realpath(
+        os.path.join(os.getcwd(), os.path.dirname(__file__)))
+default_settings_path = os.path.join(__location__, "default_widget_values.yaml")
+
 
 class UniqueDict(dict):
     def __setitem__(self, key, value):
@@ -26,7 +30,15 @@ class PersistentWidgetState:
             try:
                 with open(self._config_path, "r") as f:
                     self._state = yaml.safe_load(f)
-            except Exception as e:
+            except Exception:
+                print_exc()
+        else:
+            try:
+                with open(self._config_path, "w") as new_file, open(default_settings_path, "r") as def_file:
+                    new_file.write(def_file.read())
+                    def_file.seek(0)
+                    self._state = yaml.safe_load(def_file)
+            except Exception:
                 print_exc()
 
     def store_multiple_state(self, parent_name: str, widget_id_map: dict):

@@ -1,0 +1,27 @@
+nd_annotator:
+  fill_objects_checkbox: true
+nd_annotator_interp:
+  method_dropdown: Contour-based
+  n_points: 300
+  rpsv_iterations_spinbox: 20
+nd_annotator_mc:
+  blur_image_checkbox: false
+  blur_image_slider: 0.5
+  feature_dropdown: Gradient [symmetric]
+  param_spinbox: 5
+  point_size_spinbox: 2
+  smooth_contour_checkbox: true
+  smooth_contour_spinbox: 0.7
+nd_annotator_ms:
+  alpha_slider: 0.01
+  beta_spinner: 3.0
+  blur_conductance_spinbox: 9.
+  blur_image_checkbox: true
+  blur_n_iterations_spinbox: 10
+  blur_sigma_slider: 0.0
+  blurring_type_combobox: Curvature Anisotropic Diffusion
+  image_feature_combobox: Gradient
+  iterations_slider: 10000
+  slice_segmentation_dropdown: Minimal contour
+  use_correction_checkbox: true
+  z_scale_spinbox: 1.

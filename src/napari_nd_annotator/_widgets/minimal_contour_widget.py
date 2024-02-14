@@ -121,7 +121,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.param_spinbox = QSpinBox(parent=self)
         self.param_spinbox.setMinimum(1)
         self.param_spinbox.setMaximum(50)
-        self.param_spinbox.setValue(5)
         self.param_spinbox.setToolTip("Increasing this parameter will cause contours to be more aligned\n"
                                       "with the selected image feature (with a lower number the contour will be\n"
                                       "closer to the Euclidean shortest path")
@@ -137,7 +136,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         blur_widget = CollapsibleWidget("Blurring", parent=self)
         blur_layout = QVBoxLayout()
         self.blur_image_checkbox = QCheckBox("Blur image")
-        self.blur_image_checkbox.setChecked(True)
         self.blur_image_checkbox.setToolTip("When checked, the image will be blurred\n"
                                             "before calculating minimal contour")
         blur_layout.addWidget(self.blur_image_checkbox)
@@ -149,7 +147,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.blur_image_slider = QDoubleSlider(parent=self)
         self.blur_image_slider.setMaximum(20)
         self.blur_image_slider.setOrientation(Qt.Horizontal)
-        self.blur_image_slider.setVisible(self.blur_image_checkbox.isChecked())
         blur_image_layout.addWidget(self.blur_image_slider)
         self.add_stored_widget("blur_image_slider")
         self.blur_image_slider.valueChanged.connect(self.update_demo_image)
@@ -180,7 +177,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.smooth_contour_spinbox = QDoubleSlider(Qt.Horizontal, self)
         self.smooth_contour_spinbox.setMinimum(0.)
         self.smooth_contour_spinbox.setMaximum(1.)
-        self.smooth_contour_spinbox.setValue(1.)
         # self.smooth_contour_spinbox.setTickInterval(0.05)
         self.smooth_contour_spinbox.setToolTip("Number of Fourier coefficients to approximate the contour.\n"
                                                "Lower number -> smoother contour\n"
@@ -197,7 +193,6 @@ class MinimalContourWidget(WidgetWithLayerList):
         self.point_size_spinbox = QSpinBox(parent=self)
         self.point_size_spinbox.setMinimum(1)
         self.point_size_spinbox.setMaximum(50)
-        self.point_size_spinbox.setValue(2)
         self.point_size_spinbox.setToolTip("Point size for contour display.")
         point_size_layout.addWidget(self.point_size_spinbox)
         self.add_stored_widget("point_size_spinbox")

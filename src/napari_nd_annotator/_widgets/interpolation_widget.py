@@ -13,15 +13,13 @@ from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
-from ._utils.persistent_widget_state import PersistentWidget
+from napari_nd_annotator._widgets._utils.persistence import PersistentWidget
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
 from ..mean_contour._reconstruction import reconstruct
 from ..mean_contour._essentials import magnitude
 import warnings
-
-import matplotlib.pyplot as plt
 
 DISTANCE_BASED = "Distance-based"
 CONTOUR_BASED = "Contour-based"
@@ -45,7 +43,7 @@ def contour_cv2_mask_uniform(mask, contoursize_max):
         dl = s[-1] + np.linalg.norm(d)
         s.append(dl)
 
-    if (s[-1] == 0):
+    if s[-1] == 0:
         s[-1] = 1
 
     s = np.array(s) / s[-1]
@@ -207,7 +205,6 @@ class InterpolationWidget(PersistentWidget):
         self.dimension_dropdown.setMaximum(0)
         self.dimension_dropdown.setToolTip("Dimension along which slices will be interpolated")
         layout.addWidget(self.dimension_dropdown)
-        self.add_stored_widget("dimension_dropdown")
 
         layout.addWidget(QLabel("Method", self))
         self.rpsv_widget = QWidget(self)
@@ -225,7 +222,6 @@ class InterpolationWidget(PersistentWidget):
         self.n_points = QSpinBox(self)
         self.n_points.setMinimum(10)
         self.n_points.setMaximum(1000)
-        self.n_points.setValue(300)
         self.n_points.setToolTip("Number of contour points sampled. Used only for\"%s\" and \"%s\" methods" % (RPSV, CONTOUR_BASED))
         layout.addWidget(self.n_points)
         self.add_stored_widget("n_points")
@@ -234,7 +230,6 @@ class InterpolationWidget(PersistentWidget):
         self.rpsv_iterations_spinbox = QSpinBox(self)
         self.rpsv_iterations_spinbox.setMaximum(100)
         self.rpsv_iterations_spinbox.setMinimum(1)
-        self.rpsv_iterations_spinbox.setValue(20)
         self.rpsv_iterations_spinbox.setToolTip("Maximum number of iterations for RPSV. Can be fewer if points converge.")
         rpsv_layout.addWidget(self.rpsv_iterations_spinbox)
         self.add_stored_widget("rpsv_iterations_spinbox")
