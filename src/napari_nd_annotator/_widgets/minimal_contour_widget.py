@@ -15,7 +15,8 @@ from qtpy.QtWidgets import (
     QLabel,
     QComboBox,
     QPushButton,
-    QSizePolicy
+    QSizePolicy,
+    QMessageBox
 )
 from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt, QEvent
 from qtpy.QtGui import QCursor, QPixmap, QImage
@@ -782,27 +783,49 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
         self.labels.layer.events.data()
         self.labels.layer.refresh()
-        self.clear_all()
         if self.labels.layer and self.autoincrease_label_id_checkbox.isChecked():
             self.labels.layer.selected_label += 1
 
     def points_to_mask(self):
         if self.image_data is None or len(self.output.data) == 0:
             return
+        skip_drawing = False
         if self.labels.layer is None:
-            warnings.warn("Missing output labels layer.")
-            return
-        if self.labels.layer.ndim != self.image.layer.ndim:
-            warnings.warn("Shape of labels and image does not match.")
-            return
-        if not self.labels.layer.visible:
-            self.labels.layer.set_view_slice()
-        self.progress_dialog.setVisible(True)
-        self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(layer_dims_displayed(self.labels.layer))] for p in self.output.data])
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.draw_worker.mask_shape = self.labels.layer._data_view.shape
-        self.draw_thread.start()
+            answer = QMessageBox.question(
+                self,
+                "Missing Labels layer",
+                "Create Labels layer?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                new_labels = self.viewer.add_labels(np.zeros(self.image.layer.data.shape[:self.image.layer.ndim], dtype=np.uint16))
+                self.labels.layer = new_labels
+            else:
+                skip_drawing = True
+        elif not np.array_equal(self.labels.layer.data.shape[:self.labels.layer.ndim], self.image.layer.data.shape[:self.image.layer.ndim]):
+            answer = QMessageBox.question(
+                self,
+                "Shape mismatch",
+                "Current labels and image layers have different shape."
+                " Do you want to create a new labels layer with the appropriate shape?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                new_labels = self.viewer.add_labels(
+                    np.zeros(self.image.layer.data.shape[:self.image.layer.ndim], dtype=np.uint16))
+                self.labels.layer = new_labels
+            else:
+                skip_drawing = True
+        if not skip_drawing:
+            if not self.labels.layer.visible:
+                self.labels.layer.set_view_slice()
+            self.progress_dialog.setVisible(True)
+            self.draw_worker.contour = np.asarray([np.asarray(self.labels.layer.world_to_data(self.output.data_to_world(p)))[list(layer_dims_displayed(self.labels.layer))] for p in self.output.data])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.draw_worker.mask_shape = self.labels.layer._data_view.shape
+            self.draw_thread.start()
+        self.clear_all()
 
     def smooth_fourier(self, points):
         coefficients=max(3, round(self.smooth_contour_spinbox.value()*len(points)))

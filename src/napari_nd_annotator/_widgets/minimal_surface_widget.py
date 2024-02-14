@@ -40,7 +40,7 @@ if minimal_surface is not None:
         QComboBox,
         QSpinBox,
         QSizePolicy,
-        QStackedWidget
+        QMessageBox
     )
     from threading import Thread
     import cv2
@@ -1030,11 +1030,44 @@ if minimal_surface is not None:
 
         def start_estimation(self):
             if self.image.layer not in self.viewer.layers:
-                raise ValueError("Missing image layer")
-            elif self.points_layer is None:
-                raise ValueError("Missing points layer")
-            elif self.labels.layer not in self.viewer.layers:
-                raise ValueError("Missing labels layer")
+                warnings.warn("Missing image layer")
+                return
+            if len(self.points_layer.data) == 0:
+                warnings.warn("No points were added")
+                return
+            if len(self.points_layer.data) == 1:
+                warnings.warn("Not enough points")
+                return
+            if self.labels.layer is None:
+                answer = QMessageBox.question(
+                    self,
+                    "Missing Labels layer",
+                    "Create Labels layer?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    new_labels = self.viewer.add_labels(
+                        np.zeros(self.image.layer.data.shape[:self.image.layer.ndim], dtype=np.uint16))
+                    self.labels.layer = new_labels
+                else:
+                    return
+            elif not np.array_equal(
+                    self.labels.layer.data.shape[:self.labels.layer.ndim],
+                    self.image.layer.data.shape[:self.image.layer.ndim]
+            ):
+                answer = QMessageBox.question(
+                    self,
+                    "Shape mismatch",
+                    "Current labels and image layers have different shape."
+                    " Do you want to create a new labels layer with the appropriate shape?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    new_labels = self.viewer.add_labels(
+                        np.zeros(self.image.layer.data.shape[:self.image.layer.ndim], dtype=np.uint16))
+                    self.labels.layer = new_labels
+                else:
+                    return
             image = self.image.layer
             image_data = image.data
             phi_func = None if self.image_feature_combobox.currentText() == "Gradient" else self.custom_feature_widget.execute_script
