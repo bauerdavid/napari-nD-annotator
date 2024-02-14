@@ -41,6 +41,8 @@ class FeatureManager:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             idx = tuple(layer._slice_indices[i] for i in dims_not_displayed)
+        if any(type(id_) is int and id_ < 0 or id_ >= layer.data.shape[dim] for dim, id_ in enumerate(idx)):
+            return None, None
         # if not block and not self.slices_calculated[layer][dims_displayed][idx]:
         if not block and not self.feature_extractor.done_mask[idx]:
             raise ValueError("features not calculated for layer %s at %s" % (layer, idx))
