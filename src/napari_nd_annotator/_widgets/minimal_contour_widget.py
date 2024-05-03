@@ -341,7 +341,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             return
         if data.ndim == 2:
             data = np.concatenate([data[..., np.newaxis]] * 3, -1)
-        self.calculator.set_image(data, np.empty((0, 0,)), np.empty((0, 0,)))
+        self.calculator.set_image(data.astype(float), np.empty((0, 0,)), np.empty((0, 0,)))
 
     def change_point_size(self, size):
         self.to_s_points_layer.size = size
