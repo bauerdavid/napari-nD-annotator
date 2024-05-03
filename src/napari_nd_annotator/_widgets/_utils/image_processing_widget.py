@@ -17,10 +17,10 @@ from napari_nd_annotator._widgets._utils import ProgressWidget
 def execute_script(script, image, other_locals=None):
     if other_locals is None:
         other_locals = dict()
-    locals = {"image": image} | other_locals
-    exec(script, {"np": np, "skimage": skimage}, locals)
-    if "features" in locals:
-        features = locals["features"]
+    globals_ = {"np": np, "skimage": skimage, "image": image} | other_locals
+    exec(script, globals_, globals_)
+    if "features" in globals_:
+        features = globals_["features"]
     else:
         features = None
         warnings.warn("The output should be stored in a variable called 'features'")
