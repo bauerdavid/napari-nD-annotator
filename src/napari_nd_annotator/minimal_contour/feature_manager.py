@@ -130,4 +130,7 @@ class FeatureManager:
         temp_dir = tempfile.gettempdir()
         temp_folders = glob.glob(os.path.join(temp_dir, "%s*%s" % (tempfile.gettempprefix(), TEMP_SUFFIX)))
         for fold in temp_folders:
-            shutil.rmtree(fold)
+            try:
+                shutil.rmtree(fold)
+            except PermissionError:
+                pass  # No permission to remove folders with a different owner
