@@ -14,6 +14,7 @@ from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
 from napari_nd_annotator._widgets._utils.persistence import PersistentWidget
+from .._helper_functions import layer_slice_indices
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
@@ -100,7 +101,7 @@ class InterpolationWorker(QObject):
             method = self.method
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                layer_slice_template = list(self.layer._slice_indices)
+                layer_slice_template = list(layer_slice_indices(self.layer))
             prev_cnt = None
             prev_layer = None
             prev_mask = None

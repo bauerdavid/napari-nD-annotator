@@ -41,7 +41,7 @@ from ._utils.callbacks import (
     decrement_selected_label,
     LOCK_CHAR
 )
-from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed
+from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, layer_get_order
 from ..minimal_contour import MinimalContourCalculator, FeatureManager
 import numpy as np
 from napari.layers import Image, Labels
@@ -560,8 +560,9 @@ class MinimalContourWidget(WidgetWithLayerList):
             new_s_data = np.tile(np.where([i in layer_dims_displayed(self.anchor_points) for i in range(3)], np.nan, self.anchor_points.data[0]), [len(results[1]), 1])
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                new_e_data[np.isnan(new_e_data)] = np.flipud(results[0][:, self.image.layer._get_order()[:2]]).reshape(-1)
-                new_s_data[np.isnan(new_s_data)] = np.flipud(results[1][:, self.image.layer._get_order()[:2]]).reshape(-1)
+                order = layer_get_order(self.image.layer)
+                new_e_data[np.isnan(new_e_data)] = np.flipud(results[0][:, order[:2]]).reshape(-1)
+                new_s_data[np.isnan(new_s_data)] = np.flipud(results[1][:, order[:2]]).reshape(-1)
             
             self.from_e_points_layer.data = new_e_data
             self.to_s_points_layer.data = new_s_data
@@ -675,8 +676,9 @@ class MinimalContourWidget(WidgetWithLayerList):
             if grad_x is not None:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    grad_x = grad_x.transpose(image_layer._get_order()[:2])
-                    grad_y = grad_y.transpose(image_layer._get_order()[:2])
+                    order = layer_get_order(image_layer)
+                    grad_x = grad_x.transpose(order[:2])
+                    grad_y = grad_y.transpose(order[:2])
                 if self.feature_dropdown.currentText() == SYM_GRADIENT_TEXT:
                     grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
                     grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)

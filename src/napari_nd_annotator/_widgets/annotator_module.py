@@ -38,7 +38,7 @@ from ._utils.callbacks import (
 )
 from ._utils.help_dialog import HelpDialog
 from napari_nd_annotator._widgets._utils.persistence import PersistentWidget
-from .._helper_functions import layer_ndisplay, layer_dims_displayed
+from .._helper_functions import layer_ndisplay, layer_dims_displayed, layer_slice_indices, layer_get_order
 
 
 class AnnotatorWidget(PersistentWidget):
@@ -235,9 +235,9 @@ class AnnotatorWidget(PersistentWidget):
         image_coords = tuple(coordinates[i] for i in dims_displayed)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            slice_dims = layer._slice_indices
+            slice_dims = layer_slice_indices(layer)
             current_draw = np.zeros_like(layer.data[slice_dims], bool)
-            current_draw = np.transpose(current_draw, layer._get_order()[:2])
+            current_draw = np.transpose(current_draw, layer_get_order(layer)[:2])
         start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
         cx = np.clip(cx, 0, current_draw.shape[0] - 1)
@@ -270,7 +270,7 @@ class AnnotatorWidget(PersistentWidget):
             current_draw = current_draw & (layer.data[slice_dims] == 0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            current_draw = np.transpose(current_draw, layer._get_order()[:2])
+            current_draw = np.transpose(current_draw, layer_get_order(layer)[:2])
         self.drawn_region_history[self.history_idx] = current_draw
         self.drawn_slice_history[self.history_idx] = slice_dims
         self.values_history[self.history_idx] = layer.data[slice_dims][current_draw]

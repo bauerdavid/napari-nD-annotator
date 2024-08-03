@@ -9,7 +9,7 @@ from qtpy.QtWidgets import QLabel, QSizePolicy, QWidget, QVBoxLayout, QSlider, Q
 from napari.layers.labels._labels_constants import Mode
 from qtpy import QtCore
 
-from .._helper_functions import layer_dims_not_displayed
+from .._helper_functions import layer_dims_not_displayed, layer_slice_indices
 from matplotlib import colors
 
 class DataProjectionWidget(QLabel):
@@ -224,7 +224,8 @@ class SliceDisplayWidget(QWidget):
                 flip = True
             else:
                 flip = False
-            slices = [max(min(int(image_layer._slice_indices[dim]), image_layer.data.shape[dim]-1), 0) if dim in layer_dims_not_displayed(image_layer) else 0 for dim in range(viewer.dims.ndim)]
+            slice_indices = layer_slice_indices(image_layer)
+            slices = [max(min(int(slice_indices[dim]), image_layer.data.shape[dim]-1), 0) if dim in layer_dims_not_displayed(image_layer) else 0 for dim in range(viewer.dims.ndim)]
             projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, slices=slices, flip_image=flip, crosshair_color=self.overlay_color)
             grid_layout.setRowStretch(len(self.projections)//3, 1)
             grid_layout.setColumnStretch(len(self.projections)%3, 1)

@@ -8,7 +8,7 @@ import random
 import string
 import shutil
 from .feature_extractor import FeatureExtractor
-from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay
+from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay, layer_slice_indices
 from napari import Viewer, layers
 from typing import Union, Optional
 import glob
@@ -40,8 +40,9 @@ class FeatureManager:
             self.init_file(layer, dims_displayed)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            idx = tuple(layer._slice_indices[i] for i in dims_not_displayed)
-        if any(type(id_) is int and id_ < 0 or id_ >= layer.data.shape[dim] for dim, id_ in enumerate(idx)):
+            slice_indices = layer_slice_indices(layer)
+            idx = tuple(slice_indices[i] for i in dims_not_displayed)
+        if any(type(id_) is int and id_ < 0 or id_ >= layer.data.shape[dim] for dim, id_ in zip(dims_not_displayed, idx)):
             return None, None
         # if not block and not self.slices_calculated[layer][dims_displayed][idx]:
         if not block and not self.feature_extractor.done_mask[idx]:
@@ -51,7 +52,7 @@ class FeatureManager:
             pass
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            idx = tuple(layer._slice_indices)
+            idx = slice_indices
         return self.memmaps[0][idx], self.memmaps[1][idx]
 
     def clear_memmap(self):
@@ -109,7 +110,7 @@ class FeatureManager:
     def start_feature_calculation(self, layer):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            slice_indices = layer._slice_indices
+            slice_indices = layer_slice_indices(layer)
             dims_not_displayed = layer_dims_not_displayed(layer)
         self.feature_extractor.start_jobs(layer.data, self.memmaps, slice_indices, dims_not_displayed, layer.rgb)
 
