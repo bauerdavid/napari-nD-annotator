@@ -1,7 +1,6 @@
 import napari
 import numpy as np
 from napari import layers
-from napari.utils.misc import reorder_after_dim_reduction
 from packaging import version
 import warnings
 
@@ -40,6 +39,9 @@ else:
 
 
 if NAPARI_VERSION >= version.parse("0.5.0"):
+    from napari.utils.misc import reorder_after_dim_reduction
+
+
     def layer_slice_indices(layer: layers.Layer):
         return tuple(slice(None) if np.isnan(p) else int(p) for p in layer._data_slice.point)
 
