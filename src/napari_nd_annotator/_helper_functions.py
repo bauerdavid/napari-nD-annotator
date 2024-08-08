@@ -54,9 +54,15 @@ if NAPARI_VERSION >= version.parse("0.5.0"):
             return (*order, max(order) + 1)
 
         return order
+
+    def layer_dims_order(layer: layers.Layer):
+        return [*layer_dims_not_displayed(layer), *layer_dims_displayed(layer)]
 else:
     def layer_slice_indices(layer: layers.Layer):
         return layer._slice_indices
 
     def layer_get_order(layer: layers.Layer):
         return layer._get_order()
+
+    def layer_dims_order(layer: layers.Layer):
+        return layer._dims_order
