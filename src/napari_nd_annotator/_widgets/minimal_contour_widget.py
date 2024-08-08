@@ -41,7 +41,8 @@ from ._utils.callbacks import (
     decrement_selected_label,
     LOCK_CHAR
 )
-from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, layer_get_order
+from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, layer_get_order, layer_slice_indices, \
+    layer_dims_order
 from ..minimal_contour import MinimalContourCalculator, FeatureManager
 import numpy as np
 from napari.layers import Image, Labels
@@ -776,11 +777,16 @@ class MinimalContourWidget(WidgetWithLayerList):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             idx = np.nonzero(mask)
-            self.prev_vals[self.labels.layer] = self.labels.layer._slice.image.raw[mask]
-            change_idx = list(self.viewer.dims.current_step)
-            for i in range(2):
-                change_idx[self.viewer.dims.displayed[i]] = idx[i]
-
+            labels_layer = self.labels.layer
+            self.prev_vals[labels_layer] = self.labels.layer._slice.image.raw[mask]
+            ndim = labels_layer.data.ndim
+            change_idx = np.zeros((ndim, len(idx[0])), dtype=int)
+            order = layer_dims_order(labels_layer)
+            dims_displayed = layer_dims_displayed(labels_layer)
+            slice_indices = layer_slice_indices(labels_layer)
+            for i, d in enumerate(order):
+                change_idx[d] = idx[i-ndim+2] if d in dims_displayed else slice_indices[d]
+            # change_idx = [idx[i] if i in dims_displayed else slice_indices[i] for i in range(ndim)]
             self.change_idx[self.labels.layer] = tuple(change_idx)
             self.labels.layer._slice.image.raw[mask] = self.labels.layer.selected_label
         self.labels.layer.events.data()
