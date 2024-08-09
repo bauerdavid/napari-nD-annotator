@@ -13,7 +13,7 @@ import math
 from packaging import version
 import warnings
 
-from .. import NAPARI_VERSION
+from .._napari_version import NAPARI_VERSION
 
 if NAPARI_VERSION >= version.parse("0.4.15"):
     try:

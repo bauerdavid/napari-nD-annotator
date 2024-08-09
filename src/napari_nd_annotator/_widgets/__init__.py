@@ -6,7 +6,7 @@ from .minimal_surface_widget import MinimalSurfaceWidget
 import napari
 from packaging import version
 
-from .. import NAPARI_VERSION
+from .._napari_version import NAPARI_VERSION
 
 if NAPARI_VERSION >= version.parse("0.4.15"):
     from .object_list import ListWidgetBB

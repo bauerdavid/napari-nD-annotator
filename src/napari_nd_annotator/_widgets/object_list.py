@@ -17,7 +17,7 @@ from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
 from .projections import SliceDisplayWidget
-from .. import NAPARI_VERSION
+from .._napari_version import NAPARI_VERSION
 
 if NAPARI_VERSION >= version.parse("0.4.15"):
     try:
