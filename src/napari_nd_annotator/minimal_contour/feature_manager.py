@@ -133,4 +133,4 @@ class FeatureManager:
             try:
                 shutil.rmtree(fold)
             except PermissionError:
-                pass  # No permission to remove folders with a different owner
+                print(f"Couldn't remove temp folder {fold}, skipping.")
