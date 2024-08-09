@@ -522,7 +522,7 @@ class MinimalContourWidget(WidgetWithLayerList):
         try:
             if self.image.layer is None or self.anchor_points is None:
                 return
-            if layer.mode != Mode.ADD:
+            if layer.mode != Mode.ADD or self.viewer.dims.ndisplay == 3:
                 return
             self.point_triangle[1] = np.asarray(event.position)[[i for i in layer_dims_displayed(self.anchor_points)]]
             displayed_shape = np.asarray(self.image_data.shape)[:2]
@@ -653,6 +653,7 @@ class MinimalContourWidget(WidgetWithLayerList):
             self.feature_editor.features = None
             return
         if self.viewer.dims.ndisplay == 3:
+            self.anchor_points.editable = False
             return
         if not image_layer.visible:
             image_layer.set_view_slice()
