@@ -232,12 +232,9 @@ class AnnotatorWidget(PersistentWidget):
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
         dims_displayed = layer_dims_displayed(layer)
-        image_coords = tuple(coordinates[i] for i in dims_displayed)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            slice_dims = layer_slice_indices(layer)
-            current_draw = np.zeros_like(layer.data[slice_dims], bool)
-            current_draw = np.transpose(current_draw, layer_get_order(layer)[:2])
+        image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
+        slice_dims = layer_slice_indices(layer)
+        current_draw = np.zeros_like(layer.data[slice_dims], bool)
         start_x, start_y = prev_x, prev_y = image_coords
         cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
         cx = np.clip(cx, 0, current_draw.shape[0] - 1)
@@ -247,7 +244,7 @@ class AnnotatorWidget(PersistentWidget):
         while event.type == 'mouse_move':
             coordinates = layer.world_to_data(event.position)
             coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-            image_coords = tuple(coordinates[i] for i in dims_displayed)
+            image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
             AnnotatorWidget.draw_line(prev_x, prev_y, image_coords[-2], image_coords[-1], layer.brush_size, current_draw)
             prev_x, prev_y = image_coords
             yield
@@ -258,7 +255,7 @@ class AnnotatorWidget(PersistentWidget):
         coordinates = layer.world_to_data(event.position)
         coordinates = tuple(
             max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        image_coords = tuple(coordinates[i] for i in dims_displayed)
+        image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
         prev_x, prev_y = image_coords
         AnnotatorWidget.draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
         cx, cy = draw.disk((prev_x, prev_y), layer.brush_size/2)
@@ -268,9 +265,6 @@ class AnnotatorWidget(PersistentWidget):
         binary_fill_holes(current_draw, output=current_draw, structure=s)
         if layer.preserve_labels:
             current_draw = current_draw & (layer.data[slice_dims] == 0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            current_draw = np.transpose(current_draw, layer_get_order(layer)[:2])
         self.drawn_region_history[self.history_idx] = current_draw
         self.drawn_slice_history[self.history_idx] = slice_dims
         self.values_history[self.history_idx] = layer.data[slice_dims][current_draw]
