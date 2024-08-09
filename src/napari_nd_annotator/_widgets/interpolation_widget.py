@@ -13,7 +13,7 @@ from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
-from napari_nd_annotator._widgets._utils.persistence import PersistentWidget
+from ._utils.persistence import PersistentWidget
 from .._helper_functions import layer_slice_indices
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread

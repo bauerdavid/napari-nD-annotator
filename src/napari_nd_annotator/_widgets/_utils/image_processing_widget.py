@@ -11,7 +11,7 @@ import skimage
 import warnings
 import keyword
 
-from napari_nd_annotator._widgets._utils import ProgressWidget
+from . import ProgressWidget
 
 
 def execute_script(script, image, other_locals=None):

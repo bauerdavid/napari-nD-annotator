@@ -37,7 +37,7 @@ from ._utils.callbacks import (
     LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
-from napari_nd_annotator._widgets._utils.persistence import PersistentWidget
+from ._utils.persistence import PersistentWidget
 from .._helper_functions import layer_ndisplay, layer_dims_displayed, layer_slice_indices, layer_get_order
 
 
