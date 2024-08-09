@@ -1,7 +1,9 @@
 import os
+import sys
 import tempfile
 import atexit
 import warnings
+import traceback
 
 import numpy as np
 import random
@@ -57,8 +59,10 @@ class FeatureManager:
 
     def clear_memmap(self):
         while len(self.memmaps) > 0:
-            # TODO check if it is safe to close
-            del self.memmaps[0]
+            try:
+                del self.memmaps[0]
+            except:
+                traceback.print_exc(file=sys.stdout)
 
     def remove_features(self, layer):
         if self.layer == layer:
@@ -119,14 +123,7 @@ class FeatureManager:
         return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
 
     def clean(self):
-        try:
-            del self.memmaps[-1]
-        except:
-            pass
-        try:
-            del self.memmaps[-1]
-        except:
-            pass
+        self.clear_memmap()
         if os.path.exists(self.temp_folder):
             shutil.rmtree(self.temp_folder)
 
@@ -134,4 +131,7 @@ class FeatureManager:
         temp_dir = tempfile.gettempdir()
         temp_folders = glob.glob(os.path.join(temp_dir, "%s*%s" % (tempfile.gettempprefix(), TEMP_SUFFIX)))
         for fold in temp_folders:
-            shutil.rmtree(fold)
+            try:
+                shutil.rmtree(fold)
+            except PermissionError:
+                print(f"Couldn't remove temp folder {fold}, skipping.")
