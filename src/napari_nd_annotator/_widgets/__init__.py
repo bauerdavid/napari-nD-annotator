@@ -5,11 +5,14 @@ from .minimal_surface_widget import MinimalSurfaceWidget
 
 import napari
 from packaging import version
-if version.parse(napari.__version__) >= version.parse("0.4.15"):
+
+from .. import NAPARI_VERSION
+
+if NAPARI_VERSION >= version.parse("0.4.15"):
     from .object_list import ListWidgetBB
     __all__ = ["InterpolationWidget", "SliceDisplayWidget", "AnnotatorWidget", "MinimalSurfaceWidget", "ListWidgetBB"]
 else:
-    if version.parse(napari.__version__) <= version.parse("0.4.12"):
+    if NAPARI_VERSION <= version.parse("0.4.12"):
         from napari.layers import Layer
         def data_to_world(self, position):
             """Convert from data coordinates to world coordinates.

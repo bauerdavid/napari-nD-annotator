@@ -17,7 +17,9 @@ from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
 from .projections import SliceDisplayWidget
-if version.parse(napari.__version__) >= version.parse("0.4.15"):
+from .. import NAPARI_VERSION
+
+if NAPARI_VERSION >= version.parse("0.4.15"):
     try:
         from napari_bbox import BoundingBoxLayer
     except ImportError:
@@ -453,7 +455,7 @@ if BoundingBoxLayer:
             if len(layer.data)>len(previous_data):
                 self.bounding_box_layer.features["label"].iat[-1] = self.next_index()
                 text = dict(layer.text)
-                if napari.__version__ == "0.4.15":
+                if NAPARI_VERSION == "0.4.15":
                     del text["values"]
                 text["text"] = "{label:d}"
                 layer.text = text

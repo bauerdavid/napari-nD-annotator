@@ -13,7 +13,9 @@ import math
 from packaging import version
 import warnings
 
-if version.parse(napari.__version__) >= version.parse("0.4.15"):
+from .. import NAPARI_VERSION
+
+if NAPARI_VERSION >= version.parse("0.4.15"):
     try:
         from napari_bbox import BoundingBoxLayer
     except ImportError:
