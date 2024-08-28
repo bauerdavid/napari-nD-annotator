@@ -999,6 +999,8 @@ if minimal_surface is not None:
             self.on_labels_changed()
 
         def on_labels_changed(self, idx=None):
+            if self._prev_labels == self.labels.layer:
+                return
             self.slice_widget.clipping_widget.remove_layer(self._prev_labels)
             self.slice_widget.clipping_widget.add_layer(self.labels.layer)
             self._prev_labels = self.labels.layer
