@@ -66,8 +66,8 @@ class AnnotatorWidget(PersistentWidget):
         layout.addWidget(self.fill_objects_checkbox)
 
         tabs_widget = QTabWidget(self)
-        self.interpolation_widget = InterpolationWidget(viewer, self)
-        tabs_widget.addTab(self.interpolation_widget, "Interpolation")
+        self.interpolation_widget = InterpolationWidget(viewer)
+        tabs_widget.addTab(self.interpolation_widget.native, "Interpolation")
 
         self.minimal_contour_widget = MinimalContourWidget(viewer, self)
         tabs_widget.addTab(self.minimal_contour_widget, "Minimal Contour")
