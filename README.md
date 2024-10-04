@@ -51,8 +51,6 @@ You can also install it together with this plugin:
 ```
 pip install napari-nD-annotator[bbox]
 ```
-> [!WARNING]
-> The <code>[napari-bbox]</code> plugin currently works only with `napari<=0.4.17`. Do not install it with newer versions.
 
 #### Minimal surface
 To use the minimal surface method, you will need the <code>[minimal-surface]</code> Python package as well. Please install it using [pip]:
