@@ -1,21 +1,20 @@
+
 import time
 
 import napari
 import numpy as np
 import cv2
-from magicclass import magicclass, field, vfield, bind_key
-from napari import Viewer
+from magicclass import magicclass, field, vfield, bind_key, MagicTemplate
 from napari.layers import Labels
+
 from scipy.interpolate import interp1d
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QLabel, QSpinBox, QPushButton, QComboBox
 from qtpy.QtCore import QThread, QObject, Signal
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
-from ._utils.persistence import PersistentWidget
-from .._helper_functions import layer_slice_indices, layer_dims_not_displayed
+from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
@@ -187,7 +186,7 @@ class InterpolationWorker(QObject):
 
 
 @magicclass(name="Interpolation")
-class InterpolationWidget:
+class InterpolationWidget(MagicTemplate):
     method = vfield(str,
                     widget_type="ComboBox",
                     options={
@@ -200,6 +199,7 @@ class InterpolationWidget:
                     )
     n_contour_points = vfield(int,
                               widget_type="Slider",
+                              name="Contour resolution",
                               options={
                                   "min": 10,
                                   "max": 1000,
@@ -213,10 +213,9 @@ class InterpolationWidget:
                                     "tooltip": f"Maximum number of iterations for {RPSV}. Can be fewer if points converge."
                                 })
 
-    def __init__(self, viewer: napari.Viewer):
+    def __init__(self):
         print("__init__")
         self.progress_dialog = ProgressWidget(self.native, message="Interpolating slices...")
-        self._active_labels_layer = None
         self.interpolation_thread = QThread()
         self.interpolation_worker = InterpolationWorker()
         self.interpolation_worker.moveToThread(self.interpolation_thread)
@@ -226,18 +225,22 @@ class InterpolationWidget:
         self.interpolation_worker.progress.connect(self.progress_dialog.setValue)
         self.interpolation_thread.started.connect(self.interpolation_worker.run)
         self.interpolation_worker.done.connect(self._enable_interpolation_button)
-        self.viewer = viewer
-        viewer.dims.events.order.connect(self._on_order_change)
-        viewer.dims.events.ndisplay.connect(
-            lambda _: self.interpolate_button.options.update(enabled=viewer.dims.ndisplay == 2))
-        viewer.layers.selection.events.active.connect(self._on_active_layer_changed)
         # layout.addStretch() -> how?
 
     def __post_init__(self):
-        self._on_active_layer_changed()
-        self._on_order_change()
         self._on_method_changed(self.method)
         self.native.layout().addStretch()
+
+    def _initialize(self, viewer: napari.Viewer):
+        self._viewer = viewer
+        self._on_active_layer_changed()
+        self.viewer.dims.events.ndisplay.connect(
+            lambda _: self.interpolate_button.options.update(enabled=self.viewer.dims.ndisplay == 2))
+        self.viewer.layers.selection.events.active.connect(self._on_active_layer_changed)
+
+    @property
+    def viewer(self):
+        return self._viewer
 
     def _prepare_interpolation_worker(self):
         self.interpolation_worker.dimension = self.dimension
@@ -260,20 +263,22 @@ class InterpolationWidget:
     def _on_method_changed(self, new_method):
         self.rpsv_max_iterations.visible = new_method == RPSV
 
-    def _on_order_change(self, event=None):
-        if self.active_labels_layer is None or len(self.viewer.dims.not_displayed) == 0:
-            return
-        new_dim = self.viewer.dims.not_displayed[0]
-
     def _set_labels(self, data):
         if data is None:
             return
         update_mask = data > 0
+        update_vals = data[update_mask]
+        update_idx = np.nonzero(update_mask)
+        update_idx = _coerce_indices_for_vectorization(self.active_labels_layer.data, update_idx)
         if self.active_labels_layer.preserve_labels:
             update_mask &= self.active_labels_layer.data == 0
-        self.active_labels_layer.data[update_mask] = data[update_mask]
-        self.active_labels_layer.events.data()
-        self.active_labels_layer.refresh()
+        if hasattr(self.active_labels_layer, "data_setitem"):
+            self.active_labels_layer.data_setitem(update_idx, update_vals)
+        else:
+            self.active_labels_layer._save_history((update_idx, self.active_labels_layer.data[update_mask], update_vals))
+            self.active_labels_layer.data[update_mask] = update_vals
+            self.active_labels_layer.events.data()
+            self.active_labels_layer.refresh()
 
     @property
     def active_labels_layer(self) -> Labels | None:
