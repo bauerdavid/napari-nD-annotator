@@ -6,6 +6,38 @@ import warnings
 
 from ._napari_version import NAPARI_VERSION
 
+try:
+    from napari.layers.labels.labels import _coerce_indices_for_vectorization
+except ImportError:
+    import numpy.typing as npt
+    import inspect
+
+
+    def _arraylike_short_names(obj):
+        """Yield all the short names of an array-like or its class."""
+        type_ = type(obj) if not inspect.isclass(obj) else obj
+        for base in type_.mro():
+            yield f'{base.__module__.split(".", maxsplit=1)[0]}.{base.__name__}'
+
+
+    def _is_array_type(array: npt.ArrayLike, type_name: str) -> bool:
+        return type_name in _arraylike_short_names(array)
+
+
+    def _coerce_indices_for_vectorization(array, indices: list) -> tuple:
+        """Coerces indices so that they can be used for vectorized indexing in the given data array."""
+        if _is_array_type(array, 'xarray.DataArray'):
+            # Fix indexing for xarray if necessary
+            # See http://xarray.pydata.org/en/stable/indexing.html#vectorized-indexing
+            # for difference from indexing numpy
+            try:
+                import xarray as xr
+            except ModuleNotFoundError:
+                pass
+            else:
+                return tuple(xr.DataArray(i) for i in indices)
+        return tuple(indices)
+
 
 if NAPARI_VERSION < "0.4.18":
     def layer_dims_displayed(layer: layers.Layer):
