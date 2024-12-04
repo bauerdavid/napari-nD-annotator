@@ -102,7 +102,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.cibw_arch }}-${{ strategy.job-index }}
+          name: wheels-macos-${{ matrix.cibw_arch }}
           path: ./dist/*.whl
 
   build_wheels_linux:
@@ -122,7 +122,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.cibw_arch }}-${{ strategy.job-index }}
+          name: wheels-linux-${{ matrix.cibw_arch }}
           path: ./wheelhouse/*.whl
 
   build_wheels_windows:
@@ -142,7 +142,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows-${{ matrix.cibw_arch }}-${{ strategy.job-index }}
+          name: wheels-windows-${{ matrix.cibw_arch }}
           path: ./wheelhouse/*.whl
 
   build_sdist:
