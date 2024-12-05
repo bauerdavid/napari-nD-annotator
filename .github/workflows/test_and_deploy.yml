@@ -17,40 +17,93 @@ on:
   workflow_dispatch:
 
 jobs:
+# the build_wheels_macos job is from scikit-image under BSD-3-Clause license:
+# https://github.com/scikit-image/scikit-image/blob/main/.github/workflows/wheels_recipe.yml
   build_wheels_macos:
-    name: Build wheels on MacOS
-    runs-on: macos-11
+    name: Build wheels on ${{ matrix.os }} ${{ matrix.cibw_arch }}
+    runs-on: ${{ matrix.os }}
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
+      matrix:
+        os: [macos-13]
+        # TODO: add "universal2" once a universal2 libomp is available
+        cibw_arch: ["x86_64", "arm64"]
+        
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup OpenMP
-        run: brew install libomp
-        env:
-          CC: /usr/bin/clang
-          CXX: /usr/bin/clang++
-          CPPFLAGS: "-Xpreprocessor -fopenmp"
-          CFLAGS: "-Wno-implicit-function-declaration -I/usr/local/opt/libomp/include"
-          CXXFLAGS: "-I/usr/local/opt/libomp/include"
-          LDFLAGS: "-Wl,-rpath,/usr/local/opt/libomp/lib -L/usr/local/opt/libomp/lib -lomp"
-
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.16.5
-        env:
-          CIBW_SKIP: "pp*"
-          CIBW_CONFIG_SETTINGS: "--only-binary=scipy"
-          CC: /usr/bin/clang
-          CXX: /usr/bin/clang++
-          CPPFLAGS: "-Xpreprocessor -fopenmp"
-          CFLAGS: "-Wno-implicit-function-declaration -I/usr/local/opt/libomp/include"
-          CXXFLAGS: "-I/usr/local/opt/libomp/include"
-          LDFLAGS: "-Wl,-rpath,/usr/local/opt/libomp/lib -L/usr/local/opt/libomp/lib -lomp"
-
-      - uses: actions/upload-artifact@v3
+      - uses: actions/checkout@v4
         with:
-          path: ./wheelhouse/*.whl
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        name: Install Python
+        with:
+          python-version: "3.12"
+
+      - name: Install cibuildwheel
+        run: |
+          python -m pip install cibuildwheel
+
+      # Needed to install a specific libomp version later
+      - name: Setup Conda
+        uses: conda-incubator/setup-miniconda@d2e6a045a86077fb6cad6f5adf368e9076ddaa8d # v3.1.0
+        with:
+          python-version: "3.12"
+          channels: conda-forge
+          channel-priority: true
+          miniforge-variant: Miniforge3
+          miniforge-version: latest
+
+      - name: Build wheels for CPython Mac OS
+        run: |
+          # Make sure to use a libomp version binary compatible with the oldest
+          # supported version of the macos SDK as libomp will be vendored into
+          # the scikit-image wheels for macos. The list of binaries are in
+          # https://packages.macports.org/libomp/.  Currently, the oldest
+          # supported macos version is: High Sierra / 10.13. When upgrading
+          # this, be sure to update the MACOSX_DEPLOYMENT_TARGET environment
+          # variable accordingly. Note that Darwin_17 == High Sierra / 10.13.
+          #
+          # We need to set both MACOS_DEPLOYMENT_TARGET and MACOSX_DEPLOYMENT_TARGET
+          # until there is a new release with this commit:
+          # https://github.com/mesonbuild/meson-python/pull/309
+          if [[ "$CIBW_ARCHS_MACOS" == arm64 ]]; then
+              # SciPy requires 12.0 on arm to prevent kernel panics
+              # https://github.com/scipy/scipy/issues/14688
+              # so being conservative, we just do the same here
+              export MACOSX_DEPLOYMENT_TARGET=12.0
+              export MACOS_DEPLOYMENT_TARGET=12.0
+              OPENMP_URL="https://anaconda.org/conda-forge/llvm-openmp/11.1.0/download/osx-arm64/llvm-openmp-11.1.0-hf3c4609_1.tar.bz2"
+          else
+              export MACOSX_DEPLOYMENT_TARGET=10.9
+              export MACOS_DEPLOYMENT_TARGET=10.9
+              OPENMP_URL="https://anaconda.org/conda-forge/llvm-openmp/11.1.0/download/osx-64/llvm-openmp-11.1.0-hda6cdc1_1.tar.bz2"
+          fi
+          echo MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}
+          echo MACOS_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET}
+
+          # use conda to install llvm-openmp
+          # Note that we do NOT activate the conda environment, we just add the
+          # library install path to CFLAGS/CXXFLAGS/LDFLAGS below.
+          conda create -n build $OPENMP_URL
+          PREFIX="/Users/runner/miniconda3/envs/build"
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
+          export CPPFLAGS="$CPPFLAGS -Xpreprocessor -fopenmp"
+          export CFLAGS="$CFLAGS -Wno-implicit-function-declaration -I$PREFIX/include"
+          export CXXFLAGS="$CXXFLAGS -I$PREFIX/include"
+          export LDFLAGS="$LDFLAGS -Wl,-S -Wl,-rpath,$PREFIX/lib -L$PREFIX/lib -lomp"
+
+          python -m cibuildwheel --output-dir dist
+        env:
+          CIBW_ARCHS_MACOS: ${{ matrix.cibw_arch }}
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
+          CIBW_TEST_SKIP: "*-macosx_arm64"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.cibw_arch }}
+          path: ./dist/*.whl
 
   build_wheels_linux:
     name: Build wheels on Linux
@@ -67,8 +120,9 @@ jobs:
           CIBW_SKIP: "pp* cp310-*i686 *musllinux* *s390x* *ppc64le*"
           CIBW_CONFIG_SETTINGS: "--only-binary=scipy"
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: wheels-linux-${{ matrix.cibw_arch }}
           path: ./wheelhouse/*.whl
 
   build_wheels_windows:
@@ -86,8 +140,9 @@ jobs:
           CIBW_SKIP: "cp310-win32 pp*"
           CIBW_CONFIG_SETTINGS: "--only-binary=scipy"
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: wheels-windows-${{ matrix.cibw_arch }}
           path: ./wheelhouse/*.whl
 
   build_sdist:
@@ -100,8 +155,9 @@ jobs:
       - name: Build sdist
         run: pipx run build --sdist
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: sdist
           path: dist/*.tar.gz
 
   upload_pypi:
@@ -112,11 +168,17 @@ jobs:
     # alternatively, to publish when a GitHub Release is created, use the following rule:
     # if: github.event_name == 'release' && github.event.action == 'published'
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
-          # unpacks default artifact into dist/
-          # if `name: artifact` is omitted, the action will create extra parent dir
-          name: artifact
+          # unpacks all the wheels into dist/
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+          
+      - uses: actions/download-artifact@v4
+        with:
+          # ensure sdist is also added
+          name: sdist
           path: dist
 
       - uses: pypa/gh-action-pypi-publish@v1.5.0
