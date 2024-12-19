@@ -126,6 +126,9 @@ class CollapsibleContainerGroup:
                     c2._widget._expand_btn.setChecked(False)
         return handler
 
+    def __iter__(self):
+        return iter(self._container_list)
+
 def correct_container_size(container):
     if not container.collapsed:
         container.collapsed = True
