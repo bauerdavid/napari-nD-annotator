@@ -70,6 +70,8 @@ FEATURE_KEYS = [GRADIENT, CUSTOM]
 #     CUSTOM: INTENSITY_BASED
 # }
 
+CAD_BLURRING = "Edge preserving" #"Curvature Anisotropic Diffusion"
+GAUSSIAN_BLURRING = "Gaussian"
 
 def pts_2_bb(p1, p2, image_size, scale=1.):
     center = (p1 + p2) / 2
@@ -206,6 +208,12 @@ class EstimationWorker(QObject):
         self.manual_annotation_done = False
         self.z_scale = None
         self.use_gradient = None
+
+        self.prev_ndisplay = None
+        self.prev_camera_center = None
+        self.prev_camera_zoom = None
+        self.prev_camera_angles = None
+
         #create annotation dialogs
         self.manual_annotation_dialog = QWidget()
         layout = QVBoxLayout()
@@ -250,17 +258,26 @@ class EstimationWorker(QObject):
             self.viewer.camera.zoom = np.min(np.divide(self.viewer._canvas_size, visible_extent.max(0)-visible_extent.min(0)))*0.95
         self.slice_labels_layer.brush_size = 1
         self.slice_labels_layer.mode = "paint"
+        self.minimal_surface_widget.call_button.enabled = True
         self.init_slice_annotation_fun()
 
     def finish_slice_annotation(self):
         self.finish_slice_annotation_fun()
-        self.slice_annotation = self.slice_labels_layer.data > 0
-        self.viewer.layers.remove(self.slice_image_layer)
-        self.viewer.layers.remove(self.slice_labels_layer)
-        self.viewer.dims.ndisplay = self.prev_ndisplay
-        self.viewer.camera.center = self.prev_camera_center
-        self.viewer.camera.zoom = self.prev_camera_zoom
-        self.viewer.camera.angles = self.prev_camera_angles
+        self.minimal_surface_widget.call_button.enabled = False
+        if self.slice_labels_layer is not None:
+            self.slice_annotation = self.slice_labels_layer.data > 0
+        if self.slice_image_layer in self.viewer.layers:
+            self.viewer.layers.remove(self.slice_image_layer)
+        if self.slice_labels_layer in self.viewer.layers:
+            self.viewer.layers.remove(self.slice_labels_layer)
+        if self.prev_ndisplay is not None:
+            self.viewer.dims.ndisplay = self.prev_ndisplay
+        if self.prev_ndisplay is not None:
+            self.viewer.camera.center = self.prev_camera_center
+        if self.prev_camera_zoom is not None:
+            self.viewer.camera.zoom = self.prev_camera_zoom
+        if self.prev_camera_angles is not None:
+            self.viewer.camera.angles = self.prev_camera_angles
         self.slice_labels_layer = None
         self.slice_image_layer = None
 
@@ -414,9 +431,11 @@ class EstimationWorker(QObject):
             self.stop_requested = True
             self.minimal_surface_widget.call_button.text = "Stopping..."
             self.finish_slice_annotation()
+            self.minimal_surface_widget.call_button.enabled = True
         print("connecting stop")
         self.minimal_surface_widget.call_button.clicked.connect(stop)
         self.minimal_surface_widget.call_button.text = "Stop"
+        self.minimal_surface_widget.call_button.enabled = False
 
         try:
             start = time.time()
@@ -507,6 +526,7 @@ class EstimationWorker(QObject):
             print("connecting _start_estimation")
             self.minimal_surface_widget.call_button.clicked.connect(self.minimal_surface_widget._start_estimation)
             self.minimal_surface_widget.call_button.text = "Run"
+            self.minimal_surface_widget.call_button.enabled = True
 
     def data_initializer(self, name, selected_idx=None, layer_args=None):
         if layer_args is None:
@@ -550,20 +570,26 @@ class EstimationWorker(QObject):
             sleep(0.1)
             QApplication.processEvents()
         self.done_pressed = False
+        if self.slice_annotation is None:
+            raise ValueError("Slice not calculated")
         mask = self.slice_annotation.astype(float) if self.slice_annotation is not None else None
         self.slice_annotation = None
         return mask
 
 
 class SliderWithCheckbox(FreeWidget):
-    def __init__(self, state=False, value=None):
+    def __init__(self, state=False, value=None, min=None, max=None, enabled=True):
         super().__init__("horizontal")
         self.wdt = QWidget()
         layout = QVBoxLayout()
         self._checkbox = QCheckBox()
-        self._checkbox.setChecked(state)
         layout.addWidget(self._checkbox)
         self._slider = QSymmetricDoubleRangeSlider(Qt.Horizontal)
+        if min is not None:
+            self.min = min
+        if max is not None:
+            self.max = max
+        self.enabled = enabled
         if value is not None:
             self._slider.setValue(value)
         layout.addWidget(self._slider)
@@ -571,8 +597,7 @@ class SliderWithCheckbox(FreeWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.wdt.setLayout(layout)
         self.set_widget(self.wdt)
-        self._checkbox.clicked.connect(self._slider.setEnabled)
-        self._slider.setEnabled(self.checked)
+        self.checked = state
 
     @property
     def checked(self):
@@ -580,7 +605,10 @@ class SliderWithCheckbox(FreeWidget):
 
     @checked.setter
     def checked(self, new_value):
+        if new_value == self._checkbox.isChecked():
+            return
         self._checkbox.setChecked(new_value)
+        self._slider.setEnabled(new_value)
         self.state_changed.emit(self.checked)
 
     @property
@@ -697,8 +725,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
         @dim_spinbox.connect
         def _on_dim_changed(self, new_dim):
-            self._update_slice()
             self._update_max_position()
+            self._update_slice()
             self._update_widgets_state()
 
         def _update_max_position(self):
@@ -947,6 +975,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
             self._update_clipping_planes()
 
         def _update_ghost_layers(self):
+            if self.viewer is None:
+                return
             for layer in self._layers:
                 ghost = self._ghost_layers[layer]
                 if ghost is None and self.n_checked > 0 and self.viewer.dims.ndisplay == 3:
@@ -987,6 +1017,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         def _update_ranges(self):
             if not self.layers:
                 return
+            print("layers:", self.layers)
             nan = np.finfo(float).max
             negnan = np.finfo(float).min
 
@@ -998,9 +1029,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
                 extent[0] = np.minimum(extent[0], layer_extent[0])
                 extent[1] = np.maximum(extent[1], layer_extent[1])
             for s_idx, slider in enumerate(self.sliders):
-                slider.checked = not np.any(np.equal(extent[:, s_idx], np.asarray([nan, negnan])))
+                slider.checked = slider.checked or not np.any(np.equal(extent[:, s_idx], np.asarray([nan, negnan])))
                 slider.min = extent[0, s_idx]
-                slider.max = extent[1, s_idx]
+                slider.max = max(slider.min+1, extent[1, s_idx])
             self._update_clipping_planes()
 
         def _initialize_clipping_planes(self):
@@ -1031,7 +1062,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
                 layer.experimental_clipping_planes = new_clipping_planes
 
     used_feature_combobox = field(widget_type="ComboBox", location=ImageFeaturesWidget).with_choices(FEATURE_KEYS)
-    feature_editor = field(ScriptExecuteWidget, location=ImageFeaturesWidget)
+    feature_editor = field(ScriptExecuteWidget, location=ImageFeaturesWidget).with_options(editor_key="minimal_surface_features")
     alpha = vfield(float, label="\u03B1", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(min=0, max=1, value=0.01)
     beta = vfield(float, label="\u03B2", location=ImageFeaturesWidget).with_options(min=.01, max=500., value=5)
     iterations = vfield(int, widget_type="Slider", location=ImageFeaturesWidget).with_options(min=1, max=10000, value=10000)
@@ -1040,7 +1071,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     blur_image_checkbox = field(bool, label="Blur image", location=BlurringWidget)
     blurring_type_combobox = (field(str, widget_type="ComboBox", location=BlurringWidget)
-                              .with_choices(["Gaussian", "Curvature Anisotropic Diffusion"]))
+                              .with_choices([GAUSSIAN_BLURRING, CAD_BLURRING]))
     blur_sigma_slider = field(float, widget_type="FloatSlider", location=BlurringWidget).with_options(max=20)
     conductance_spinbox = field(float, location=BlurringWidget).with_options(max=100, value=9)
     cad_iterations_spinbox = field(int, label="Iterations", location=BlurringWidget).with_options(min=1, max=20, value=5)
@@ -1076,15 +1107,22 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def __post_init__(self):
         self.call_button.clicked.connect(self._start_estimation)
+        print(self.native.children()[1].sizeHint().width())
+        print(self.native.children()[1].verticalScrollBar().sizeHint().width())
+        print(self.native.children()[1].widget().layout().getContentsMargins()[2])
+        self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
+                                    + self.native.children()[1].verticalScrollBar().sizeHint().width()
+                                    + 2 * self.native.children()[1].widget().layout().getContentsMargins()[2])
         for container in [self.ImageFeaturesWidget, self.BlurringWidget, self.SliceAnnotationWidget]:
             container._widget._expand_btn.setChecked(False)
-            container._widget._inner_qwidget.setStyleSheet("padding: 0 10 0 10")
+            # container._widget._inner_qwidget.setStyleSheet("padding: 0 10 0 10")
             container.collapsed = True
             self._collapsible_group.addItem(container)
         self._on_feature_changed(self.used_feature)
         self.try_blurring_button.native.setCheckable(True)
         self._on_blur_checked(self.blur_image_checkbox.value)
         self._on_labels_changed()
+        self._ensure_3d_image()
 
     def __magicclass_serialize__(self):
         d = serialize(self)
@@ -1153,9 +1191,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.viewer.layers.events.moved.connect(keep_layer_on_top(self.points_layer))
         self.ImageSliceWidget.viewer = self.viewer
         self.ImageSliceWidget.clipping_widget = self.ClippingWidget
-        self.ImageSliceWidget.layer = self.image_layer
+        self._ensure_3d_image()
+        self._set_slice_widget_image()
+        self._update_custom_feature_image()
         self.ImageSliceWidget.add_mouse_drag_callback(self._on_slice_clicked)
-
         self.ClippingWidget.viewer = self.viewer
 
     @set_design(text="Try", location=BlurringWidget,)
@@ -1207,17 +1246,16 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def _run_feature_extractor(self, image):
         self.feature_editor.variables["image"] = image
-        features = [None]
+        res = dict()
 
         def store_features(result_dict):
-            print("storing features")
-            features[0] = result_dict["features"]
+            res.update(result_dict)
         self.feature_editor.script_worker.done.connect(store_features, Qt.DirectConnection)
         self.feature_editor.Run()
-        while features[0] is None:
-            pass
-        print(features)
-        return features[0]
+        self.feature_editor.script_thread.wait()
+        if "exception" in res:
+            raise res["exception"]
+        return res["features"]
 
     # def hook_callbacks(self, estimator, stage, layer_name, layer_params, data_idx=None):
     #
@@ -1273,9 +1311,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     @blurring_type_combobox.connect
     def _on_blur_selection(self, blur_method):
-        self.blur_sigma_slider.visible = blur_method == "Gaussian"
-        self.conductance_spinbox.visible = blur_method == "Curvature Anisotropic Diffusion"
-        self.cad_iterations_spinbox.visible = blur_method == "Curvature Anisotropic Diffusion"
+        self.blur_sigma_slider.visible = blur_method == GAUSSIAN_BLURRING
+        self.conductance_spinbox.visible = blur_method == CAD_BLURRING
+        self.cad_iterations_spinbox.visible = blur_method == CAD_BLURRING
         correct_container_size(self.BlurringWidget)
 
     @blur_image_checkbox.connect
@@ -1286,9 +1324,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def _blur_image(self, image):
         blur_type = self.blurring_type
-        if blur_type == "Gaussian":
+        if blur_type == GAUSSIAN_BLURRING:
             return gaussian_filter(image, self.blur_sigma_slider.value)
-        elif blur_type == "Curvature Anisotropic Diffusion":
+        elif blur_type == CAD_BLURRING:
             sitk_image = sitk.GetImageFromArray(image.astype(float))
             blurred = sitk.CurvatureAnisotropicDiffusion(
                 sitk_image,
@@ -1356,12 +1394,25 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.blurred_layer.translate = np.add(image_layer.translate, offset)
 
     @image_layer_combobox.connect
-    def _set_slice_widget_image(self, _):
-        self.ImageSliceWidget.layer = self.image_layer
+    def _ensure_3d_image(self, _=None):
+        if self.image_layer is None:
+            return
+        if self.image_layer.ndim == 2:
+            warnings.warn("Minimal Surface works only with 3D images!")
+        is_enabled = self.image_layer is not None and self.image_layer.ndim==3
+        print("is enabled: ", is_enabled)
+        for container in self._collapsible_group:
+            container.enabled = is_enabled
+        self.ClippingWidget.enabled = is_enabled
+        self.call_button.enabled = is_enabled
 
     @image_layer_combobox.connect
-    def _update_custom_feature_image(self, _):
-        if self.image_layer is not None:
+    def _set_slice_widget_image(self, _=None):
+        self.ImageSliceWidget.layer = self.image_layer if self.image_layer is None or self.image_layer.ndim == 3 else None
+
+    @image_layer_combobox.connect
+    def _update_custom_feature_image(self, _=None):
+        if self.image_layer is not None and self.image_layer.ndim != 2:
             self.feature_editor.variables["image"] = self.image_layer.data
 
     def _on_slice_clicked(self, layer, event):

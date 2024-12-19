@@ -8,6 +8,7 @@ import napari
 from magicclass import magicclass, MagicTemplate, vfield, set_design, field
 from magicclass.serialize import serialize, deserialize
 from magicgui._util import debounce
+from napari.layers.labels._labels_utils import sphere_indices
 from qtpy.QtCore import QObject, QEvent, Qt
 from qtpy.QtWidgets import QSizePolicy
 from napari.layers import Labels, Image
@@ -83,7 +84,7 @@ class AnnotatorWidget(MagicTemplate):
     def __post_init__(self):
         if self.persist:
             try:
-                self._load(quiet=False)
+                self._load(quiet=True)
             except Exception as e:
                 traceback.print_exc()
         self.changed.connect(self._on_change)
@@ -94,7 +95,8 @@ class AnnotatorWidget(MagicTemplate):
                 self.native.layout().setAlignment(w.native, Qt.AlignRight)
         self.ToolsWidget.interpolation_widget._initialize(self._viewer)
         self.ToolsWidget.minimal_contour_widget._initialize(self._viewer)
-        self.ToolsWidget.minimal_surface_widget._initialize(self._viewer, self.ToolsWidget.minimal_contour_widget)
+        if self.ToolsWidget.minimal_surface_widget is not None:
+            self.ToolsWidget.minimal_surface_widget._initialize(self._viewer, self.ToolsWidget.minimal_contour_widget)
 
     @debounce(wait=0.5)
     def _on_change(self, *args, **kwargs) -> None:
@@ -107,7 +109,7 @@ class AnnotatorWidget(MagicTemplate):
 
         name = getattr(self.__class__, "__qualname__", str(self.__class__))
         name = name.replace("<", "-").replace(">", "-")  # e.g. <locals>
-        return user_cache_dir() / f"{self.__class__.__module__}.{name}"
+        return user_cache_dir("napari") / f"{self.__class__.__module__}.{name}"
 
     @debounce
     def _dump(self, path: str | Path | None = None) -> None:
@@ -253,31 +255,27 @@ class AnnotatorWidget(MagicTemplate):
     def _draw_line(x1, y1, x2, y2, brush_size, output):
         line_x, line_y = draw.line(x1, y1, x2, y2)
         for x, y in zip(line_x, line_y):
-            cx, cy = draw.disk((x, y), math.ceil(brush_size/2+0.1))
-            cx = np.clip(cx, 0, output.shape[0] - 1)
-            cy = np.clip(cy, 0, output.shape[1] - 1)
+            cx, cy = draw.disk((x, y), np.floor(brush_size / 2) + 0.5, output.shape)
             output[cx, cy] = True
 
     def _fill_holes(self, layer: Labels, event):
         if layer.mode != "paint" or layer_ndisplay(layer) != 2:
             return
         coordinates = layer.world_to_data(event.position)
-        coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
+        poly = []
+        # coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
         dims_displayed = layer_dims_displayed(layer)
-        image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
+        image_coords = tuple(int(coordinates[i]) for i in range(layer.ndim) if i in dims_displayed)
         slice_dims = layer_slice_indices(layer)
         current_draw = np.zeros_like(layer.data[slice_dims], bool)
         start_x, start_y = prev_x, prev_y = image_coords
-        cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
-        cx = np.clip(cx, 0, current_draw.shape[0] - 1)
-        cy = np.clip(cy, 0, current_draw.shape[1] - 1)
-        current_draw[cx, cy] = True
+        poly.append(image_coords)
         yield
         while event.type == 'mouse_move':
             coordinates = layer.world_to_data(event.position)
-            coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-            image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
-            AnnotatorWidget._draw_line(prev_x, prev_y, image_coords[-2], image_coords[-1], layer.brush_size, current_draw)
+            # coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
+            image_coords = tuple(int(coordinates[i]) for i in range(layer.ndim) if i in dims_displayed)
+            poly.append(image_coords)
             prev_x, prev_y = image_coords
             yield
         # s = np.asarray([[0, 1, 0],
@@ -285,16 +283,25 @@ class AnnotatorWidget(MagicTemplate):
         #                 [0, 1, 0]])
         s = None
         coordinates = layer.world_to_data(event.position)
-        coordinates = tuple(
-            max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
+        # coordinates = tuple(
+        #     max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
+        image_coords = tuple(int(coordinates[i]) for i in range(layer.ndim) if i in dims_displayed)
+        poly.append(image_coords)
         prev_x, prev_y = image_coords
-        AnnotatorWidget._draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
-        cx, cy = draw.disk((prev_x, prev_y), layer.brush_size/2)
-        cx = np.clip(cx, 0, current_draw.shape[0] - 1)
-        cy = np.clip(cy, 0, current_draw.shape[1] - 1)
-        current_draw[cx, cy] = True
-        binary_fill_holes(current_draw, output=current_draw, structure=s)
+        # AnnotatorWidget._draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
+        radius = np.floor(layer.brush_size / 2) + 0.5
+        lx, ly = draw.line(prev_x, prev_y, start_x, start_y)
+        poly = np.asarray(poly)
+        px, py = draw.polygon(poly[:, 0], poly[:, 1], current_draw.shape)
+        current_draw[px, py] = True
+        sphere_mask_idx = sphere_indices(radius, (1., 1.))
+        for p in zip(lx, ly):
+            mask_indices = sphere_mask_idx + np.round(p).astype(
+                int
+            )
+            mask_indices = mask_indices[np.all(np.logical_and(mask_indices>=0, mask_indices<current_draw.shape), axis=1)]
+            current_draw[mask_indices[:, 0], mask_indices[:, 1]] = True
+        # binary_fill_holes(current_draw, output=current_draw, structure=s)
         if layer.preserve_labels:
             current_draw = current_draw & (layer.data[slice_dims] == 0)
         idx = np.nonzero(current_draw)

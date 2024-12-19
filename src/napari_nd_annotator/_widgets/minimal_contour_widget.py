@@ -182,7 +182,7 @@ class MinimalContourWidget(MagicTemplate):
                                                               "after completing the contour")
 
     used_feature_combobox = field(widget_type=ComboBox, label="Used Feature", options={"choices": FEATURE_KEYS}, location=ImageFeaturesWidget)
-    feature_editor = field(ScriptExecuteWidget, location=ImageFeaturesWidget)
+    feature_editor = field(ScriptExecuteWidget, location=ImageFeaturesWidget).with_options(editor_key="minimal_contour_features")
     param_spinbox = field(int, label="Parameter", location=ImageFeaturesWidget).with_options(min=1, max=50, value=5,
                                             tooltip="Increasing this parameter will cause contours to be more aligned\n"
                                                     "with the selected image feature (with a lower number the contour will be\n"
@@ -216,6 +216,7 @@ class MinimalContourWidget(MagicTemplate):
         self.draw_thread.started.connect(self.draw_worker.run)
         self._img = None
         self._features = None
+        self._viewer = None
         self.apply_contrast_limits = True
         self._prev_img_layer = self.image_layer
         self._orig_image = self.image_layer.data if self.image_layer else None
@@ -264,10 +265,9 @@ class MinimalContourWidget(MagicTemplate):
             dtype_lims = 0, np.iinfo(int).max
         selected_label_spinbox = self.selected_label_spinbox
         selected_label_spinbox.min, selected_label_spinbox.max = dtype_lims
-        self._set_use_smoothing(self.is_blurring_enabled)
-        self._set_image("__post_init__")
-        self._on_feature_change(self.used_feature)
-        self._on_param_change(self.param)
+        self._set_use_smoothing(self.is_blurring_enabled, update_image=False)
+        self._on_feature_change(self.used_feature, update_image=False)
+        self._on_param_change(self.param, update_image=False)
         self.feature_editor.script_worker.done.connect(self._set_features)
 
         self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
@@ -291,6 +291,7 @@ class MinimalContourWidget(MagicTemplate):
         self.blur_sigma_slider.native.children()[0].sliderPressed.connect(self._show_demo_image)
         self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._hide_demo_image)
         self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._apply_blurring)
+        self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._set_image)
         self._on_label_change()
         self._on_selected_label_change()
 
@@ -513,22 +514,25 @@ class MinimalContourWidget(MagicTemplate):
         self.prev_labels_layer = labels_layer
 
     @used_feature_combobox.connect
-    def _on_feature_change(self, used_feature):
+    def _on_feature_change(self, used_feature, update_image=True):
         self.feature_editor.visible = (used_feature == CUSTOM)
         self.feature_inverted = (used_feature == LOW_INTENSITY)
-        self._set_image("_on_feature_change")
         self.calculator.set_method(FEATURES[used_feature])
         self.param_spinbox.visible = used_feature == ASSYM_GRADIENT
+        if update_image:
+            self._set_image("_on_feature_change")
 
     @param_spinbox.connect
-    def _on_param_change(self, val):
+    def _on_param_change(self, val, update_image=True):
         self.calculator.set_param(val)
-        self._set_image("_on_param_change")
+        if update_image:
+            self._set_image("_on_param_change")
 
     @blur_image_checkbox.connect
-    def _set_use_smoothing(self, use_smoothing):
+    def _set_use_smoothing(self, _, update_image=True):
         self._apply_blurring()
-        self._set_image("_set_use_smoothing")
+        if update_image:
+            self._set_image("_set_use_smoothing")
 
     def _show_demo_image(self):
         pos = self.blur_sigma_slider.native.pos()
@@ -777,15 +781,17 @@ class MinimalContourWidget(MagicTemplate):
     def _set_image(self, event=None):
         print("_set_image", event)
         image_layer: Image = self.image_layer
-        self._apply_blurring()
         if image_layer is None:
             self._img = None
             self.feature_editor.variables["image"] = None
             # self.feature_editor.features = None #TODO check
             return
+        if self.viewer is None:
+            return
         if self.viewer.dims.ndisplay == 3:
             self.anchor_points.editable = False
             return
+        self._apply_blurring()
         if not image_layer.visible:
             image_layer.set_view_slice()
         if NAPARI_VERSION < "0.5.0":
@@ -839,11 +845,12 @@ class MinimalContourWidget(MagicTemplate):
         self._set_image(args)
 
     def _set_features(self, var_dict: dict):
-        print("_set_features")
+        if "exception" in var_dict:
+            raise var_dict["exception"]
         features = var_dict.get("features", None)
         if features is None:
+            warnings.warn("The 'features' variable was not set in the script.")
             return
-        print("setting features")
         if features.ndim == 2:
             features = np.concatenate([features[..., np.newaxis]] * 3, -1)
         self._features = features
@@ -958,6 +965,7 @@ class MinimalContourWidget(MagicTemplate):
         self._apply_blurring()
         self._move_temp_to_top()
         self._update_label_tooltip()
+        self._set_image()
 
     def _data_event(self, event):
         image_layer = self.image_layer

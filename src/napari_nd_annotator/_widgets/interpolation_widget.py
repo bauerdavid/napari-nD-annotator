@@ -96,8 +96,8 @@ class InterpolationWorker(QObject):
         try:
             dimension = self.dimension
             n_contour_points = self.n_contour_points
-            data = self.layer.data.copy()
             selected_label = self.layer.selected_label
+            data = (self.layer.data == selected_label).astype(np.uint8)
             method = self.method
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -110,7 +110,7 @@ class InterpolationWorker(QObject):
                 self.progress.emit(i)
                 layer_slice = layer_slice_template.copy()
                 layer_slice[dimension] = i
-                cur_mask = data[tuple(layer_slice)] == selected_label
+                cur_mask = data[tuple(layer_slice)]
                 cur_mask = cur_mask.astype(np.uint8)
                 if cur_mask.max() == 0:
                     continue
@@ -119,8 +119,8 @@ class InterpolationWorker(QObject):
                 prev_layer_slice = layer_slice.copy()
                 prev_layer_slice[dimension] = i - 1
                 if i + 1 < data.shape[dimension] \
-                        and (data[tuple(prev_layer_slice)] == selected_label).max() > 0\
-                        and (data[tuple(next_layer_slice)] == selected_label).max() > 0:
+                        and np.any(data[tuple(prev_layer_slice)])\
+                        and np.any(data[tuple(next_layer_slice)]):
                     continue
                 cnt = contour_cv2_mask_uniform(cur_mask, n_contour_points)
                 centroid = cnt.mean(0)
@@ -173,8 +173,7 @@ class InterpolationWorker(QObject):
                             mask[mask > 0] = selected_label
                         else:
                             raise ValueError("method should be one of %s" % ((RPSV, CONTOUR_BASED, DISTANCE_BASED),))
-                        cur_slice = data[tuple(inter_layer_slice)]
-                        cur_slice[mask > 0] = mask[mask > 0]
+                        data[tuple(inter_layer_slice)] = mask
                 prev_cnt = cnt
                 prev_layer = i
                 prev_mask = cur_mask
@@ -203,6 +202,7 @@ class InterpolationWidget(MagicTemplate):
                               options={
                                   "min": 10,
                                   "max": 1000,
+                                  "value": 300,
                                   "tooltip": f"Number of contour points sampled. Used only for\"{RPSV}\" and \"{CONTOUR_BASED}\" methods"
                               })
     rpsv_max_iterations = field(int,
@@ -210,6 +210,7 @@ class InterpolationWidget(MagicTemplate):
                                 options={
                                     "min": 1,
                                     "max": 100,
+                                    "value": 20,
                                     "tooltip": f"Maximum number of iterations for {RPSV}. Can be fewer if points converge."
                                 })
 
@@ -233,6 +234,7 @@ class InterpolationWidget(MagicTemplate):
 
     def _initialize(self, viewer: napari.Viewer):
         self._viewer = viewer
+        self._viewer.bind_key("Ctrl-I")(self.Interpolate)
         self._on_active_layer_changed()
         self.viewer.dims.events.ndisplay.connect(
             lambda _: self.interpolate_button.options.update(enabled=self.viewer.dims.ndisplay == 2))
@@ -249,7 +251,6 @@ class InterpolationWidget(MagicTemplate):
         self.interpolation_worker.method = self.method
         self.interpolation_worker.max_iterations = self.rpsv_max_iterations.value
 
-    @bind_key("Ctrl-I")
     def Interpolate(self, _=None):
         if self.active_labels_layer is None:
             return
@@ -263,20 +264,21 @@ class InterpolationWidget(MagicTemplate):
     def _on_method_changed(self, new_method):
         self.rpsv_max_iterations.visible = new_method == RPSV
 
-    def _set_labels(self, data):
-        if data is None:
+    def _set_labels(self, update_mask):
+        if update_mask is None:
             return
-        update_mask = data > 0
-        update_vals = data[update_mask]
+        update_val = self.active_labels_layer.selected_label
+        if self.active_labels_layer.preserve_labels:
+            update_mask = np.logical_and(update_mask, self.active_labels_layer.data == 0)
         update_idx = np.nonzero(update_mask)
         update_idx = _coerce_indices_for_vectorization(self.active_labels_layer.data, update_idx)
         if self.active_labels_layer.preserve_labels:
             update_mask &= self.active_labels_layer.data == 0
         if hasattr(self.active_labels_layer, "data_setitem"):
-            self.active_labels_layer.data_setitem(update_idx, update_vals)
+            self.active_labels_layer.data_setitem(update_idx, update_val)
         else:
-            self.active_labels_layer._save_history((update_idx, self.active_labels_layer.data[update_mask], update_vals))
-            self.active_labels_layer.data[update_mask] = update_vals
+            self.active_labels_layer._save_history((update_idx, self.active_labels_layer.data[update_mask], update_val))
+            self.active_labels_layer.data[update_mask] = update_val
             self.active_labels_layer.events.data()
             self.active_labels_layer.refresh()
 
