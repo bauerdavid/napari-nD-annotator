@@ -43,7 +43,6 @@ class ScriptWorker(QObject):
             self.done.emit(self._output_variables)
         except Exception as e:
             self.done.emit({"exception": e})
-        print("finished ScriptWorker")
 
     @property
     def output_variables(self):
@@ -183,7 +182,6 @@ class ScriptExecuteWidget(FreeWidget):
 
     @bind_key("Ctrl+Enter")
     def Run(self):
-        print("Run")
         self.script_thread.wait()
         variables = self.variables
         variables = deepcopy(variables)

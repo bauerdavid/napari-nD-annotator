@@ -424,15 +424,12 @@ class EstimationWorker(QObject):
 
     def run(self):
         import time
-        print("disconnecting _start_estimation")
         self.minimal_surface_widget.call_button.clicked.disconnect(self.minimal_surface_widget._start_estimation)
         def stop():
-            print("stop")
             self.stop_requested = True
             self.minimal_surface_widget.call_button.text = "Stopping..."
             self.finish_slice_annotation()
             self.minimal_surface_widget.call_button.enabled = True
-        print("connecting stop")
         self.minimal_surface_widget.call_button.clicked.connect(stop)
         self.minimal_surface_widget.call_button.text = "Stop"
         self.minimal_surface_widget.call_button.enabled = False
@@ -448,11 +445,8 @@ class EstimationWorker(QObject):
             for i in range(len(self.points) // 2):
                 estimator = minimal_surface.MinimalSurfaceCalculator()
                 self.estimators.append(estimator)
-                print("setting init plane calculator")
                 estimator.set_initial_plane_calculator(self.segment_initial_slice)
-                print("setting using meeting points")
                 estimator.set_using_meeting_points(self.use_meeting_plane_points)
-                print("it's done")
                 self.hook_callbacks(i)
                 bounding_box = pts_2_bb(self.points[2 * i], self.points[2 * i + 1], self.image.shape,
                                         [self.z_scale, 1, 1])
@@ -480,13 +474,9 @@ class EstimationWorker(QObject):
                 self.imgs.append(data)
                 self.phis.append(phi)
                 if self.use_meeting_plane_points:
-                    print("calc_eikonal_and_transport_init")
                     estimator.calc_eikonal_and_transport_init(phi, data, point1, point2, self.use_correction)
-                    print("after calc_eikonal_and_transport_init")
                 else:
-                    print("init_transport_slice")
                     estimator.init_transport_slice(phi, point1, point2)
-                    print("after init_transport_slice")
             self.slice_annotations_done.emit(len(self.estimators))
 
             show_info("Slice annotations finished in %.2f seconds" % (time.time() - start))
@@ -502,9 +492,7 @@ class EstimationWorker(QObject):
 
                 offset = np.clip(bounding_box.min(0), 0, np.asarray(self.image.shape) - 1)
                 # start = time.time()
-                print("before calculate")
                 output = estimator.calculate(phi, data, point1, point2, self.use_correction, self.n_iter)
-                print("after calculate")
                 segmented = (output >= 0)
                 labelled = skimage.measure.label(segmented)
                 obj_pixel = np.argwhere(output == output.max())[0]
@@ -521,9 +509,7 @@ class EstimationWorker(QObject):
         finally:
             self.stop_requested = False
             self.all_done.emit()
-            print("disconnecting stop")
             self.minimal_surface_widget.call_button.clicked.disconnect(stop)
-            print("connecting _start_estimation")
             self.minimal_surface_widget.call_button.clicked.connect(self.minimal_surface_widget._start_estimation)
             self.minimal_surface_widget.call_button.text = "Run"
             self.minimal_surface_widget.call_button.enabled = True
@@ -797,7 +783,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     call_button = field(widget_type=PushButton, name="Run")
 
     def _start_estimation(self):
-        print("_start_estimation")
         if self.image_layer not in self._viewer.layers:
             warnings.warn("Missing image layer")
             return

@@ -779,7 +779,6 @@ class MinimalContourWidget(MagicTemplate):
                     break
 
     def _set_image(self, event=None):
-        print("_set_image", event)
         image_layer: Image = self.image_layer
         if image_layer is None:
             self._img = None

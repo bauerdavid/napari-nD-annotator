@@ -215,7 +215,6 @@ class InterpolationWidget(MagicTemplate):
                                 })
 
     def __init__(self):
-        print("__init__")
         self.progress_dialog = ProgressWidget(self.native, message="Interpolating slices...")
         self.interpolation_thread = QThread()
         self.interpolation_worker = InterpolationWorker()
