@@ -1,10 +1,17 @@
+import json
+import traceback
+from pathlib import Path
+
 import itertools
 
 import napari
+from magicclass import magicclass, MagicTemplate, vfield, set_design, field
+from magicclass.serialize import serialize, deserialize
+from magicgui._util import debounce
+from napari.layers.labels._labels_utils import sphere_indices
 from qtpy.QtCore import QObject, QEvent, Qt
-from qtpy.QtWidgets import QVBoxLayout, QCheckBox, QTabWidget, QPushButton, QSizePolicy
-from napari import Viewer
-from napari.layers import Labels, Layer, Image
+from qtpy.QtWidgets import QSizePolicy
+from napari.layers import Labels, Image
 from napari.qt.threading import create_worker
 import numpy as np
 from skimage.draw import draw
@@ -12,6 +19,7 @@ from scipy.ndimage import binary_fill_holes, find_objects
 import math
 from packaging import version
 import warnings
+from dataclasses import field as dfield
 
 from .._napari_version import NAPARI_VERSION
 
@@ -39,72 +47,95 @@ from ._utils.callbacks import (
     LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
-from ._utils.persistence import PersistentWidget
-from .._helper_functions import layer_ndisplay, layer_dims_displayed, layer_slice_indices, layer_get_order
+from .._helper_functions import layer_ndisplay, layer_dims_displayed, layer_slice_indices, layer_dims_order, \
+    _coerce_indices_for_vectorization, layer_get_order
 
 
-class AnnotatorWidget(PersistentWidget):
-    def __init__(self, viewer: Viewer):
-        super().__init__("nd_annotator")
-        self.history_idx = 0
-        layout = QVBoxLayout()
-        self.fill_objects_checkbox = QCheckBox("autofill objects")
-        self.fill_objects_checkbox.setToolTip("When drawing labels,"
+@magicclass(name="Annotation Toolbox")
+class AnnotatorWidget(MagicTemplate):
+    autofill_objects = vfield(bool).with_options(tooltip="When drawing labels,"
                                               " close the drawn curve and fill its area after releasing the mouse")
-        self.add_stored_widget("fill_objects_checkbox")
+
+    @magicclass(widget_type="tabbed")
+    class ToolsWidget:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            interpolation_widget = field(InterpolationWidget, name="Interpolation")
+            minimal_contour_widget = field(MinimalContourWidget, name="Minimal Contour")
+            minimal_surface_widget = field(MinimalSurfaceWidget, name="Minimal Surface") if MinimalSurfaceWidget is not None else None
+        persist = dfield(default=bool)
+
+    def __init__(self, viewer: napari.Viewer, persist=True):
+        self._viewer = viewer
+        self.persist = persist
         self._active_labels_layer = None
         self._active_bbox_layer = None
-        self.drawn_region_history = dict()
-        self.drawn_slice_history = dict()
-        self.values_history = dict()
-        self.viewer = viewer
-        self.viewer.layers.selection.events.connect(self.on_layer_selection_change)
-        self.viewer.layers.selection.events.connect(lock_layer)
-        self.viewer.layers.events.inserted.connect(self.move_bbox_to_top)
-        self.viewer.layers.events.moved.connect(self.move_bbox_to_top)
 
-        layout.addWidget(self.fill_objects_checkbox)
+        self._viewer.layers.selection.events.connect(self._on_layer_selection_change)
+        self._viewer.layers.selection.events.connect(lock_layer)
+        self._viewer.layers.events.inserted.connect(self._move_bbox_to_top)
+        self._viewer.layers.events.moved.connect(self._move_bbox_to_top)
 
-        tabs_widget = QTabWidget(self)
-        self.interpolation_widget = InterpolationWidget(viewer, self)
-        tabs_widget.addTab(self.interpolation_widget, "Interpolation")
+        # self.native.installEventFilter(self) # TODO fix
+        self._set_fill_objects(self.autofill_objects)
+        self._on_layer_selection_change()
+        # self._init_bbox_layer()
 
-        self.minimal_contour_widget = MinimalContourWidget(viewer, self)
-        tabs_widget.addTab(self.minimal_contour_widget, "Minimal Contour")
+    def __post_init__(self):
+        if self.persist:
+            try:
+                self._load(quiet=True)
+            except Exception as e:
+                traceback.print_exc()
+        self.changed.connect(self._on_change)
+        for w in self._list:
+            if w.name == "show_help_window":
+                w.native.setFixedSize(20, 20)
+                w.native.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                self.native.layout().setAlignment(w.native, Qt.AlignRight)
+        self.ToolsWidget.interpolation_widget._initialize(self._viewer)
+        self.ToolsWidget.minimal_contour_widget._initialize(self._viewer)
+        if self.ToolsWidget.minimal_surface_widget is not None:
+            self.ToolsWidget.minimal_surface_widget._initialize(self._viewer, self.ToolsWidget.minimal_contour_widget)
 
-        if MinimalSurfaceWidget is not None:
-            self.minimal_surface_widget = MinimalSurfaceWidget(viewer, self.minimal_contour_widget)
-            tabs_widget.addTab(self.minimal_surface_widget, "Minimal Surface")
-        tabs_widget.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
-        layout.addWidget(tabs_widget)
-
-        help_layout = QVBoxLayout()
-        help_layout.setAlignment(Qt.AlignRight)
-        help_button = QPushButton("?")
-        help_button.setToolTip("Help")
-        help_button.clicked.connect(self.show_help_window)
-        help_button.setFixedSize(20, 20)
-        help_layout.addWidget(help_button)
-        layout.addLayout(help_layout)
-        self.setLayout(layout)
-        self.installEventFilter(self)
-        self.fill_objects_checkbox.stateChanged.connect(self.set_fill_objects)
-        self.set_fill_objects(self.fill_objects_checkbox.isChecked())
-        self.on_layer_selection_change()
-        # self.init_bbox_layer()
-
-    def eventFilter(self, source: QObject, event: QEvent) -> bool:
-        if event.type() == QEvent.Hide:
-            self.disconnect_all()
-            return True
-        elif event.type() == QEvent.Show:
-            self.connect_all()
-            return True
-        return super().eventFilter(source, event)
+    @debounce(wait=0.5)
+    def _on_change(self, *args, **kwargs) -> None:
+        if self.persist:
+            self._dump()
 
     @property
-    def fill_objects(self):
-        return self.fill_objects_checkbox.isChecked()
+    def _dump_path(self) -> Path:
+        from magicgui._util import user_cache_dir
+
+        name = getattr(self.__class__, "__qualname__", str(self.__class__))
+        name = name.replace("<", "-").replace(">", "-")  # e.g. <locals>
+        return user_cache_dir("napari") / f"{self.__class__.__module__}.{name}"
+
+    @debounce
+    def _dump(self, path: str | Path | None = None) -> None:
+        data = serialize(self)
+        with open(path or self._dump_path, "w") as save_file:
+            json.dump(data, save_file)
+
+    def _load(self, path: str | Path | None = None, quiet: bool = False) -> None:
+        try:
+            with open(path or self._dump_path) as save_file:
+                data = json.load(save_file)
+                print(data)
+                deserialize(self, data)
+        except Exception as e:
+            if not quiet:
+                raise e
+
+    @set_design(visible=False)
+    def eventFilter(self, source: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Hide:
+            self._disconnect_all()
+            return True
+        elif event.type() == QEvent.Show:
+            self._connect_all()
+            return True
+        return self.native.eventFilter(source, event)
 
     @property
     def active_labels_layer(self):
@@ -113,13 +144,16 @@ class AnnotatorWidget(PersistentWidget):
     @active_labels_layer.setter
     def active_labels_layer(self, labels_layer):
         if not isinstance(labels_layer, Labels) and labels_layer is not None:
+            raise TypeError("'active_labels_layer' should be a Labels layer.")
+        if labels_layer == self.active_labels_layer:
             return
+        self._unset_labels_callbacks()
         self._active_labels_layer = labels_layer
-        self.set_fill_objects(self.fill_objects)
-        self.set_labels_callbacks()
-        # self.init_bbox_layer()
+        self._set_fill_objects(self.autofill_objects)
+        self._set_labels_callbacks()
+        # self._init_bbox_layer()
 
-    def unset_labels_callbacks(self):
+    def _unset_labels_callbacks(self):
         if self.active_labels_layer is None:
             return
         self.active_labels_layer.bind_key("Control-+", overwrite=True)(None)
@@ -129,27 +163,26 @@ class AnnotatorWidget(PersistentWidget):
         self.active_labels_layer.bind_key("A", overwrite=True)(None)
         self.active_labels_layer.bind_key("D", overwrite=True)(None)
 
-    def set_labels_callbacks(self):
+    def _set_labels_callbacks(self):
         if self.active_labels_layer is None:
             return
-        if self.start_update_bbox not in self.active_labels_layer.events.selected_label.callbacks:
-            self.active_labels_layer.events.selected_label.connect(self.start_update_bbox)
-            self.active_labels_layer.events.data.connect(self.start_update_bbox)
-        self.active_labels_layer.bind_key("Control-Z", overwrite=True)(self.undo)
+        if self._start_update_bbox not in self.active_labels_layer.events.selected_label.callbacks:
+            self.active_labels_layer.events.selected_label.connect(self._start_update_bbox)
+            self.active_labels_layer.events.data.connect(self._start_update_bbox)
         self.active_labels_layer.bind_key("Control-+", overwrite=True)(extend_mask)
         self.active_labels_layer.bind_key("Control--", overwrite=True)(reduce_mask)
         self.active_labels_layer.bind_key("Q", overwrite=True)(decrement_selected_label)
         self.active_labels_layer.bind_key("E", overwrite=True)(increment_selected_label)
-        self.active_labels_layer.bind_key("A", overwrite=True)(scroll_to_prev(self.viewer))
-        self.active_labels_layer.bind_key("D", overwrite=True)(scroll_to_next(self.viewer))
+        self.active_labels_layer.bind_key("A", overwrite=True)(scroll_to_prev(self._viewer))
+        self.active_labels_layer.bind_key("D", overwrite=True)(scroll_to_next(self._viewer))
         self.active_labels_layer.bind_key("W", overwrite=True)(increase_brush_size)
         self.active_labels_layer.bind_key("S", overwrite=True)(decrease_brush_size)
 
-    def move_bbox_to_top(self, e=None):
-        if self._active_bbox_layer not in self.viewer.layers:
+    def _move_bbox_to_top(self, e=None):
+        if self._active_bbox_layer not in self._viewer.layers:
             return
-        layer_list = self.viewer.layers
-        with layer_list.events.moved.blocker(self.move_bbox_to_top):
+        layer_list = self._viewer.layers
+        with layer_list.events.moved.blocker(self._move_bbox_to_top):
             try:
                 for i in reversed(range(len(layer_list))):
                     layer = layer_list[i]
@@ -166,14 +199,14 @@ class AnnotatorWidget(PersistentWidget):
             except KeyError:
                 ...
 
-    def start_update_bbox(self, event):
+    def _start_update_bbox(self, event):
         if self._active_bbox_layer is None:
             return
-        worker = create_worker(self.update_bbox, event.source)
+        worker = create_worker(self._update_bbox, event.source)
         worker.finished.connect(self._active_bbox_layer.refresh)
         worker.start()
 
-    def update_bbox(self, layer):
+    def _update_bbox(self, layer):
         if self._active_bbox_layer is None:
             return
         if len(self._active_bbox_layer.data) > 0:
@@ -191,63 +224,58 @@ class AnnotatorWidget(PersistentWidget):
         self._active_bbox_layer.properties["label"][0] = label
         self._active_bbox_layer.refresh_text()
 
-    def set_fill_objects(self, state):
+    @autofill_objects.connect
+    def _set_fill_objects(self, state):
         if self.active_labels_layer is None:
             return
-        if state and self.isVisible():
-            if self.fill_holes not in self.active_labels_layer.mouse_drag_callbacks:
-                self.active_labels_layer.mouse_drag_callbacks.append(self.fill_holes)
-                self.active_labels_layer.mouse_drag_callbacks.append(self.incr_history_idx)
+        if state and self.visible:
+            if self._fill_holes not in self.active_labels_layer.mouse_drag_callbacks:
+                self.active_labels_layer.mouse_drag_callbacks.append(self._fill_holes)
         elif not state:
-            if self.fill_holes in self.active_labels_layer.mouse_drag_callbacks:
-                self.active_labels_layer.mouse_drag_callbacks.remove(self.fill_holes)
-                self.active_labels_layer.mouse_drag_callbacks.remove(self.incr_history_idx)
+            if self._fill_holes in self.active_labels_layer.mouse_drag_callbacks:
+                self.active_labels_layer.mouse_drag_callbacks.remove(self._fill_holes)
 
-    def disconnect_all(self):
-        if self.active_labels_layer is not None and self.fill_holes in self.active_labels_layer.mouse_drag_callbacks:
-            self.active_labels_layer.mouse_drag_callbacks.remove(self.fill_holes)
+    def _disconnect_all(self):
+        if self.active_labels_layer is not None and self._fill_holes in self.active_labels_layer.mouse_drag_callbacks:
+            self.active_labels_layer.mouse_drag_callbacks.remove(self._fill_holes)
 
-    def connect_all(self):
-        if self.fill_objects and self.active_labels_layer is not None and self.fill_holes not in self.active_labels_layer.mouse_drag_callbacks:
-            self.active_labels_layer.mouse_drag_callbacks.append(self.fill_holes)
+    def _connect_all(self):
+        if self.autofill_objects and self.active_labels_layer is not None and self._fill_holes not in self.active_labels_layer.mouse_drag_callbacks:
+            self.active_labels_layer.mouse_drag_callbacks.append(self._fill_holes)
 
-    def on_layer_selection_change(self, event=None):
+    def _on_layer_selection_change(self, event=None):
         if event is None or event.type == "changed":
-            active_layer = self.viewer.layers.selection.active
+            active_layer = self._viewer.layers.selection.active
             if isinstance(active_layer, Labels):
                 self.active_labels_layer = active_layer
             else:
                 self.active_labels_layer = None
 
     @staticmethod
-    def draw_line(x1, y1, x2, y2, brush_size, output):
+    def _draw_line(x1, y1, x2, y2, brush_size, output):
         line_x, line_y = draw.line(x1, y1, x2, y2)
         for x, y in zip(line_x, line_y):
-            cx, cy = draw.disk((x, y), math.ceil(brush_size/2+0.1))
-            cx = np.clip(cx, 0, output.shape[0] - 1)
-            cy = np.clip(cy, 0, output.shape[1] - 1)
+            cx, cy = draw.disk((x, y), np.floor(brush_size / 2) + 0.5, output.shape)
             output[cx, cy] = True
 
-    def fill_holes(self, layer: Layer, event):
+    def _fill_holes(self, layer: Labels, event):
         if layer.mode != "paint" or layer_ndisplay(layer) != 2:
             return
         coordinates = layer.world_to_data(event.position)
-        coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
+        poly = []
+        # coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
         dims_displayed = layer_dims_displayed(layer)
-        image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
+        image_coords = tuple(int(coordinates[i]) for i in range(layer.ndim) if i in dims_displayed)
         slice_dims = layer_slice_indices(layer)
         current_draw = np.zeros_like(layer.data[slice_dims], bool)
         start_x, start_y = prev_x, prev_y = image_coords
-        cx, cy = draw.disk((start_x, start_y), layer.brush_size/2)
-        cx = np.clip(cx, 0, current_draw.shape[0] - 1)
-        cy = np.clip(cy, 0, current_draw.shape[1] - 1)
-        current_draw[cx, cy] = True
+        poly.append(image_coords)
         yield
         while event.type == 'mouse_move':
             coordinates = layer.world_to_data(event.position)
-            coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-            image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
-            AnnotatorWidget.draw_line(prev_x, prev_y, image_coords[-2], image_coords[-1], layer.brush_size, current_draw)
+            # coordinates = tuple(max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
+            image_coords = tuple(int(coordinates[i]) for i in range(layer.ndim) if i in dims_displayed)
+            poly.append(image_coords)
             prev_x, prev_y = image_coords
             yield
         # s = np.asarray([[0, 1, 0],
@@ -255,57 +283,58 @@ class AnnotatorWidget(PersistentWidget):
         #                 [0, 1, 0]])
         s = None
         coordinates = layer.world_to_data(event.position)
-        coordinates = tuple(
-            max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
-        image_coords = tuple(coordinates[i] for i in range(layer.ndim) if i in dims_displayed)
+        # coordinates = tuple(
+        #     max(0, min(layer.data.shape[i] - 1, int(round(coord)))) for i, coord in enumerate(coordinates))
+        image_coords = tuple(int(coordinates[i]) for i in range(layer.ndim) if i in dims_displayed)
+        poly.append(image_coords)
         prev_x, prev_y = image_coords
-        AnnotatorWidget.draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
-        cx, cy = draw.disk((prev_x, prev_y), layer.brush_size/2)
-        cx = np.clip(cx, 0, current_draw.shape[0] - 1)
-        cy = np.clip(cy, 0, current_draw.shape[1] - 1)
-        current_draw[cx, cy] = True
-        binary_fill_holes(current_draw, output=current_draw, structure=s)
+        # AnnotatorWidget._draw_line(prev_x, prev_y, start_x, start_y, layer.brush_size, current_draw)
+        radius = np.floor(layer.brush_size / 2) + 0.5
+        lx, ly = draw.line(prev_x, prev_y, start_x, start_y)
+        poly = np.asarray(poly)
+        px, py = draw.polygon(poly[:, 0], poly[:, 1], current_draw.shape)
+        current_draw[px, py] = True
+        sphere_mask_idx = sphere_indices(radius, (1., 1.))
+        for p in zip(lx, ly):
+            mask_indices = sphere_mask_idx + np.round(p).astype(
+                int
+            )
+            mask_indices = mask_indices[np.all(np.logical_and(mask_indices>=0, mask_indices<current_draw.shape), axis=1)]
+            current_draw[mask_indices[:, 0], mask_indices[:, 1]] = True
+        # binary_fill_holes(current_draw, output=current_draw, structure=s)
         if layer.preserve_labels:
             current_draw = current_draw & (layer.data[slice_dims] == 0)
-        self.drawn_region_history[self.history_idx] = current_draw
-        self.drawn_slice_history[self.history_idx] = slice_dims
-        self.values_history[self.history_idx] = layer.data[slice_dims][current_draw]
-        layer.data[slice_dims][current_draw] = layer.selected_label
-        layer.events.data()
-        layer.refresh()
+        idx = np.nonzero(current_draw)
+        change_idx = np.zeros((layer.ndim, len(idx[0])), dtype=int)
+        order = layer_dims_order(layer)
+        dims_displayed = layer_dims_displayed(layer)
+        slice_indices = layer_slice_indices(layer)
+        for i, d in enumerate(order):
+            change_idx[d] = idx[layer_get_order(layer)[i - layer.ndim + 2]] if d in dims_displayed else slice_indices[d]
+        change_idx = _coerce_indices_for_vectorization(layer.data, change_idx)
+        if hasattr(layer, "data_setitem"):
+            layer.data_setitem(change_idx, layer.selected_label)
+        else:
+            layer._save_history(
+                (change_idx, layer.data[change_idx], layer.selected_label))
+            layer.data[change_idx] = layer.selected_label
+            layer.events.data()
+            layer.refresh()
 
-    def undo(self, layer):
-        last_drawn_region = self.drawn_region_history.get(self.history_idx, None)
-        last_drawn_slice = self.drawn_slice_history.get(self.history_idx, None)
-        prev_values = self.values_history.get(self.history_idx, None)
-        if self.fill_objects_checkbox.isChecked() and last_drawn_region is not None:
-            layer.data[last_drawn_slice][last_drawn_region] = prev_values
-            del self.drawn_region_history[self.history_idx]
-            del self.drawn_slice_history[self.history_idx]
-            del self.values_history[self.history_idx]
-        self.decr_history_idx()
-        layer.undo()
-        layer.events.data()
-
-    def incr_history_idx(self, *args):
-        self.history_idx += 1
-
-    def decr_history_idx(self, *args):
-        if self.history_idx >= 0:
-            self.history_idx -= 1
-
+    @set_design(text="?", width=20, height=20)
     def show_help_window(self):
-        dialog = HelpDialog(self)
+        """Show keyboard shortcuts."""
+        dialog = HelpDialog(self.native)
         dialog.show()
 
-    def init_bbox_layer(self):
+    def _init_bbox_layer(self):
         if self.active_labels_layer is None or BoundingBoxLayer is None:
             return
         if self._active_bbox_layer in self.viewer.layers:
             if (self.active_labels_layer is not None and self._active_bbox_layer.ndim == self.active_labels_layer.ndim
                     or self.active_labels_layer is None and self._active_bbox_layer.ndim == 2):
                 return
-            with self.viewer.layers.selection.events.blocker(self.on_layer_selection_change):
+            with self.viewer.layers.selection.events.blocker(self._on_layer_selection_change):
                 self.viewer.layers.remove(self._active_bbox_layer)
         self._active_bbox_layer = BoundingBoxLayer(name="%s active object" % LOCK_CHAR, face_color="transparent",
                                                   edge_color="green", ndim=self.active_labels_layer.ndim if self.active_labels_layer else 2)
@@ -316,8 +345,9 @@ class AnnotatorWidget(PersistentWidget):
             "size": 10,
             "color": "green"
         }
-        with self.viewer.layers.selection.events.blocker(self.on_layer_selection_change):
+        with self.viewer.layers.selection.events.blocker(self._on_layer_selection_change):
             prev_selection = self.viewer.layers.selection.copy()
             self.viewer.add_layer(self._active_bbox_layer)
             if len(prev_selection) == 1 and self._active_bbox_layer not in prev_selection:
                 self.viewer.layers.selection = prev_selection
+

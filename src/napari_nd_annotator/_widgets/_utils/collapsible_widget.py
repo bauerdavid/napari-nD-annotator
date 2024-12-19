@@ -1,5 +1,6 @@
 from typing import List, Optional
 
+from magicclass.widgets import CollapsibleContainer
 from qtpy.QtWidgets import QWidget, QPushButton, QVBoxLayout, QSizePolicy
 from qtpy.QtCore import Signal
 
@@ -89,3 +90,46 @@ class CollapsibleWidgetGroup:
                     w2.collapse()
         return handler
 
+
+class CollapsibleContainerGroup:
+    def __init__(self, container_list: Optional[List[CollapsibleContainer]] = None):
+        self._container_list = []
+        self._handlers = dict()
+        if container_list is None:
+            container_list = []
+        for container in container_list:
+            if type(container) != CollapsibleContainer:
+                raise TypeError("%s is not CollapsibleContainer" % str(container))
+            self.addItem(container)
+
+    def addItem(self, container: CollapsibleContainer):
+        if container in self._container_list:
+            return
+        self._container_list.append(container)
+        self._handlers[container] = self._container_expanded_handler(container)
+        container._widget._expand_btn.clicked.connect(self._handlers[container])
+
+    def removeItem(self, container: CollapsibleContainer):
+        if container not in self._container_list:
+            return
+        self._container_list.remove(container)
+        container._widget._expand_btn.clicked.disconnect(self._handlers[container])
+        del self._handlers[container]
+
+    def _container_expanded_handler(self, container: CollapsibleContainer):
+        def handler(state: bool):
+            if not state:
+                return
+            for c2 in self._container_list:
+                if c2 != container:
+                    c2._widget._collapse()
+                    c2._widget._expand_btn.setChecked(False)
+        return handler
+
+    def __iter__(self):
+        return iter(self._container_list)
+
+def correct_container_size(container):
+    if not container.collapsed:
+        container.collapsed = True
+        container.collapsed = False

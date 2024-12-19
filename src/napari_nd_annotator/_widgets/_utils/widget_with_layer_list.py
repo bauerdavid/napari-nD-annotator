@@ -1,9 +1,69 @@
+from pathlib import Path
+
 import napari
+from magicgui.widgets import Container, FunctionGui, create_widget
 from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QSizePolicy, QScrollArea
 from qtpy.QtCore import Qt
 from keyword import iskeyword
-
+from abc import ABCMeta
 from .persistence import PersistentWidget
+
+
+class PostInitCaller(ABCMeta):
+    def __call__(cls, *args, **kwargs):
+        obj = type.__call__(cls, *args, **kwargs)
+        try:
+            obj.__post_init__(*args, **kwargs)
+        except AttributeError:
+            raise AttributeError("Class should define function '__post_init__()")
+        return obj
+
+
+class WidgetWithLayerList2(Container, metaclass=PostInitCaller):
+    def __init__(self, viewer: napari.Viewer, layers, add_layers=True, scrollable=False, persist=True, **kwargs):
+        super().__init__(scrollable=scrollable,)
+        self.viewer = viewer
+        self.layers = dict()  # str -> QComboBox
+        self.persist = persist
+        for layer in layers:  # every layer should be a tuple: (layer_name, layer_type) or (layer_name, layer_type, layer_display_name)
+            if len(layer) == 2:
+                layer_name, layer_type = layer
+                layer_displayed_name = layer_name.replace("_", " ")
+            elif len(layer) == 3:
+                layer_name, layer_type, layer_displayed_name = layer
+            else:
+                raise IndexError("every layer should be a tuple: (layer_name, layer_type)"
+                                 " or (layer_name, layer_type, layer_display_name)")
+            if not layer_name.isidentifier() or iskeyword(layer_name):
+                raise ValueError("layer name '%s' is not a valid attribute name (cannot be accessed as 'obj.%s')" % (layer_name, layer_name))
+            new_widget = create_widget(name=layer_name, label=layer_displayed_name, annotation=layer_type)
+            self.__setattr__(layer_name, new_widget)
+            self.layers[layer_name] = new_widget
+        if add_layers:
+            self.extend(self.layers)
+        self.changed.connect(self._on_change),
+
+    def __post_init__(self, *_, **__):
+        if self.persist:
+            self._load(quiet=True)
+
+    def _on_change(self) -> None:
+        if self.persist:
+            self._dump()
+
+    @property
+    def _dump_path(self) -> Path:
+        from magicgui._util import user_cache_dir
+
+        name = getattr(self.__class__, "__qualname__", str(self.__class__))
+        name = name.replace("<", "-").replace(">", "-")  # e.g. <locals>
+        return user_cache_dir() / f"{self.__class__.__module__}.{name}"
+
+    def _dump(self, path: str | Path | None = None) -> None:
+        super()._dump(path or self._dump_path)
+
+    def _load(self, path: str | Path | None = None, quiet: bool = False) -> None:
+        super()._load(path or self._dump_path, quiet=quiet)
 
 
 class WidgetWithLayerList(PersistentWidget):
