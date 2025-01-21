@@ -2,45 +2,42 @@ import colorsys
 import time
 import warnings
 from functools import wraps
+import numpy as np
+
+
+import scipy
+import skimage
+from skimage.filters import gaussian
 
 import napari
-import scipy
-import skimage.draw
-from magicclass import magicclass, vfield, field, set_options, set_design, bind_key, abstractapi, MagicTemplate
-from magicclass.serialize import serialize
-from magicclass.widgets import FreeWidget
-from magicgui.widgets import Image as MagicImage, ComboBox
-from napari._qt.layer_controls.qt_image_controls_base import _QDoubleRangeSlider
 from napari.layers.labels._labels_utils import get_dtype
-from napari.layers.points._points_constants import Mode
+from napari.layers.labels.labels import _coerce_indices_for_vectorization
+from napari.layers.labels._labels_constants import Mode
+from napari.layers import Image, Labels
+from napari.utils.action_manager import action_manager
 from napari.utils._dtype import get_dtype_limits
 from napari.utils.events import Event
-from qtpy.QtGui import QCursor
-from qtpy.QtWidgets import (
-    QLabel,
-    QSizePolicy,
-    QMessageBox,
-)
-from qtpy.QtCore import QMutex, QThread, QObject, Signal, Qt, QEvent
-from ._utils import(
-    ProgressWidget
-)
+from napari._qt.layer_controls.qt_image_controls_base import _QDoubleRangeSlider
+from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
+from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton
+
+from qtpy.QtCore import Signal, QObject, QEvent, QThread, Qt
+from qtpy.QtWidgets import QLabel, QSizePolicy
+from magicclass.serialize import serialize
+from magicclass import MagicTemplate, field, abstractapi, magicclass, vfield, set_design
+from magicclass.widgets import FreeWidget
+from magicgui.widgets import ComboBox, Image as MagicImage
+
+from .minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
+from .minimal_contour_overlay.minimal_contour_overlay import MinimalContourOverlay
 from ._utils.changeable_color_box import QtChangeableColorBox
-from ._utils.callbacks import (
-    extend_mask,
-    reduce_mask,
-    LOCK_CHAR, decrement_selected_label, increment_selected_label, scroll_to_prev, scroll_to_next, increase_brush_size,
-    decrease_brush_size
-)
+from ._utils import ScriptExecuteWidget, ProgressWidget
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
-from ._utils.image_processing_widget import ScriptExecuteWidget
+from ._utils.callbacks import reduce_mask, extend_mask
+from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
+    layer_get_order
+from ..minimal_contour import FeatureManager
 from .._napari_version import NAPARI_VERSION
-from .._helper_functions import layer_dims_displayed, layer_get_order, layer_slice_indices, \
-    layer_dims_order, _coerce_indices_for_vectorization
-from ..minimal_contour import MinimalContourCalculator, FeatureManager
-import numpy as np
-from napari.layers import Image, Labels
-from skimage.filters import gaussian
 
 
 def delay_function(function=None, delay=0.2):
@@ -111,41 +108,30 @@ class ColorBox(FreeWidget):
         self.wdt.layer = layer
 
 
-def bbox_around_points(pts):
-    p1 = pts.min(0)
-    p2 = pts.max(0)
-    size = p2 - p1
-    from_i = p1 - size[0]*0.1 - 10
-    to_i = p2 + size[0]*0.1 + 10
-    return from_i, to_i
-
-
 class EventFilter(QObject):
     def __init__(self, widget):
         super().__init__()
         self.widget = widget
 
     def eventFilter(self, src: 'QObject', event: 'QEvent') -> bool:
-        try:
+        if hasattr(event, "modifiers"):
             self.widget.modifiers = event.modifiers()
-        except:
-            pass
-        if src == self.widget.selected_id_label and event.type() == QEvent.Enter:
-            pos = QCursor.pos()
-        elif event.type() == QEvent.Type.HoverMove:
-            pos = src.mapToGlobal(event.pos())
-        else:
-            return False
-        pos.setX(pos.x()+20)
-        pos.setY(pos.y()+20)
-        self.widget.selected_id_label.move(pos)
+
+        # if src == self.widget.selected_id_label and event.type() == QEvent.Enter:
+        #     pos = QCursor.pos()
+        # elif event.type() == QEvent.Type.HoverMove:
+        #     pos = src.mapToGlobal(event.pos())
+        # else:
+        #     return False
+        # pos.setX(pos.x()+20)
+        # pos.setY(pos.y()+20)
+        # self.widget.selected_id_label.move(pos)
         return False
 
 
 @magicclass(name="Minimal Contour", widget_type="scrollable", properties={"x_enabled": False})
 class MinimalContourWidget(MagicTemplate):
     image_layer_combobox = field(Image, label="Image")
-    labels_layer_combobox = field(Labels, label="Labels")
 
     @magicclass(widget_type="collapsible", name="Image Features")
     class ImageFeaturesWidget(MagicTemplate):
@@ -203,10 +189,8 @@ class MinimalContourWidget(MagicTemplate):
                                                                   "Higher number -> more faithful to the original")
     point_size_spinbox = field(int, label="Point Size", location=ContourWidget).with_options(min=1, max=50, value=2, tooltip="Point size for contour display.")
 
-    def __init__(self, parent=None):
-        self.calculator = MinimalContourCalculator(None, 3)
+    def __init__(self, viewer: napari.Viewer = None):
         self.progress_dialog = ProgressWidget(self.native, message="Drawing mask...")
-        self.move_mutex = QMutex()
         self.draw_worker = self.DrawWorker()
         self.draw_thread = QThread()
         self.draw_worker.moveToThread(self.draw_thread)
@@ -216,7 +200,8 @@ class MinimalContourWidget(MagicTemplate):
         self.draw_thread.started.connect(self.draw_worker.run)
         self._img = None
         self._features = None
-        self._viewer = None
+        self._viewer: napari.Viewer = viewer
+        self._labels_layer: Labels = None
         self.apply_contrast_limits = True
         self._prev_img_layer = self.image_layer
         self._orig_image = self.image_layer.data if self.image_layer else None
@@ -256,8 +241,8 @@ class MinimalContourWidget(MagicTemplate):
         self.modifiers = None
 
     def __post_init__(self):
-        self.calculator.set_param(self.param)
-        self.local_intensity_correction_checkbox.changed.connect(self.calculator.set_use_local_maximum)
+        VispyMinimalContourOverlay.mc_calculator.set_param(self.param)
+        self.local_intensity_correction_checkbox.changed.connect(VispyMinimalContourOverlay.mc_calculator.set_use_local_maximum)
 
         if self.labels_layer is not None:
             dtype_lims = get_dtype_limits(get_dtype(self.labels_layer))
@@ -294,6 +279,8 @@ class MinimalContourWidget(MagicTemplate):
         self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._set_image)
         self._on_label_change()
         self._on_selected_label_change()
+        if self._viewer is not None:
+            self._initialize(self._viewer)
 
     def __magicclass_serialize__(self):
         d = serialize(self)
@@ -321,11 +308,7 @@ class MinimalContourWidget(MagicTemplate):
 
     @property
     def labels_layer(self) -> Labels:
-        return self.labels_layer_combobox.value
-
-    @labels_layer.setter
-    def labels_layer(self, new_layer):
-        self.labels_layer_combobox.value = new_layer
+        return self._labels_layer
 
     @property
     def blur_sigma(self):
@@ -338,7 +321,6 @@ class MinimalContourWidget(MagicTemplate):
     @property
     def param(self):
         return self.param_spinbox.value
-
 
     @property
     def is_blurring_enabled(self):
@@ -369,30 +351,6 @@ class MinimalContourWidget(MagicTemplate):
         return self.modifiers & Qt.AltModifier if self.modifiers is not None else False
 
     def _initialize_helper_layers(self):
-        self.from_e_points_layer = self.viewer.add_points(
-            ndim=3,
-            name="%s from E" % LOCK_CHAR,
-            size=self.point_size,
-            face_color="red",
-            edge_color="red"
-        )
-        self.from_e_points_layer.editable = False
-        self.to_s_points_layer = self.viewer.add_points(
-            ndim=3,
-            name="%s to S" % LOCK_CHAR,
-            size=self.point_size,
-            face_color="gray",
-            edge_color="gray"
-        )
-        self.to_s_points_layer.editable = False
-        self.output = self.viewer.add_points(
-            ndim=3,
-            name="%s temp" % LOCK_CHAR,
-            size=self.point_size,
-        )
-        self.output.editable = False
-        self.anchor_points = self.viewer.add_points(ndim=3, name="Anchors [DO NOT ALTER]", symbol="x")
-        self.anchor_points.mode = "add"
         self._change_point_size(self.point_size)
 
     class DrawWorker(QObject):
@@ -483,7 +441,7 @@ class MinimalContourWidget(MagicTemplate):
         self.feature_editor.run_button.setToolTip("Open an image first" if self.image_layer is None else "")
         self._set_image("_on_image_changed")
 
-    @labels_layer_combobox.connect
+    # @labels_layer_combobox.connect
     def _on_label_change(self, _=None):
         labels_layer = self.labels_layer
         selected_label_spinbox = self.selected_label_spinbox
@@ -517,14 +475,14 @@ class MinimalContourWidget(MagicTemplate):
     def _on_feature_change(self, used_feature, update_image=True):
         self.feature_editor.visible = (used_feature == CUSTOM)
         self.feature_inverted = (used_feature == LOW_INTENSITY)
-        self.calculator.set_method(FEATURES[used_feature])
+        VispyMinimalContourOverlay.mc_calculator.set_method(FEATURES[used_feature])
         self.param_spinbox.visible = used_feature == ASSYM_GRADIENT
         if update_image:
             self._set_image("_on_feature_change")
 
     @param_spinbox.connect
     def _on_param_change(self, val, update_image=True):
-        self.calculator.set_param(val)
+        VispyMinimalContourOverlay.mc_calculator.set_param(val)
         if update_image:
             self._set_image("_on_param_change")
 
@@ -576,6 +534,7 @@ class MinimalContourWidget(MagicTemplate):
 
     @point_size_spinbox.connect
     def _change_point_size(self, size):
+        return
         self.to_s_points_layer.size = size
         self.to_s_points_layer.selected_data = {}
         self.to_s_points_layer.current_size = size
@@ -612,38 +571,30 @@ class MinimalContourWidget(MagicTemplate):
             self._update_label_tooltip()
 
     def _shift_pressed(self, *_):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            if self.labels_layer is not None and len(self.anchor_points.data) == 0 and self.viewer.window.qt_viewer.canvas.native.hasFocus():
-                self.selected_id_label.show()
-        self.from_e_points_layer.face_color = "gray"
-        self.from_e_points_layer.current_face_color = "gray"
-        self.to_s_points_layer.face_color = "red"
-        self.to_s_points_layer.current_face_color = "red"
-        self.from_e_points_layer.edge_color = "gray"
-        self.from_e_points_layer.current_edge_color = "gray"
-        self.to_s_points_layer.edge_color = "red"
-        self.to_s_points_layer.current_edge_color = "red"
-        yield
-        self.selected_id_label.hide()
-        self.from_e_points_layer.face_color = "red"
-        self.from_e_points_layer.current_face_color = "red"
-        self.to_s_points_layer.face_color = "gray"
-        self.to_s_points_layer.current_face_color = "gray"
-        self.from_e_points_layer.edge_color = "red"
-        self.from_e_points_layer.current_edge_color = "red"
-        self.to_s_points_layer.edge_color = "gray"
-        self.to_s_points_layer.current_edge_color = "gray"
-
-    def _clear_all(self, *_):
-        self.output.data = np.empty((0, 3), dtype=self.output.data.dtype)
-        with self.anchor_points.events.data.blocker():
-            self.anchor_points.data = np.empty((0, 3), dtype=self.output.data.dtype)
-        self.prev_n_anchor_points = 0
-        self.from_e_points_layer.data = np.empty((0, 3), dtype=self.output.data.dtype)
-        self.to_s_points_layer.data = np.empty((0, 3), dtype=self.output.data.dtype)
-        self.point_triangle[:] = -1
-        self.prev_n_anchor_points = 0
+        # TODO handle correctly
+        return
+        # with warnings.catch_warnings():
+        #     warnings.simplefilter("ignore")
+        #     if self.labels_layer is not None and len(self.anchor_points.data) == 0 and self.viewer.window.qt_viewer.canvas.native.hasFocus():
+        #         self.selected_id_label.show()
+        # self.from_e_points_layer.face_color = "gray"
+        # self.from_e_points_layer.current_face_color = "gray"
+        # self.to_s_points_layer.face_color = "red"
+        # self.to_s_points_layer.current_face_color = "red"
+        # self.from_e_points_layer.edge_color = "gray"
+        # self.from_e_points_layer.current_edge_color = "gray"
+        # self.to_s_points_layer.edge_color = "red"
+        # self.to_s_points_layer.current_edge_color = "red"
+        # yield
+        # self.selected_id_label.hide()
+        # self.from_e_points_layer.face_color = "red"
+        # self.from_e_points_layer.current_face_color = "red"
+        # self.to_s_points_layer.face_color = "gray"
+        # self.to_s_points_layer.current_face_color = "gray"
+        # self.from_e_points_layer.edge_color = "red"
+        # self.from_e_points_layer.current_edge_color = "red"
+        # self.to_s_points_layer.edge_color = "gray"
+        # self.to_s_points_layer.current_edge_color = "gray"
 
     def _ctrl_shift_pressed(self, _):
         shift_callback = self._shift_pressed(_)
@@ -666,16 +617,9 @@ class MinimalContourWidget(MagicTemplate):
             diff *= min(max(1, labels_layer.brush_size//10), 5)
             labels_layer.brush_size = max(1, labels_layer.brush_size + diff)
 
-    def _on_double_click(self, *args):
-        if self.shift_down and len(self.from_e_points_layer.data):
-            self.output.data = np.concatenate([self.output.data, self.from_e_points_layer.data], 0)
-        elif not self.shift_down and len(self.to_s_points_layer.data):
-            self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
-        if self.is_contour_smoothing_enabled:
-            self.output.data = self._smooth_fourier(self.output.data)
-        self._points_to_mask()
-
     def _on_right_click(self, layer, event: Event):
+        # TODO remove
+        return
         if event.button != 2 or layer.mode != Mode.ADD:
             return
         self.remove_last_anchor = True
@@ -691,63 +635,6 @@ class MinimalContourWidget(MagicTemplate):
         self.point_triangle[-1] = self.anchor_points.data[0][list(layer_dims_displayed(self.anchor_points))]
         self.point_triangle[0] = self.anchor_points.data[-1][list(layer_dims_displayed(self.anchor_points))]
         self.last_segment_length = None
-
-    def _on_mouse_move(self, layer, event):
-        if not self.move_mutex.tryLock():
-            return
-        try:
-            image_layer = self.image_layer
-            if image_layer is None or self.anchor_points is None:
-                return
-            if layer.mode != Mode.ADD or self.viewer.dims.ndisplay == 3:
-                return
-            self.point_triangle[1] = np.asarray(event.position)[[i for i in layer_dims_displayed(self.anchor_points)]]
-            displayed_shape = np.asarray(image_layer.data.shape)[list(layer_dims_displayed(image_layer))]
-            if np.any(self.point_triangle[1] < 0) or np.any(self.point_triangle[1] >= displayed_shape):
-                self.point_triangle[1] = np.clip(self.point_triangle[1], 0, np.subtract(displayed_shape, 1))
-            if np.any(self.point_triangle < 0) or np.any(self.point_triangle >= displayed_shape):
-                return
-            if not self.ctrl_down:
-                if self.feature_editor.visible:
-                    if self._features is None:
-                        warnings.warn("Feature image not calculated. Run script using the 'Set' button.")
-                        return
-                    results = self._estimate(self._features)
-                else:
-                    if self.image_data is None:
-                        warnings.warn("Image was not set.")
-                        return
-                    results = self._estimate(self.image_data)
-            else:
-                results = [
-                    np.vstack(skimage.draw.line(
-                        int(self.point_triangle[1, 0]),
-                        int(self.point_triangle[1, 1]),
-                        int(self.point_triangle[0, 0]),
-                        int(self.point_triangle[0, 1])
-
-                    )).T,
-                    np.vstack(skimage.draw.line(
-                        int(self.point_triangle[2, 0]),
-                        int(self.point_triangle[2, 1]),
-                        int(self.point_triangle[1, 0]),
-                        int(self.point_triangle[1, 1])
-                    )).T
-                ]
-            new_e_data = np.tile(np.where([i in layer_dims_displayed(self.anchor_points) for i in range(3)], np.nan, self.anchor_points.data[0]), [len(results[0]), 1])
-            new_s_data = np.tile(np.where([i in layer_dims_displayed(self.anchor_points) for i in range(3)], np.nan, self.anchor_points.data[0]), [len(results[1]), 1])
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                order = layer_get_order(self.image_layer)
-                new_e_data[np.isnan(new_e_data)] = np.flipud(results[0][:, order[:2]]).reshape(-1)
-                new_s_data[np.isnan(new_s_data)] = np.flipud(results[1][:, order[:2]]).reshape(-1)
-
-            self.from_e_points_layer.data = new_e_data
-            self.to_s_points_layer.data = new_s_data
-            self.from_e_points_layer.selected_data = {}
-            self.to_s_points_layer.selected_data = {}
-        finally:
-            self.move_mutex.unlock()
 
     def _blur_image(self, img):
         return gaussian(
@@ -779,16 +666,18 @@ class MinimalContourWidget(MagicTemplate):
                     break
 
     def _set_image(self, event=None):
+        #TODO make it work
         image_layer: Image = self.image_layer
         if image_layer is None:
             self._img = None
             self.feature_editor.variables["image"] = None
+            VispyMinimalContourOverlay.set_calculator_feature(None)
             # self.feature_editor.features = None #TODO check
             return
         if self.viewer is None:
             return
         if self.viewer.dims.ndisplay == 3:
-            self.anchor_points.editable = False
+            # self.anchor_points.editable = False
             return
         self._apply_blurring()
         if not image_layer.visible:
@@ -831,13 +720,13 @@ class MinimalContourWidget(MagicTemplate):
                     grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
                     min_, max_ = grad_magnitude.min(), grad_magnitude.max()
                     grad_magnitude = (grad_magnitude - min_) / (max_ - min_)
-                    self.calculator.set_image(np.concatenate([grad_magnitude[..., None]]*3, axis=-1), np.empty((0,0)), np.empty((0,0)))
+                    VispyMinimalContourOverlay.set_calculator_feature(grad_magnitude)
                 else:
-                    self.calculator.set_image(image, grad_x, grad_y)
-        self.anchor_points.translate = image_layer.translate
-        self.from_e_points_layer.translate = image_layer.translate
-        self.to_s_points_layer.translate = image_layer.translate
-        self.output.translate = image_layer.translate
+                    VispyMinimalContourOverlay.set_calculator_feature(image, grad_x, grad_y)
+        # self.anchor_points.translate = image_layer.translate
+        # self.from_e_points_layer.translate = image_layer.translate
+        # self.to_s_points_layer.translate = image_layer.translate
+        # self.output.translate = image_layer.translate
 
     @delay_function(delay=.5)
     def _delayed_set_image(self, *args):
@@ -853,36 +742,7 @@ class MinimalContourWidget(MagicTemplate):
         if features.ndim == 2:
             features = np.concatenate([features[..., np.newaxis]] * 3, -1)
         self._features = features
-        self.calculator.set_image(features.astype(float), np.empty((0, 0,)), np.empty((0, 0,)))
-
-    def _move_temp_to_top(self, e=None):
-        layer_list = self.viewer.layers
-        try:
-            with layer_list.events.moved.blocker(self._move_temp_to_top):
-                temp_idx = layer_list.index(self.output)
-                if temp_idx != len(layer_list) - 1:
-                    layer_list.move(temp_idx, -1)
-                if self.anchor_points is not None:
-                    points_idx = layer_list.index(self.anchor_points)
-                    if points_idx != len(layer_list) - 2:
-                        layer_list.move(points_idx, -2)
-                if self.to_s_points_layer in layer_list:
-                    to_s_idx = layer_list.index(self.to_s_points_layer)
-                    if to_s_idx != len(layer_list) - 3:
-                        layer_list.move(to_s_idx, -3)
-                if self.from_e_points_layer in layer_list:
-                    from_e_idx = layer_list.index(self.from_e_points_layer)
-                    if from_e_idx != len(layer_list) - 4:
-                        layer_list.move(from_e_idx, -4)
-        except KeyError:
-            ...
-
-    def _swap_selection(self, viewer: napari.Viewer):
-        labels_layer = self.labels_layer
-        if self.anchor_points != viewer.layers.selection.active:
-            viewer.layers.selection.select_only(self.anchor_points)
-        elif labels_layer is not None and labels_layer != viewer.layers.selection.active:
-            viewer.layers.selection.select_only(labels_layer)
+        VispyMinimalContourOverlay.set_calculator_feature(features.astype(float))
 
     def _update_label_tooltip(self):
         labels_layer = self.labels_layer
@@ -902,9 +762,37 @@ class MinimalContourWidget(MagicTemplate):
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.canvas.native.setFocus()
 
+    def _on_active_layer_changed(self, *_):
+        active_layer = self.viewer.layers.selection.active
+        self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
+        if self._labels_layer:
+            if "minimal_contour" not in self._labels_layer._overlays:
+                self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
+                self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
+                labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._labels_layer]
+                action_name = 'napari-nD-annotator:activate_labels_mc_mode'
+                btn = QtModeRadioButton(self._labels_layer, "Minimal contour", Mode.PAN_ZOOM)
+                action_manager.bind_button(
+                    action_name,
+                    btn,
+                    # extra_tooltip_text=extra_tooltip_text,
+                )
+                for button in labels_control.button_group.buttons():
+                    button.clicked.connect(self._disable_mc_mode)
+                labels_control.button_group.addButton(btn)
+                labels_control._EDIT_BUTTONS += (btn,)
+                labels_control.mc_button = btn
+                labels_control.button_grid.addWidget(labels_control.mc_button, 1, 0)
+
+    def _on_ctrl_pressed(self, _):
+        self.labels_layer._overlays["minimal_contour"].use_straight_lines = True
+        yield
+        self.labels_layer._overlays["minimal_contour"].use_straight_lines = False
+
+
     def _set_viewer_callbacks(self):
-        self.viewer.layers.events.connect(self.labels_layer_combobox.reset_choices)
         self.viewer.layers.events.connect(self.image_layer_combobox.reset_choices)
+        self.viewer.layers.selection.events.active.connect(self._on_active_layer_changed)
 
         def change_layer_callback(num):
             def change_layer(_):
@@ -921,103 +809,34 @@ class MinimalContourWidget(MagicTemplate):
 
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")
         self.viewer.dims.events.order.connect(self._set_image, position="last")
-        self.viewer.layers.events.inserted.connect(self._move_temp_to_top, position="last")
-        self.viewer.layers.events.moved.connect(self._move_temp_to_top, position="last")
         self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
-        self.viewer.bind_key("Control-Tab", overwrite=True)(self._swap_selection)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.window().installEventFilter(self.event_filter)
             self.viewer.window.qt_viewer.window().setMouseTracking(True)
-
-    def _set_anchor_layer_callbacks(self):
-        self.anchor_points.events.data.connect(self._data_event)
-        self.anchor_points.events.mode.connect(self._add_mode_only)
-        self.anchor_points.bind_key("Shift", overwrite=True)(self._shift_pressed)
-        self.anchor_points.bind_key("Escape", overwrite=True)(self._clear_all)
-        self.anchor_points.bind_key("Control-Shift", overwrite=True)(self._ctrl_shift_pressed)
-        self.anchor_points.bind_key("Control-Z", overwrite=True)(self._ctrl_z_callback)
-        self.anchor_points.bind_key("Control-+", overwrite=True)(lambda _: extend_mask(self.labels_layer))
-        self.anchor_points.bind_key("Control--", overwrite=True)(lambda _: reduce_mask(self.labels_layer))
-        self.anchor_points.bind_key("Q", overwrite=True)(lambda _: decrement_selected_label(self.labels_layer))
-        self.anchor_points.bind_key("E", overwrite=True)(lambda _: increment_selected_label(self.labels_layer))
-        self.anchor_points.bind_key("A", overwrite=True)(scroll_to_prev(self.viewer))
-        self.anchor_points.bind_key("D", overwrite=True)(scroll_to_next(self.viewer))
-        self.anchor_points.bind_key("W", overwrite=True)(lambda _: increase_brush_size(self.labels_layer))
-        self.anchor_points.bind_key("S", overwrite=True)(lambda _: decrease_brush_size(self.labels_layer))
-        if self._on_double_click not in self.anchor_points.mouse_double_click_callbacks:
-            self.anchor_points.mouse_double_click_callbacks.append(self._on_double_click)
-        if self._on_mouse_move not in self.anchor_points.mouse_move_callbacks:
-            self.anchor_points.mouse_move_callbacks.append(self._on_mouse_move)
-        if self._on_right_click not in self.anchor_points.mouse_drag_callbacks:
-            self.anchor_points.mouse_drag_callbacks.insert(0, self._on_right_click)
-        if self._on_mouse_wheel not in self.anchor_points.mouse_wheel_callbacks:
-            self.anchor_points.mouse_wheel_callbacks.append(self._on_mouse_wheel)
 
     def _initialize(self, viewer: napari.Viewer):
         self._viewer = viewer
         self._initialize_helper_layers()
         self.feature_manager = FeatureManager(self.viewer)
         self._set_viewer_callbacks()
-        self._set_anchor_layer_callbacks()
         self._store_orig_image()
         self._apply_blurring()
-        self._move_temp_to_top()
         self._update_label_tooltip()
         self._set_image()
+        action_manager.register_action("napari-nD-annotator:activate_labels_mc_mode", self._enable_mc_mode,
+                                       "We're switching to MC mode", None)
 
-    def _data_event(self, event):
-        image_layer = self.image_layer
-        if image_layer is None:
-            with self.anchor_points.events.data.blocker():
-                self._clear_all()
-            warnings.warn("Open an image first")
-            return
-        if event.source != self.anchor_points:
-            return
-        if self.remove_last_anchor:
-            with self.anchor_points.events.data.blocker():
-                self.anchor_points.data = self.anchor_points.data[:-1]
-                self.remove_last_anchor = False
-                return
-        anchor_data = self.anchor_points.data # TODO check
-        if len(anchor_data) < self.prev_n_anchor_points:
-            with self.anchor_points.events.data.blocker():
-                self._clear_all()
-            warnings.warn("Cannot delete a single point. Cleared all anchor points")
-            return
-        self.prev_n_anchor_points = len(anchor_data)
-        if len(anchor_data) == 0:
-            return
-        anchor_data[-1, list(layer_dims_displayed(self.anchor_points))] = np.clip(anchor_data[-1, list(layer_dims_displayed(self.anchor_points))], 0, np.subtract(image_layer.data.shape[:image_layer.ndim], 1)[list(layer_dims_displayed(image_layer))])
-        if len(anchor_data) > 1 and np.all(np.round(anchor_data[-1]) == np.round(anchor_data[-2])):
-            with self.anchor_points.events.data.blocker():
-                self.anchor_points.data = self.anchor_points.data[:-1]
-            self.anchor_points.refresh()
-            return
-        self.anchor_points.refresh()
-        if self.shift_down:
-            self.last_added_with_shift = True
-            with self.anchor_points.events.data.blocker():
-                self.anchor_points.data = np.roll(self.anchor_points.data, 1, 0)
-            if len(self.to_s_points_layer.data):
-                self.output.data = np.concatenate([self.to_s_points_layer.data, self.output.data], 0)
-                self.last_segment_length = len(self.to_s_points_layer.data)
-                self.to_s_points_layer.data = np.empty((0, 3))
-        else:
-            if len(self.from_e_points_layer.data):
-                self.output.data = np.concatenate([self.output.data, self.from_e_points_layer.data], 0)
-                self.last_added_with_shift = False
-                self.last_segment_length = len(self.from_e_points_layer.data)
-                self.from_e_points_layer.data = np.empty((0, 3))
+    def _enable_mc_mode(self, *args, **kwargs):
+        print(args, kwargs)
+        if self.labels_layer is not None:
+            print("enabling overlay")
+            self.labels_layer._overlays["minimal_contour"].enabled = True
 
-        self.point_triangle[-1] = self.anchor_points.data[0][list(layer_dims_displayed(self.anchor_points))]
-        self.point_triangle[0] = self.anchor_points.data[-1][list(layer_dims_displayed(self.anchor_points))]
-
-    def _add_mode_only(self, event):
-        if event.mode not in ["add", "pan_zoom"]:
-            warnings.warn("Cannot change mode to %s: only 'add' and 'pan_zoom' mode is allowed" % event.mode)
-            event.source.mode = "add"
+    def _disable_mc_mode(self, *args, **kwargs):
+        if self.labels_layer is not None:
+            print("disabling overlay")
+            self.labels_layer._overlays["minimal_contour"].enabled = False
 
     def _smooth_fourier(self, points):
         coefficients=max(3, round(self.contour_smoothness*len(points)))
@@ -1030,63 +849,3 @@ class MinimalContourWidget(MagicTemplate):
         inv_tformed = scipy.fft.irfft(tformed[:coefficients], len(points_2d), axis=0) + center
         points[:, mask_2d] = inv_tformed
         return points
-
-    def _estimate(self, image: np.ndarray):
-        from_i, to_i = bbox_around_points(self.point_triangle)
-        from_i = np.clip(from_i, 0, np.asarray(image.shape[:2])).astype(int)
-        to_i = np.clip(to_i, 0, np.asarray(image.shape[:2])).astype(int)
-        self.calculator.set_boundaries(from_i[1], from_i[0], to_i[1], to_i[0])
-        results = self.calculator.run(
-            self.point_triangle,
-            True,
-            True,
-            True
-        )
-        return results
-
-    def _points_to_mask(self):
-        if self.image_data is None or len(self.output.data) == 0:
-            return
-        skip_drawing = False
-        labels_layer = self.labels_layer
-        image_layer = self.image_layer
-        if labels_layer is None:
-            answer = QMessageBox.question(
-                self.native,
-                "Missing Labels layer",
-                "Create Labels layer?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                prev_selection = self.viewer.layers.selection.copy()
-                labels_layer = self.viewer.add_labels(np.zeros(image_layer.data.shape[:image_layer.ndim], dtype=np.uint16))
-                self.labels_layer = labels_layer
-                labels_layer.set_view_slice()
-                self.viewer.layers.selection = prev_selection
-            else:
-                skip_drawing = True
-        elif not np.array_equal(labels_layer.data.shape[:labels_layer.ndim], image_layer.data.shape[:image_layer.ndim]):
-            answer = QMessageBox.question(
-                self.native,
-                "Shape mismatch",
-                "Current labels and image layers have different shape."
-                " Do you want to create a new labels layer with the appropriate shape?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                labels_layer = self.viewer.add_labels(
-                    np.zeros(image_layer.data.shape[:image_layer.ndim], dtype=np.uint16))
-                self.labels_layer = labels_layer
-                labels_layer.set_view_slice()
-            else:
-                skip_drawing = True
-        if not skip_drawing:
-            if not labels_layer.visible:
-                labels_layer.set_view_slice()
-            self.progress_dialog.setVisible(True)
-            self.draw_worker.contour = np.asarray([np.asarray(labels_layer.world_to_data(self.output.data_to_world(p)))[list(layer_dims_displayed(labels_layer))] for p in self.output.data])
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                self.draw_worker.mask_shape = labels_layer._data_view.shape
-            self.draw_thread.start()
-        self._clear_all()
