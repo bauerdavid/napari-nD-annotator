@@ -1,0 +1,3 @@
+QtModeRadioButton[mode="minimal contour"]::indicator {
+  image: url("theme_{{ id }}:/mc_contour.svg");
+}

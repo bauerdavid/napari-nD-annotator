@@ -20,6 +20,7 @@ from napari.utils.events import Event
 from napari._qt.layer_controls.qt_image_controls_base import _QDoubleRangeSlider
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
 from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton
+from napari._qt.qt_resources import get_current_stylesheet
 
 from qtpy.QtCore import Signal, QObject, QEvent, QThread, Qt
 from qtpy.QtWidgets import QLabel, QSizePolicy
@@ -38,6 +39,7 @@ from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_sl
     layer_get_order
 from ..minimal_contour import FeatureManager
 from .._napari_version import NAPARI_VERSION
+from .minimal_contour_overlay.resources import mc_contour_style_path
 
 
 def delay_function(function=None, delay=0.2):
@@ -771,18 +773,25 @@ class MinimalContourWidget(MagicTemplate):
                 self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
                 labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._labels_layer]
                 action_name = 'napari-nD-annotator:activate_labels_mc_mode'
-                btn = QtModeRadioButton(self._labels_layer, "Minimal contour", Mode.PAN_ZOOM)
+                btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
                 action_manager.bind_button(
                     action_name,
                     btn,
                     # extra_tooltip_text=extra_tooltip_text,
                 )
                 for button in labels_control.button_group.buttons():
-                    button.clicked.connect(self._disable_mc_mode)
+                    button.toggled.connect(self._disable_mc_mode)
+                btn.setStyleSheet(get_current_stylesheet([mc_contour_style_path]))
                 labels_control.button_group.addButton(btn)
                 labels_control._EDIT_BUTTONS += (btn,)
                 labels_control.mc_button = btn
                 labels_control.button_grid.addWidget(labels_control.mc_button, 1, 0)
+
+                def switch_to_mc_mode(*_, **__):
+                    btn.setChecked(True)
+                    btn.setChecked(True)
+                    self._enable_mc_mode()
+                self._labels_layer.bind_key("0", switch_to_mc_mode)
 
     def _on_ctrl_pressed(self, _):
         self.labels_layer._overlays["minimal_contour"].use_straight_lines = True
@@ -833,8 +842,9 @@ class MinimalContourWidget(MagicTemplate):
             print("enabling overlay")
             self.labels_layer._overlays["minimal_contour"].enabled = True
 
-    def _disable_mc_mode(self, *args, **kwargs):
-        if self.labels_layer is not None:
+    def _disable_mc_mode(self, state):
+        print("state:", state)
+        if state and self.labels_layer is not None:
             print("disabling overlay")
             self.labels_layer._overlays["minimal_contour"].enabled = False
 

@@ -43,6 +43,10 @@ def _only_when_enabled(callback):
                 print("overlay not enabled")
                 return
 
+            if self._features_shape is None:
+                print("no features set")
+                return
+
             if layer._slice_input.ndisplay != 2 or layer.n_edit_dimensions != 2:
                 print("wrong ndisplay")
                 return
@@ -52,6 +56,10 @@ def _only_when_enabled(callback):
         def decorated_callback(self, layer: Labels, event):
             if not self.overlay.enabled:
                 print("overlay not enabled")
+                return
+
+            if self._features_shape is None:
+                print("no features set")
                 return
 
             if layer._slice_input.ndisplay != 2 or layer.n_edit_dimensions != 2:
