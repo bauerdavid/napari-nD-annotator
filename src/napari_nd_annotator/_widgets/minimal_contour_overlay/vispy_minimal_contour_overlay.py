@@ -1,6 +1,7 @@
 import traceback
 import warnings
 import inspect
+from functools import lru_cache
 
 import numpy as np
 import skimage
@@ -40,39 +41,40 @@ def _only_when_enabled(callback):
     if inspect.isgeneratorfunction(callback):
         def decorated_callback(self, layer: Labels, event):
             if not self.overlay.enabled:
-                print("overlay not enabled")
                 return
 
             if self._features_shape is None:
-                print("no features set")
                 return
 
             if layer._slice_input.ndisplay != 2 or layer.n_edit_dimensions != 2:
-                print("wrong ndisplay")
                 return
             yield from callback(self, layer, event)
-            print(f"callback {callback.__name__ } called")
     else:
         def decorated_callback(self, layer: Labels, event):
             if not self.overlay.enabled:
-                print("overlay not enabled")
                 return
 
             if self._features_shape is None:
-                print("no features set")
                 return
 
             if layer._slice_input.ndisplay != 2 or layer.n_edit_dimensions != 2:
-                print("wrong ndisplay")
                 return
             callback(self, layer, event)
-            print(f"callback {callback.__name__ } called")
 
     return decorated_callback
 
 
-dashed_cache = np.arange(20000, dtype=np.uint16).reshape(-1, 2)
+cache_size = 20_000
+dash_len = 1
+skip_len = 7
+dashed_cache = np.concatenate([np.arange(i, i+dash_len, dtype=np.uint32) for i in range(0, cache_size*dash_len, dash_len+skip_len)])
+dashed_cache = np.tile(dashed_cache[:, None], (1, 2))
+dashed_cache[:, 1] += 4
 
+
+@lru_cache(maxsize=200)
+def get_dashed_cache(data_len):
+    return dashed_cache[:np.searchsorted(dashed_cache[:, 1], data_len)]
 
 
 class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
@@ -95,10 +97,9 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         }
 
         self._anchor_points = Markers(pos=np.array(points), **self._nodes_kwargs)
-
-        self._last_anchor_to_current_pos_contour = Line(pos=points, width=3, color=(1., 0., 0., 1.), method='gl')
-        self._current_pos_to_first_anchor_contour = Line(pos=points, width=3, color=(.3, .3, .3, 1.), method='gl')
-        self._stored_contour = Line(pos=points, width=3, method='agg')
+        self._last_anchor_to_current_pos_contour = Line(pos=points, width=overlay.contour_width, color=(1., 0., 0., 1.), method='gl')
+        self._current_pos_to_first_anchor_contour = Line(pos=points, width=overlay.contour_width, color=(.3, .3, .3, 1.), method='gl')
+        self._stored_contour = Line(pos=points, width=overlay.contour_width, method='agg')
         super().__init__(
             node=Compound([self._anchor_points, self._last_anchor_to_current_pos_contour, self._current_pos_to_first_anchor_contour, self._stored_contour]),
             layer=layer,
@@ -115,6 +116,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         self.overlay.events.anchor_points.connect(self._on_points_change)
         self.overlay.events.enabled.connect(self._on_enabled_change)
         self.overlay.events.use_straight_lines.connect(self._set_use_straight_lines)
+        self.overlay.events.contour_width.connect(self._on_width_change)
         layer.events.selected_label.connect(self._update_color)
         layer.events.colormap.connect(self._update_color)
         layer.events.opacity.connect(self._update_color)
@@ -161,6 +163,11 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         if self.overlay.enabled:
             self._on_points_change()
 
+    def _on_width_change(self):
+        self._last_anchor_to_current_pos_contour.set_data(width=self.overlay.contour_width)
+        self._current_pos_to_first_anchor_contour.set_data(width=self.overlay.contour_width)
+        self._stored_contour.set_data(width=self.overlay.contour_width)
+
     def _on_points_change(self):
         current_pos_to_first_anchor_points = np.round(self.overlay.current_pos_to_first_anchor_contour).reshape(-1, self.layer.ndim)
         stored_contour_points = np.round(self.overlay.stored_contour).reshape(-1, self.layer.ndim)
@@ -193,7 +200,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
                     visual.pos = new_data
                 else:
                     if is_dashed:
-                        visual.set_data(new_data, connect=dashed_cache[:len(new_data)//2])
+                        visual.set_data(new_data, connect=get_dashed_cache(len(new_data)))
                     else:
                         visual.set_data(new_data)
                 visual.visible = True

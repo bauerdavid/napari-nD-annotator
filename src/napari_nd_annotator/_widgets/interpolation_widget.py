@@ -5,7 +5,11 @@ import napari
 import numpy as np
 import cv2
 from magicclass import magicclass, field, vfield, bind_key, MagicTemplate
+from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
+from napari._qt.qt_resources import get_current_stylesheet
+from napari._qt.widgets.qt_mode_buttons import QtModePushButton
 from napari.layers import Labels
+from napari.utils.action_manager import action_manager
 
 from scipy.interpolate import interp1d
 from qtpy.QtCore import QThread, QObject, Signal
@@ -14,6 +18,7 @@ from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
+from .resources import interpolate_style_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
@@ -225,6 +230,7 @@ class InterpolationWidget(MagicTemplate):
         self.interpolation_worker.progress.connect(self.progress_dialog.setValue)
         self.interpolation_thread.started.connect(self.interpolation_worker.run)
         self.interpolation_worker.done.connect(self._enable_interpolation_button)
+        self._active_labels_layer = None
         # layout.addStretch() -> how?
 
     def __post_init__(self):
@@ -233,11 +239,12 @@ class InterpolationWidget(MagicTemplate):
 
     def _initialize(self, viewer: napari.Viewer):
         self._viewer = viewer
-        self._viewer.bind_key("Ctrl-I")(self.Interpolate)
         self._on_active_layer_changed()
         self.viewer.dims.events.ndisplay.connect(
             lambda _: self.interpolate_button.options.update(enabled=self.viewer.dims.ndisplay == 2))
         self.viewer.layers.selection.events.active.connect(self._on_active_layer_changed)
+        action_manager.register_action("napari-nD-annotator:interpolate", self.Interpolate,
+                                       "Interpolate missing slices (I)", None)
 
     @property
     def viewer(self):
@@ -251,7 +258,7 @@ class InterpolationWidget(MagicTemplate):
         self.interpolation_worker.max_iterations = self.rpsv_max_iterations.value
 
     def Interpolate(self, _=None):
-        if self.active_labels_layer is None:
+        if self.active_labels_layer is None or self.dimension is None:
             return
         self.progress_dialog.setMaximum(self.active_labels_layer.data.shape[self.dimension])
         self.progress_dialog.setVisible(True)
@@ -283,8 +290,30 @@ class InterpolationWidget(MagicTemplate):
 
     @property
     def active_labels_layer(self) -> Labels | None:
-        active_layer = self.viewer.layers.selection.active
-        return active_layer if isinstance(active_layer, Labels) else None
+        return self._active_labels_layer
+
+    @active_labels_layer.setter
+    def active_labels_layer(self, layer):
+        if layer == self._active_labels_layer:
+            return
+        self._active_labels_layer = layer if isinstance(layer, Labels) else None
+        if self._active_labels_layer is None or self._active_labels_layer.ndim < 3:
+            return
+        labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._active_labels_layer]
+        if labels_control.button_grid.itemAtPosition(1, 1) is not None:
+            return
+        interpolate_button = QtModePushButton(
+            self._active_labels_layer,
+            'interpolate',
+        )
+        action_manager.bind_button(
+            'napari-nD-annotator:interpolate', interpolate_button
+        )
+        interpolate_button.setStyleSheet(get_current_stylesheet([interpolate_style_path]))
+        labels_control.button_group.addButton(interpolate_button)
+        labels_control.interpolate_button = interpolate_button
+        labels_control.button_grid.addWidget(labels_control.interpolate_button, 1, 1)
+        self._active_labels_layer.bind_key("I", self.Interpolate)
 
     @property
     def interpolate_button(self):
@@ -296,6 +325,7 @@ class InterpolationWidget(MagicTemplate):
         self.interpolate_button.enabled = True
 
     def _on_active_layer_changed(self, *_):
+        self.active_labels_layer = self.viewer.layers.selection.active
         if self.active_labels_layer is None or self.active_labels_layer.ndim == 2:
             self.interpolate_button.enabled = False
             return

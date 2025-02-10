@@ -2,7 +2,7 @@ import numpy as np
 from napari._pydantic_compat import Field
 from napari.components.overlays import SceneOverlay
 from napari.layers import Labels
-
+import scipy
 
 class MinimalContourOverlay(SceneOverlay):
     """Overlay that displays a polygon on a scene.
@@ -40,11 +40,28 @@ class MinimalContourOverlay(SceneOverlay):
     current_pos_to_first_anchor_contour: list = Field(default_factory=list)
     stored_contour: list = Field(default_factory=list)
     use_straight_lines: bool = False
+    contour_smoothness: float = 1.
+    contour_width: int = 3
 
     def add_polygon_to_labels(self, layer: Labels) -> None:
         if len(self.stored_contour) > 2:
-            layer.paint_polygon(np.round(self.stored_contour), layer.selected_label)
+            contour = np.asarray(self.stored_contour)
+            if self.contour_smoothness < 1.:
+                contour = self.smooth_contour(contour)
+            layer.paint_polygon(np.round(contour), layer.selected_label)
         self.stored_contour = []
         self.last_anchor_to_current_pos_contour = []
         self.current_pos_to_first_anchor_contour = []
         self.anchor_points = []
+
+    def smooth_contour(self, contour: np.ndarray):
+        coefficients = max(3, round(self.contour_smoothness * len(contour)))
+        mask_2d = ~np.all(contour == contour.min(), axis=0)
+        points_2d = contour[:, mask_2d]
+        center = points_2d.mean(0)
+        points_2d = points_2d - center
+        tformed = scipy.fft.rfft(points_2d, axis=0)
+        tformed[0] = 0
+        inv_tformed = scipy.fft.irfft(tformed[:coefficients], len(points_2d), axis=0) + center
+        contour[:, mask_2d] = inv_tformed
+        return contour

@@ -1,0 +1,3 @@
+QtModePushButton[mode="interpolate"] {
+  image: url("theme_{{ id }}:/interpolate.svg");
+}

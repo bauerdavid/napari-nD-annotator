@@ -4,8 +4,6 @@ import warnings
 from functools import wraps
 import numpy as np
 
-
-import scipy
 import skimage
 from skimage.filters import gaussian
 
@@ -19,7 +17,7 @@ from napari.utils._dtype import get_dtype_limits
 from napari.utils.events import Event
 from napari._qt.layer_controls.qt_image_controls_base import _QDoubleRangeSlider
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
-from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton
+from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton, QtModePushButton
 from napari._qt.qt_resources import get_current_stylesheet
 
 from qtpy.QtCore import Signal, QObject, QEvent, QThread, Qt
@@ -39,7 +37,7 @@ from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_sl
     layer_get_order
 from ..minimal_contour import FeatureManager
 from .._napari_version import NAPARI_VERSION
-from .minimal_contour_overlay.resources import mc_contour_style_path
+from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
 def delay_function(function=None, delay=0.2):
@@ -189,7 +187,7 @@ class MinimalContourWidget(MagicTemplate):
                                                           tooltip="Number of Fourier coefficients to approximate the contour.\n"
                                                                   "Lower number -> smoother contour\n"
                                                                   "Higher number -> more faithful to the original")
-    point_size_spinbox = field(int, label="Point Size", location=ContourWidget).with_options(min=1, max=50, value=2, tooltip="Point size for contour display.")
+    contour_width_spinbox = field(int, label="Contour width", location=ContourWidget).with_options(min=1, max=50, value=2, tooltip="Point size for contour display.")
 
     def __init__(self, viewer: napari.Viewer = None):
         self.progress_dialog = ProgressWidget(self.native, message="Drawing mask...")
@@ -337,8 +335,8 @@ class MinimalContourWidget(MagicTemplate):
         return self.contour_smoothness_slider.value
 
     @property
-    def point_size(self):
-        return self.point_size_spinbox.value
+    def contour_width(self):
+        return self.contour_width_spinbox.value
 
     @property
     def shift_down(self):
@@ -353,7 +351,7 @@ class MinimalContourWidget(MagicTemplate):
         return self.modifiers & Qt.AltModifier if self.modifiers is not None else False
 
     def _initialize_helper_layers(self):
-        self._change_point_size(self.point_size)
+        self._change_contour_width(self.contour_width)
 
     class DrawWorker(QObject):
         done = Signal("PyQt_PyObject")
@@ -533,24 +531,18 @@ class MinimalContourWidget(MagicTemplate):
     def _on_smooth_checked(self, is_checked):
         self.contour_smoothness_slider.visible = is_checked
         correct_container_size(self.ContourWidget)
+        if self.labels_layer is not None:
+            self.labels_layer._overlays["minimal_contour"].contour_smoothness = self.contour_smoothness if is_checked else 1.
 
-    @point_size_spinbox.connect
-    def _change_point_size(self, size):
-        return
-        self.to_s_points_layer.size = size
-        self.to_s_points_layer.selected_data = {}
-        self.to_s_points_layer.current_size = size
+    @contour_smoothness_slider.connect
+    def _on_smoothness_changed(self, value):
+        if self.labels_layer is not None:
+            self.labels_layer._overlays["minimal_contour"].contour_smoothness = value
 
-        self.from_e_points_layer.size = size
-        self.from_e_points_layer.selected_data = {}
-        self.from_e_points_layer.current_size = size
-
-        self.output.size = size
-        self.output.selected_data = {}
-        self.output.current_size = size
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer.window.qt_viewer.canvas.native.setFocus()
+    @contour_width_spinbox.connect
+    def _change_contour_width(self, value):
+        if self.labels_layer is not None:
+            self.labels_layer._overlays["minimal_contour"].contour_width = value
 
     @selected_label_spinbox.connect
     def _change_selected_label(self, value):
@@ -668,7 +660,6 @@ class MinimalContourWidget(MagicTemplate):
                     break
 
     def _set_image(self, event=None):
-        #TODO make it work
         image_layer: Image = self.image_layer
         if image_layer is None:
             self._img = None
@@ -772,26 +763,28 @@ class MinimalContourWidget(MagicTemplate):
                 self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
                 self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
                 labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._labels_layer]
-                action_name = 'napari-nD-annotator:activate_labels_mc_mode'
-                btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
+                mc_btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
                 action_manager.bind_button(
-                    action_name,
-                    btn,
+                    'napari-nD-annotator:activate_labels_mc_mode',
+                    mc_btn,
                     # extra_tooltip_text=extra_tooltip_text,
                 )
                 for button in labels_control.button_group.buttons():
                     button.toggled.connect(self._disable_mc_mode)
-                btn.setStyleSheet(get_current_stylesheet([mc_contour_style_path]))
-                labels_control.button_group.addButton(btn)
-                labels_control._EDIT_BUTTONS += (btn,)
-                labels_control.mc_button = btn
+                mc_btn.setStyleSheet(get_current_stylesheet([mc_contour_style_path]))
+                labels_control.button_group.addButton(mc_btn)
+                labels_control._EDIT_BUTTONS += (mc_btn,)
+                labels_control.mc_button = mc_btn
                 labels_control.button_grid.addWidget(labels_control.mc_button, 1, 0)
 
                 def switch_to_mc_mode(*_, **__):
-                    btn.setChecked(True)
-                    btn.setChecked(True)
+                    mc_btn.blockSignals(True)
+                    mc_btn.setChecked(True)
+                    mc_btn.blockSignals(False)
                     self._enable_mc_mode()
+                    # btn.setChecked(True)
                 self._labels_layer.bind_key("0", switch_to_mc_mode)
+            self.labels_layer._overlays["minimal_contour"].contour_smoothness = self.contour_smoothness if self.is_contour_smoothing_enabled else 1.
 
     def _on_ctrl_pressed(self, _):
         self.labels_layer._overlays["minimal_contour"].use_straight_lines = True
@@ -837,7 +830,6 @@ class MinimalContourWidget(MagicTemplate):
                                        "We're switching to MC mode", None)
 
     def _enable_mc_mode(self, *args, **kwargs):
-        print(args, kwargs)
         if self.labels_layer is not None:
             print("enabling overlay")
             self.labels_layer._overlays["minimal_contour"].enabled = True
@@ -847,15 +839,3 @@ class MinimalContourWidget(MagicTemplate):
         if state and self.labels_layer is not None:
             print("disabling overlay")
             self.labels_layer._overlays["minimal_contour"].enabled = False
-
-    def _smooth_fourier(self, points):
-        coefficients=max(3, round(self.contour_smoothness*len(points)))
-        mask_2d = ~np.all(points == points.min(), axis=0)
-        points_2d = points[:, mask_2d]
-        center = points_2d.mean(0)
-        points_2d = points_2d - center
-        tformed = scipy.fft.rfft(points_2d, axis=0)
-        tformed[0] = 0
-        inv_tformed = scipy.fft.irfft(tformed[:coefficients], len(points_2d), axis=0) + center
-        points[:, mask_2d] = inv_tformed
-        return points
