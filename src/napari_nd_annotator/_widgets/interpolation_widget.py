@@ -1,9 +1,12 @@
-
+import asyncio.locks
+import threading
 import time
 
 import napari
 import numpy as np
 import cv2
+import scipy.ndimage
+import skimage.draw
 from magicclass import magicclass, field, vfield, bind_key, MagicTemplate
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
 from napari._qt.qt_resources import get_current_stylesheet
@@ -238,6 +241,9 @@ class InterpolationWidget(MagicTemplate):
         self._active_labels_layer = None
         self._is_painting = False
         self._labels_update_tmp = None
+        self.workers = []
+        self.workers_mutex = threading.Lock()
+        self.overlay_worker = None
         # layout.addStretch() -> how?
 
     def __post_init__(self):
@@ -254,38 +260,69 @@ class InterpolationWidget(MagicTemplate):
                                        "Interpolate missing slices (I)", None)
         self._annotator_widget = annotator_widget
 
-        def current_step_changed(_=None):
-            if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
-                return
-            self.active_labels_layer._overlays["interpolation"].current_slice = layer_slice_indices(self.active_labels_layer)[self.dimension]
+        self.viewer.dims.events.current_step.connect(self._current_step_changed)
 
-        self.viewer.dims.events.current_step.connect(current_step_changed)
+    def _current_step_changed(self, _=None):
+        if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
+            return
+        if self.overlay_worker is not None:
+            self.overlay_worker.quit()
+        self.overlay_worker = self._update_overlay()
+        self.overlay_worker.finished.connect(self._reset_overlay_worker)
+        self.overlay_worker.start()
+
+    @thread_worker
+    def _update_overlay(self):
+        self.active_labels_layer._overlays["interpolation"].current_slice = \
+            layer_slice_indices(self.active_labels_layer)[self.dimension]
 
     @property
     def viewer(self):
         return self._viewer
 
-    def _prepare_interpolation_worker(self):
-        self.interpolation_worker.dimension = self.dimension
-        self.interpolation_worker.n_contour_points = self.n_contour_points
-        self.interpolation_worker.layer = self.active_labels_layer
-        self.interpolation_worker.method = self.method
-        self.interpolation_worker.max_iterations = self.rpsv_max_iterations.value
-
     def Interpolate(self, _=None):
         if self.active_labels_layer is None or self.dimension is None:
             return
-        self.progress_dialog.setMaximum(self.active_labels_layer.data.shape[self.dimension])
-        self.progress_dialog.setVisible(True)
+        # self.progress_dialog.setMaximum(self.active_labels_layer.data.shape[self.dimension])
+        # self.progress_dialog.setVisible(True)
+        worker = self._store_interpolation()
+        def enable_interpolation_button():
+            self.interpolate_button.enabled = True
+        worker.finished.connect(enable_interpolation_button)
         self.interpolate_button.enabled = False
-        self._prepare_interpolation_worker()
-        self.interpolation_thread.start()
+        worker.start()
 
     @thread_worker
-    def _execute_interpolation(self, idx):
+    def _store_interpolation(self):
+        if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
+            return
+        for i, slice_contours in enumerate(self.active_labels_layer._overlays["interpolation"].points_per_slice):
+            slice_template = list(layer_slice_indices(self.active_labels_layer))
+            for contour in slice_contours:
+                cur_slice = slice_template.copy()
+                cur_slice[self.dimension] = i
+                mask_slice = self.active_labels_layer.data[tuple(cur_slice)]
+                rr, cc = skimage.draw.polygon(contour[:, 1], contour[:, 0], mask_slice.shape)
+                mask_slice[rr, cc] = self.active_labels_layer.selected_label
+            self.active_labels_layer._overlays["interpolation"].points_per_slice[i] = []
+
+    def _interpolate_all(self):
         if self.active_labels_layer is None:
             return
-        print(f"processing {idx}")
+        slices_with_data = np.argwhere(np.any(
+            self.active_labels_layer.data == self.active_labels_layer.selected_label,
+            axis=tuple(layer_dims_displayed(self.active_labels_layer))
+        ))
+        slices_with_data = np.squeeze(slices_with_data)
+        for idx in slices_with_data:
+            self._start_interpolation(idx, 1)
+
+    @thread_worker
+    def _interpolate_from_slice(self, idx, direction):
+        assert direction in [-1, 1], "direction should be either -1 or 1"
+        if self.active_labels_layer is None:
+            return
+
         dimension = self.dimension
         n_contour_points = self.n_contour_points
         selected_label = self.active_labels_layer.selected_label
@@ -301,74 +338,92 @@ class InterpolationWidget(MagicTemplate):
         if cur_mask.max() == 0:
             return
         curr_cnt = contour_cv2_mask_uniform(cur_mask, n_contour_points)
-        for start_idx, end_idx, step in [(idx-1, -1, -1), (idx+1, data.shape[dimension], 1)]:
-            for i in range(start_idx, end_idx, step):
-                print(f"slice {i}")
-                layer_slice = layer_slice_template.copy()
-                layer_slice[dimension] = i
-                next_mask = data[tuple(layer_slice)]
-                next_mask = next_mask.astype(np.uint8)
-                if next_mask.max() == 0:
-                    continue
-                if abs(i-idx) == 1:
-                    print("neighboring annotations")
-                    break
-                print(f"next contour at {i} (direction: {step})")
-                next_cnt = contour_cv2_mask_uniform(next_mask, n_contour_points)
-                if method == RPSV:
-                    stgs = settings.Settings(max_iterations=self.max_iterations,
-                                             n_points=n_contour_points)
-                    rpsv_thread = MeanThread([curr_cnt, next_cnt], stgs)
-                    rpsv_thread.run()
-                for j in range(start_idx, i, step):
-                    inter_layer_slice = layer_slice_template.copy()
-                    inter_layer_slice[dimension] = j
-                    prev_w = abs(i - j)
-                    cur_w = abs(j - idx)
-                    weights = [prev_w, cur_w]
-                    if method == RPSV:
-                        contours = rpsv_thread.contours
-                        regularMean = np.zeros_like(contours[0].lookup[contours[0].parameterization, :])
-                        for j in range(2):
-                            regularMean += contours[j].lookup[contours[j].parameterization, :] * weights[j]
-                        regularMean /= np.sum(weights)
-                        q_mean = calcRpsvInterpolation(contours, weights)
-                        guessRayLengths = np.zeros(contours[0].lookup[contours[0].parameterization].shape[0])
-                        for i_contour in range(2):
-                            contourtmp = contours[i_contour].lookup[contours[i_contour].parameterization]
-                            contourlengths = magnitude(contourtmp)
-                            guessRayLengths += contourlengths * weights[i_contour]
-                        guessRayLengths /= np.sum(weights)
-                        guessRayLengths = magnitude(regularMean)
-
-                        qraylengths = magnitude(q_mean)
-                        qraylengths[qraylengths < 1e-99] = 1e-99
-
-                        dirs = q_mean / qraylengths.reshape(qraylengths.shape[0], 1)
-                        r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), stgs, rpsv_thread.rpSignal)
-                        mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
-                        mean_cnt = mean_cnt.astype(np.int32)
-                        # mask = np.zeros_like(data[tuple(inter_layer_slice)])
-                        # cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
-                    elif method == CONTOUR_BASED:
-                        mean_cnt = (prev_w * curr_cnt + cur_w * next_cnt) / (prev_w + cur_w)
-                        mean_cnt = mean_cnt.astype(np.int32)
-                        # mask = np.zeros_like(data[tuple(inter_layer_slice)])
-                        # cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
-                    elif method == DISTANCE_BASED:
-                        mask = average_mask(cur_mask, next_mask, prev_w, cur_w)
-                        mask = mask.astype(np.uint8)
-                        mean_cnt = contour_cv2_mask_uniform(mask, n_contour_points)
-                        # mask[mask > 0] = selected_label
-                    else:
-                        raise ValueError("method should be one of %s" % ((RPSV, CONTOUR_BASED, DISTANCE_BASED),))
-                    yield j, mean_cnt
+        start_idx = idx + direction
+        end_idx = -1 if direction == -1 else data.shape[dimension]
+        for i in range(start_idx, end_idx, direction):
+            layer_slice = layer_slice_template.copy()
+            layer_slice[dimension] = i
+            next_mask = data[tuple(layer_slice)]
+            next_mask = next_mask.astype(np.uint8)
+            if next_mask.max() == 0:
+                continue
+            if abs(i-idx) == 1:
                 break
-        self.active_labels_layer._overlays["interpolation"].points_per_slice[idx] = None
+            next_cnt = contour_cv2_mask_uniform(next_mask, n_contour_points)
+            if method == RPSV:
+                stgs = settings.Settings(max_iterations=self.max_iterations,
+                                         n_points=n_contour_points)
+                rpsv_thread = MeanThread([curr_cnt, next_cnt], stgs)
+                rpsv_thread.run()
+            for j in range(start_idx, i, direction):
+                inter_layer_slice = layer_slice_template.copy()
+                inter_layer_slice[dimension] = j
+                prev_w = abs(i - j)
+                cur_w = abs(j - idx)
+                weights = [prev_w, cur_w]
+                if method == RPSV:
+                    contours = rpsv_thread.contours
+                    regularMean = np.zeros_like(contours[0].lookup[contours[0].parameterization, :])
+                    for j in range(2):
+                        regularMean += contours[j].lookup[contours[j].parameterization, :] * weights[j]
+                    regularMean /= np.sum(weights)
+                    q_mean = calcRpsvInterpolation(contours, weights)
+                    guessRayLengths = np.zeros(contours[0].lookup[contours[0].parameterization].shape[0])
+                    for i_contour in range(2):
+                        contourtmp = contours[i_contour].lookup[contours[i_contour].parameterization]
+                        contourlengths = magnitude(contourtmp)
+                        guessRayLengths += contourlengths * weights[i_contour]
+                    guessRayLengths /= np.sum(weights)
+                    guessRayLengths = magnitude(regularMean)
+
+                    qraylengths = magnitude(q_mean)
+                    qraylengths[qraylengths < 1e-99] = 1e-99
+
+                    dirs = q_mean / qraylengths.reshape(qraylengths.shape[0], 1)
+                    r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), stgs, rpsv_thread.rpSignal)
+                    mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
+                    mean_cnt = mean_cnt.astype(np.int32)
+                    mean_cnt = [mean_cnt]
+                    # mask = np.zeros_like(data[tuple(inter_layer_slice)])
+                    # cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
+                elif method == CONTOUR_BASED:
+                    mean_cnt = (prev_w * curr_cnt + cur_w * next_cnt) / (prev_w + cur_w)
+                    mean_cnt = mean_cnt.astype(np.int32)
+                    mean_cnt = [mean_cnt]
+                    # mask = np.zeros_like(data[tuple(inter_layer_slice)])
+                    # cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
+                elif method == DISTANCE_BASED:
+                    mask = average_mask(cur_mask, next_mask, prev_w, cur_w)
+                    mask, n_labels = scipy.ndimage.label(mask)
+                    mean_cnt = []
+                    for label in range(1, n_labels+1):
+                        mean_cnt.append(contour_cv2_mask_uniform(mask == label, n_contour_points))
+                    # mask[mask > 0] = selected_label
+                else:
+                    raise ValueError("method should be one of %s" % ((RPSV, CONTOUR_BASED, DISTANCE_BASED),))
+                yield j, mean_cnt
+            break
+        self.active_labels_layer._overlays["interpolation"].points_per_slice[idx] = []
+
+    def _execute_interpolation(self, idx):
+        for direction in [-1, 1]:
+            self._start_interpolation(idx, direction)
+
+    def _start_interpolation(self, idx, direction):
+        worker = self._interpolate_from_slice(idx, direction)
+        self.workers.append(worker)
+        worker.yielded.connect(self._store_contour)
+        def remove_worker():
+            with self.workers_mutex:
+                self.workers.remove(worker)
+        worker.finished.connect(remove_worker)
+        worker.start()
+
 
     @method.connect
     def _on_method_changed(self, new_method):
         self.rpsv_max_iterations.visible = new_method == RPSV
+        self._interpolate_all()
 
     @property
     def active_labels_layer(self) -> Labels | None:
@@ -390,7 +445,7 @@ class InterpolationWidget(MagicTemplate):
         if "interpolation" not in self._active_labels_layer._overlays:
             interpolation_overlay = InterpolationOverlay()
             self._active_labels_layer._overlays.update({"interpolation": interpolation_overlay})
-            interpolation_overlay.points_per_slice = [None] * self._active_labels_layer.data.shape[self.dimension]
+            interpolation_overlay.points_per_slice = [[] for _ in range(self._active_labels_layer.data.shape[self.dimension])]
             interpolation_overlay.current_slice = layer_slice_indices(self._active_labels_layer)[self.dimension]
             labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._active_labels_layer]
             if labels_control.button_grid.itemAtPosition(1, 1) is not None:
@@ -432,22 +487,25 @@ class InterpolationWidget(MagicTemplate):
         return None if len(dims_not_displayed) == 0 else dims_not_displayed[0]
 
     def _on_mouse_drag(self, layer: Labels, event):
-        if layer.mode not in ["erase", "paint"] and not layer._overlays["minimal_contour"].enabled:
+        if (layer.mode not in ["erase", "paint"]
+                and ("minimal_contour" not in layer._overlays or not layer._overlays["minimal_contour"].enabled)):
             return
         self._is_painting = True
         if layer.mode in ["erase", "paint"]:
             cur_slice = layer_slice_indices(layer)
-            cnt = layer._overlays["interpolation"].points_per_slice[cur_slice[self.dimension]]
-            if cnt is not None:
-                cnt = np.asarray(cnt)
+            cnt_list = layer._overlays["interpolation"].points_per_slice[cur_slice[self.dimension]]
+            if len(cnt_list) > 0:
                 mask = np.zeros_like(layer.data[cur_slice])
-                cv2.drawContours(mask, [cnt], 0, 1, -1)
+                for i in range(len(cnt_list)):
+                    cnt_list[i] = np.asarray(cnt_list[i], dtype=np.int32)
+
+                cv2.drawContours(mask, cnt_list, -1, 1, -1)
                 update_idx = np.nonzero(mask)
                 order = layer_dims_order(layer)
                 extended_idx = tuple(update_idx[i-1] if i in layer_dims_displayed(layer) else np.full_like(update_idx[0], cur_slice[order[i]]) for i in range(layer.ndim))
                 extended_idx = _coerce_indices_for_vectorization(self.active_labels_layer.data, extended_idx)
                 layer.data_setitem(extended_idx, layer.selected_label)
-                layer._overlays["interpolation"].points_per_slice[cur_slice[self.dimension]] = None
+                layer._overlays["interpolation"].points_per_slice[cur_slice[self.dimension]] = []
                 layer._overlays["interpolation"].events.points_per_slice()
 
 
@@ -465,22 +523,23 @@ class InterpolationWidget(MagicTemplate):
         if self._is_painting:
             self._labels_update_tmp = (event.data, event.offset)
             return
-        if self.interpolation_worker is not None:
-            self.interpolation_worker.quit()
-        self.interpolation_worker = self._execute_interpolation(layer_slice_indices(self._active_labels_layer)[self.dimension])
-        self.interpolation_worker.yielded.connect(self._store_contour)
-        self.interpolation_worker.finished.connect(self._reset_interpolation_worker)
-        self.interpolation_worker.start()
+        self._execute_interpolation(layer_slice_indices(self._active_labels_layer)[self.dimension])
 
     def _store_contour(self, data):
-        idx, contour = data
-        uniques = np.empty(len(contour), dtype=bool)
-        uniques[:-1] = np.any(contour[:-1] != contour[1:], axis=1)
-        uniques[-1] = True
-        contour = contour[uniques]
-        self.active_labels_layer._overlays["interpolation"].points_per_slice[idx] = list(np.fliplr(contour))
+        idx, contour_list = data
+        for i, contour in enumerate(contour_list):
+            uniques = np.empty(len(contour), dtype=bool)
+            uniques[:-1] = np.any(contour[:-1] != contour[1:], axis=1)
+            uniques[-1] = True
+            contour = contour[uniques]
+            contour = np.fliplr(contour)
+            contour_list[i] = contour
+        self.active_labels_layer._overlays["interpolation"].points_per_slice[idx] = contour_list
         if idx == self.active_labels_layer._overlays["interpolation"].current_slice:
             self.active_labels_layer._overlays["interpolation"].events.points_per_slice()
 
     def _reset_interpolation_worker(self):
+        self.interpolation_worker = None
+
+    def _reset_overlay_worker(self):
         self.interpolation_worker = None

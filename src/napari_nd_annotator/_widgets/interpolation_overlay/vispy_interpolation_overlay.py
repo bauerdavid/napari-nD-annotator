@@ -13,20 +13,18 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
     def __init__(
         self, *, layer: Labels, overlay: InterpolationOverlay, parent=None
     ):
-        points = [(0, 0), (1, 1)]
-
-        self._polygon = Polygon(
+        points = np.asarray([(0, 0), (1, 1)])
+        self._polygons = [Polygon(
             pos=points,
-            border_method='gl',
-        )
+            border_method='agg'
+        ) for _ in range(3)]
 
         super().__init__(
-            node=Compound([self._polygon]),
+            node=Compound(self._polygons),
             layer=layer,
             overlay=overlay,
             parent=parent,
         )
-
         self.overlay.events.points_per_slice.connect(self._on_points_change)
         self.overlay.events.current_slice.connect(self._on_points_change)
         self.overlay.events.enabled.connect(self._on_enabled_change)
@@ -46,15 +44,24 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
             self._on_points_change()
 
     def _on_points_change(self):
+        print("_on_points_change")
         if self.overlay.current_slice >= len(self.overlay.points_per_slice):
             return
-        points = self.overlay.points_per_slice[self.overlay.current_slice]
-
-        if points:
-            self._polygon.visible = True
-            self._polygon.pos = points
-        else:
-            self._polygon.visible = False
+        contours = self.overlay.points_per_slice[self.overlay.current_slice]
+        n_contours = len(contours)
+        n_poly = len(self._polygons)
+        if n_poly < n_contours:
+            self._polygons.extend([Polygon(
+            pos=np.asarray([(0, 0), (1, 1)]),
+            border_method='agg'
+        ) for _ in range(n_contours - n_poly)])
+        for i, poly in enumerate(self._polygons):
+            points = contours[i] if i < n_contours else None
+            if points is not None and len(points) > 2:
+                poly.visible = True
+                poly.pos = points
+            else:
+                poly.visible = False
 
     def _set_color(self, color):
         border_color = tuple(color[:3]) + (1,)  # always opaque
@@ -62,11 +69,12 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
 
         # Clean up polygon faces before making it transparent, otherwise
         # it keeps the previous visualization of the polygon without cleaning
-        if polygon_color[-1] == 0:
-            self._polygon.mesh.set_data(faces=[])
-        self._polygon.color = polygon_color
+        for poly in self._polygons:
+            if polygon_color[-1] == 0:
+                poly.mesh.set_data(faces=[])
+            poly.color = polygon_color
 
-        self._polygon.border_color = border_color
+            poly.border_color = border_color
 
     def _update_color(self):
         layer = self.layer
