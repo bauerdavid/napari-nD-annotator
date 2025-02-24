@@ -93,7 +93,7 @@ class AnnotatorWidget(MagicTemplate):
                 w.native.setFixedSize(20, 20)
                 w.native.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
                 self.native.layout().setAlignment(w.native, Qt.AlignRight)
-        self.ToolsWidget.interpolation_widget._initialize(self._viewer)
+        self.ToolsWidget.interpolation_widget._initialize(self._viewer, self)
         self.ToolsWidget.minimal_contour_widget._initialize(self._viewer)
         if self.ToolsWidget.minimal_surface_widget is not None:
             self.ToolsWidget.minimal_surface_widget._initialize(self._viewer, self.ToolsWidget.minimal_contour_widget)
