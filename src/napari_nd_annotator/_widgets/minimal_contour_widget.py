@@ -787,6 +787,8 @@ class MinimalContourWidget(MagicTemplate):
             self.labels_layer._overlays["minimal_contour"].contour_smoothness = self.contour_smoothness if self.is_contour_smoothing_enabled else 1.
 
     def _on_ctrl_pressed(self, _):
+        if self.labels_layer is None:
+            return
         self.labels_layer._overlays["minimal_contour"].use_straight_lines = True
         yield
         self.labels_layer._overlays["minimal_contour"].use_straight_lines = False
@@ -831,11 +833,8 @@ class MinimalContourWidget(MagicTemplate):
 
     def _enable_mc_mode(self, *args, **kwargs):
         if self.labels_layer is not None:
-            print("enabling overlay")
             self.labels_layer._overlays["minimal_contour"].enabled = True
 
     def _disable_mc_mode(self, state):
-        print("state:", state)
         if state and self.labels_layer is not None:
-            print("disabling overlay")
             self.labels_layer._overlays["minimal_contour"].enabled = False

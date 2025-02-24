@@ -307,21 +307,17 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
             yield
         if dragged:
             return
-        print(f"pos #1: {pos}")
 
         if event.button == 1:  # left mouse click
 
             orig_pos = pos.copy()
             # recenter the point in the center of the image pixel
-            print(f"pos #2: {pos}")
             pos[dims_displayed] = np.round(pos[dims_displayed])
-            print(f"pos #3: {pos}")
             #TODO handle undo
 
             prev_point = (
                 None if self._num_points <= 1 else self.overlay.anchor_points[0] if self.shift_down else self.overlay.anchor_points[-2]
             )
-            print(f"prev point: {prev_point}")
             # Add a new point only if it differs from the previous one
             if prev_point is None or not np.allclose(np.round(prev_point), np.round(pos)):
                 if self.shift_down:
@@ -331,12 +327,10 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
                         self.overlay.current_pos_to_first_anchor_contour = []
                 else:
                     self.overlay.anchor_points = self.overlay.anchor_points[:-1] + [pos.tolist()]
-                    print(f"anchor points: {self.overlay.anchor_points}")
                     if len(self.overlay.last_anchor_to_current_pos_contour):
                         self.overlay.stored_contour.extend(self.overlay.last_anchor_to_current_pos_contour)
                         self.overlay.last_anchor_to_current_pos_contour = []
                 self.overlay.anchor_points.append((orig_pos + 1e-3).tolist())
-                print(f"anchor points #2: {self.overlay.anchor_points}")
                 self.point_triangle[-1] = [self.overlay.anchor_points[0][d] for d in dims_displayed]
                 self.point_triangle[0] = [self.overlay.anchor_points[-1][d] for d in dims_displayed]
         # TODO handle undo
@@ -348,7 +342,6 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
 
     @_only_when_enabled
     def _on_mouse_double_click(self, layer, event):
-        print("double press")
         if event.button == 2:
             self._on_mouse_press(layer, event)
             return None
