@@ -1,8 +1,20 @@
 import numpy as np
 from napari._pydantic_compat import Field
 from napari.components.overlays import SceneOverlay
-from napari.layers import Labels
-import scipy
+import threading
+from copy import deepcopy
+
+mutex = threading.Lock()
+
+class ContourList(list):
+    def __eq__(self, other):
+        if len(self) != len(other):
+            return False
+        for cnt1, cnt2 in zip(self, other):
+            if not np.array_equal(cnt1, cnt2):
+                return False
+        return True
+
 
 class InterpolationOverlay(SceneOverlay):
     """Overlay that displays a polygon on a scene.
@@ -35,5 +47,5 @@ class InterpolationOverlay(SceneOverlay):
     """
 
     enabled: bool = False
-    points_per_slice: list = Field(default_factory=list)
-    current_slice: int = 0
+    contour: list = Field(default_factory=ContourList)
+

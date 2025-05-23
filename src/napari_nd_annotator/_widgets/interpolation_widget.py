@@ -1,13 +1,17 @@
 import asyncio.locks
 import threading
 import time
+from copy import deepcopy
 
 import napari
 import numpy as np
 import cv2
 import scipy.ndimage
 import skimage.draw
+from PyQt5.QtCore import QEvent
+from PyQt5.QtGui import QCursor, QPalette
 from magicclass import magicclass, field, vfield, bind_key, MagicTemplate
+from magicgui._util import debounce
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
 from napari._qt.qt_resources import get_current_stylesheet
 from napari._qt.widgets.qt_mode_buttons import QtModePushButton
@@ -16,7 +20,8 @@ from napari.utils.action_manager import action_manager
 from napari.qt.threading import thread_worker
 
 from scipy.interpolate import interp1d
-from qtpy.QtCore import QThread, QObject, Signal
+from qtpy.QtCore import QThread, QObject, Signal, Qt
+from qtpy.QtSvg import QSvgWidget
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
@@ -30,13 +35,15 @@ from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
 from ..mean_contour._reconstruction import reconstruct
 from ..mean_contour._essentials import magnitude
-from .interpolation_overlay.interpolation_overlay import InterpolationOverlay
+from .interpolation_overlay.interpolation_overlay import InterpolationOverlay, ContourList, mutex as overlay_mutex
 import warnings
 
 DISTANCE_BASED = "Distance-based"
 CONTOUR_BASED = "Contour-based"
 RPSV = "RPSV"
 
+import faulthandler
+faulthandler.enable()
 
 def contour_cv2_mask_uniform(mask, contoursize_max, correct_orientation = True):
     mask = mask.astype(np.uint8)
@@ -81,20 +88,62 @@ def average_mask(m1, m2, w1, w2):
     im_center = np.asarray(m1.shape)/2
     centroid1 = np.asarray(regionprops(m1)[0].centroid)
     centroid2 = np.asarray(regionprops(m2)[0].centroid)
-    transl_1 = centroid1 - im_center
-    transl_2 = centroid2 - im_center
-    tform1 = SimilarityTransform(translation=np.flip(transl_1))
-    tform2 = SimilarityTransform(translation=np.flip(transl_2))
+    transl_1 = np.flip(centroid1 - im_center)
+    transl_2 = np.flip(centroid2 - im_center)
+    tform1 = SimilarityTransform(translation=transl_1)
+    tform2 = SimilarityTransform(translation=transl_2)
     m1_translated = warp(m1, tform1, preserve_range=True).astype(bool)
     m2_translated = warp(m2, tform2, preserve_range=True).astype(bool)
     dt1_translated = distance_transform_edt(binary_erosion(m1_translated)) - distance_transform_edt(~m1_translated)
     dt2_translated = distance_transform_edt(binary_erosion(m2_translated)) - distance_transform_edt(~m2_translated)
     average_dist_translated = (w1 * dt1_translated + w2 * dt2_translated) / (w1+w2)
     average_mask_translated = average_dist_translated > 0
-    transl_avg = im_center - (centroid1*w1+centroid2*w2)/(w1+w2)
-    tform_avg = SimilarityTransform(translation=np.flip(transl_avg))
+    transl_avg = np.flip(im_center - (centroid1*w1+centroid2*w2)/(w1+w2))
+    tform_avg = SimilarityTransform(translation=transl_avg)
 
     return warp(average_mask_translated, tform_avg)
+
+
+class MoveLoadingIconEventFilter(QObject):
+    def __init__(self, icon: QSvgWidget):
+        super().__init__()
+        self.icon = icon
+        self._is_loading = False
+        self._is_above_viewer = False
+
+    def update(self):
+        if self._is_loading and self._is_above_viewer:
+            self.icon.show()
+        else:
+            self.icon.hide()
+
+    @property
+    def is_loading(self):
+        return self._is_loading
+
+    @is_loading.setter
+    def is_loading(self, value):
+        self._is_loading = value
+        self.update()
+
+    def eventFilter(self, src: QObject, event: QEvent):
+        if src == self.icon and event.type() == QEvent.Enter:
+            pos = QCursor.pos()
+        elif event.type() == QEvent.Type.HoverMove:
+            pos = src.mapToGlobal(event.pos())
+        elif event.type() == QEvent.Leave:
+            self._is_above_viewer = False
+            return False
+        elif event.type() == QEvent.Enter:
+            self._is_above_viewer = True
+            return False
+        else:
+            return False
+        pos.setX(pos.x() + 10)
+        pos.setY(pos.y() + 10)
+        self.icon.move(pos)
+        self.update()
+        return False
 
 
 class InterpolationWorker(QObject):
@@ -229,21 +278,15 @@ class InterpolationWidget(MagicTemplate):
 
     def __init__(self):
         self.progress_dialog = ProgressWidget(self.native, message="Interpolating slices...")
-        self.interpolation_thread = QThread()
-        self.interpolation_worker = None
-        # self.interpolation_worker.moveToThread(self.interpolation_thread)
-        # self.interpolation_worker.done.connect(self.interpolation_thread.quit)
         # self.interpolation_worker.done.connect(lambda _: self.progress_dialog.setVisible(False))
-        # self.interpolation_worker.done.connect(self._set_labels)
-        # self.interpolation_worker.progress.connect(self.progress_dialog.setValue)
-        # self.interpolation_thread.started.connect(self.interpolation_worker.run)
-        # self.interpolation_worker.done.connect(self._enable_interpolation_button)
         self._active_labels_layer = None
         self._is_painting = False
         self._labels_update_tmp = None
         self.workers = []
         self.workers_mutex = threading.Lock()
         self.overlay_worker = None
+        self._stored_contours = []
+        self.contour_mutex = overlay_mutex
         # layout.addStretch() -> how?
 
     def __post_init__(self):
@@ -253,32 +296,70 @@ class InterpolationWidget(MagicTemplate):
     def _initialize(self, viewer: napari.Viewer, annotator_widget):
         self._viewer = viewer
         self._on_active_layer_changed()
-        self.viewer.dims.events.ndisplay.connect(
-            lambda _: self.interpolate_button.options.update(enabled=self.viewer.dims.ndisplay == 2))
+        self.viewer.dims.events.ndisplay.connect(self._ndisplay_changed)
+        # self.viewer.dims.events.ndisplay.connect(lambda _: self._reset_contours() if self.viewer.dims.ndisplay == 3)
         self.viewer.layers.selection.events.active.connect(self._on_active_layer_changed)
         action_manager.register_action("napari-nD-annotator:interpolate", self.Interpolate,
                                        "Interpolate missing slices (I)", None)
         self._annotator_widget = annotator_widget
 
         self.viewer.dims.events.current_step.connect(self._current_step_changed)
+        self.viewer.dims.events.order.connect(self._dims_order_changed)
+        self.loading_icon = QSvgWidget("C:\\Users\\User\\Downloads\\loading.svg", self._viewer.window._qt_window)
+        self.loading_icon.setStyleSheet("background: transparent;")
+        self.loading_icon.setAutoFillBackground(False)
+        palette = self.loading_icon.palette()
+        palette.setBrush(QPalette.Base, Qt.transparent)
+        self.loading_icon.setPalette(palette)
+        self.loading_icon.setAttribute(Qt.WA_OpaquePaintEvent, False)
+        self.loading_icon.setFixedSize(20, 20)
+        self.loading_icon.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.loading_icon.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.loading_icon.setAttribute(Qt.WA_TranslucentBackground)
 
+        self.loading_icon.show()
+        self.event_filter = MoveLoadingIconEventFilter(self.loading_icon)
+        self.loading_icon.installEventFilter(self.event_filter)
+        self.viewer.window._qt_window.installEventFilter(self.event_filter)
+        self.native.setMouseTracking(True)
+
+    @debounce
     def _current_step_changed(self, _=None):
         if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
             return
         if self.overlay_worker is not None:
             self.overlay_worker.quit()
-        self.overlay_worker = self._update_overlay()
-        self.overlay_worker.finished.connect(self._reset_overlay_worker)
-        self.overlay_worker.start()
+        self._update_overlay()
 
-    @thread_worker
+    def _dims_order_changed(self):
+        self._interpolate_all()
+
+    def _ndisplay_changed(self):
+        is_2d = self.viewer.dims.ndisplay == 2
+        self.interpolate_button.options.update(enabled=is_2d)
+        if is_2d:
+            self._interpolate_all()
+        else:
+            self._reset_contours()
+
+    # @thread_worker
     def _update_overlay(self):
-        self.active_labels_layer._overlays["interpolation"].current_slice = \
-            layer_slice_indices(self.active_labels_layer)[self.dimension]
+        if self._stored_contours is None:
+            contour = []
+        else:
+            contour = deepcopy(self._stored_contours[self.current_slice])
+        with self.contour_mutex:
+            self.active_labels_layer._overlays["interpolation"].contour = ContourList(contour)
 
     @property
     def viewer(self):
         return self._viewer
+
+    @property
+    def current_slice(self):
+        if self.dimension is None:
+            return None
+        return layer_slice_indices(self.active_labels_layer)[self.dimension]
 
     def Interpolate(self, _=None):
         if self.active_labels_layer is None or self.dimension is None:
@@ -286,36 +367,44 @@ class InterpolationWidget(MagicTemplate):
         # self.progress_dialog.setMaximum(self.active_labels_layer.data.shape[self.dimension])
         # self.progress_dialog.setVisible(True)
         worker = self._store_interpolation()
-        def enable_interpolation_button():
+        def on_worker_finished():
             self.interpolate_button.enabled = True
-        worker.finished.connect(enable_interpolation_button)
+            self.event_filter.is_loading = False
+        worker.finished.connect(on_worker_finished)
         self.interpolate_button.enabled = False
         worker.start()
+        self.event_filter.is_loading = True
 
     @thread_worker
     def _store_interpolation(self):
         if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
             return
-        for i, slice_contours in enumerate(self.active_labels_layer._overlays["interpolation"].points_per_slice):
+        for i in range(len(self._stored_contours)):
+            with self.contour_mutex:
+                slice_contours = self._stored_contours[i]
             slice_template = list(layer_slice_indices(self.active_labels_layer))
+            cur_slice = slice_template.copy()
+            cur_slice[self.dimension] = i
+            cur_slice = tuple(cur_slice)
             for contour in slice_contours:
-                cur_slice = slice_template.copy()
-                cur_slice[self.dimension] = i
-                mask_slice = self.active_labels_layer.data[tuple(cur_slice)]
+                mask_slice = self.active_labels_layer.data[cur_slice]
                 rr, cc = skimage.draw.polygon(contour[:, 1], contour[:, 0], mask_slice.shape)
                 mask_slice[rr, cc] = self.active_labels_layer.selected_label
-            self.active_labels_layer._overlays["interpolation"].points_per_slice[i] = []
+            with self.contour_mutex:
+                self._stored_contours[i] = []
 
     def _interpolate_all(self):
-        if self.active_labels_layer is None:
+        if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
             return
         slices_with_data = np.argwhere(np.any(
             self.active_labels_layer.data == self.active_labels_layer.selected_label,
             axis=tuple(layer_dims_displayed(self.active_labels_layer))
         ))
+        self._reset_contours()
         slices_with_data = np.squeeze(slices_with_data)
         for idx in slices_with_data:
             self._start_interpolation(idx, 1)
+        self._update_overlay()
 
     @thread_worker
     def _interpolate_from_slice(self, idx, direction):
@@ -351,7 +440,7 @@ class InterpolationWidget(MagicTemplate):
                 break
             next_cnt = contour_cv2_mask_uniform(next_mask, n_contour_points)
             if method == RPSV:
-                stgs = settings.Settings(max_iterations=self.max_iterations,
+                stgs = settings.Settings(max_iterations=self.rpsv_max_iterations.value,
                                          n_points=n_contour_points)
                 rpsv_thread = MeanThread([curr_cnt, next_cnt], stgs)
                 rpsv_thread.run()
@@ -364,8 +453,8 @@ class InterpolationWidget(MagicTemplate):
                 if method == RPSV:
                     contours = rpsv_thread.contours
                     regularMean = np.zeros_like(contours[0].lookup[contours[0].parameterization, :])
-                    for j in range(2):
-                        regularMean += contours[j].lookup[contours[j].parameterization, :] * weights[j]
+                    for k in range(2):
+                        regularMean += contours[k].lookup[contours[k].parameterization, :] * weights[k]
                     regularMean /= np.sum(weights)
                     q_mean = calcRpsvInterpolation(contours, weights)
                     guessRayLengths = np.zeros(contours[0].lookup[contours[0].parameterization].shape[0])
@@ -403,7 +492,8 @@ class InterpolationWidget(MagicTemplate):
                     raise ValueError("method should be one of %s" % ((RPSV, CONTOUR_BASED, DISTANCE_BASED),))
                 yield j, mean_cnt
             break
-        self.active_labels_layer._overlays["interpolation"].points_per_slice[idx] = []
+        with self.contour_mutex:
+            self._stored_contours[idx] = []
 
     def _execute_interpolation(self, idx):
         for direction in [-1, 1]:
@@ -411,14 +501,14 @@ class InterpolationWidget(MagicTemplate):
 
     def _start_interpolation(self, idx, direction):
         worker = self._interpolate_from_slice(idx, direction)
-        self.workers.append(worker)
+        with self.workers_mutex:
+            self.workers.append(worker)
         worker.yielded.connect(self._store_contour)
         def remove_worker():
             with self.workers_mutex:
-                self.workers.remove(worker)
+                self.workers[self.workers.index(worker)] = None
         worker.finished.connect(remove_worker)
         worker.start()
-
 
     @method.connect
     def _on_method_changed(self, new_method):
@@ -436,17 +526,21 @@ class InterpolationWidget(MagicTemplate):
         if self._active_labels_layer is not None and self._on_mouse_drag in self._active_labels_layer.mouse_drag_callbacks:
             self._active_labels_layer.mouse_drag_callbacks.remove(self._on_mouse_drag)
             self._active_labels_layer.events.labels_update.disconnect(self._on_labels_update)
-        self._active_labels_layer = layer if isinstance(layer, Labels) else None
-        if self._active_labels_layer is not None and self._on_mouse_drag not in self._active_labels_layer.mouse_drag_callbacks:
+            self._active_labels_layer.events.selected_label.disconnect(self._interpolate_all)
+            if "interpolation" in self._active_labels_layer._overlays:
+                self._active_labels_layer._overlays["interpolation"].contour = ContourList()
+        self._active_labels_layer = layer if isinstance(layer, Labels) and layer.ndim == 3 else None
+        if self._active_labels_layer is None or self._active_labels_layer.ndim < 3:
+            self._reset_contours()
+            return
+        if self._on_mouse_drag not in self._active_labels_layer.mouse_drag_callbacks:
             self._active_labels_layer.mouse_drag_callbacks.append(self._on_mouse_drag)
             self._active_labels_layer.events.labels_update.connect(self._on_labels_update)
-        if self._active_labels_layer is None or self._active_labels_layer.ndim < 3:
-            return
+            self._active_labels_layer.events.selected_label.connect(self._interpolate_all)
+
         if "interpolation" not in self._active_labels_layer._overlays:
             interpolation_overlay = InterpolationOverlay()
             self._active_labels_layer._overlays.update({"interpolation": interpolation_overlay})
-            interpolation_overlay.points_per_slice = [[] for _ in range(self._active_labels_layer.data.shape[self.dimension])]
-            interpolation_overlay.current_slice = layer_slice_indices(self._active_labels_layer)[self.dimension]
             labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._active_labels_layer]
             if labels_control.button_grid.itemAtPosition(1, 1) is not None:
                 return
@@ -462,6 +556,8 @@ class InterpolationWidget(MagicTemplate):
             labels_control.interpolate_button = interpolate_button
             labels_control.button_grid.addWidget(labels_control.interpolate_button, 1, 1)
             self._active_labels_layer.bind_key("I", self.Interpolate)
+        self._reset_contours()
+        self._interpolate_all()
 
     @property
     def interpolate_button(self):
@@ -484,7 +580,7 @@ class InterpolationWidget(MagicTemplate):
         if self.active_labels_layer is None:
             return None
         dims_not_displayed = layer_dims_not_displayed(self.active_labels_layer)
-        return None if len(dims_not_displayed) == 0 else dims_not_displayed[0]
+        return None if len(dims_not_displayed) != 1 else dims_not_displayed[0]
 
     def _on_mouse_drag(self, layer: Labels, event):
         if (layer.mode not in ["erase", "paint"]
@@ -493,7 +589,8 @@ class InterpolationWidget(MagicTemplate):
         self._is_painting = True
         if layer.mode in ["erase", "paint"]:
             cur_slice = layer_slice_indices(layer)
-            cnt_list = layer._overlays["interpolation"].points_per_slice[cur_slice[self.dimension]]
+            with self.contour_mutex:
+                cnt_list = self._stored_contours[cur_slice[self.dimension]]
             if len(cnt_list) > 0:
                 mask = np.zeros_like(layer.data[cur_slice])
                 for i in range(len(cnt_list)):
@@ -505,8 +602,8 @@ class InterpolationWidget(MagicTemplate):
                 extended_idx = tuple(update_idx[i-1] if i in layer_dims_displayed(layer) else np.full_like(update_idx[0], cur_slice[order[i]]) for i in range(layer.ndim))
                 extended_idx = _coerce_indices_for_vectorization(self.active_labels_layer.data, extended_idx)
                 layer.data_setitem(extended_idx, layer.selected_label)
-                layer._overlays["interpolation"].points_per_slice[cur_slice[self.dimension]] = []
-                layer._overlays["interpolation"].events.points_per_slice()
+                with self.contour_mutex:
+                    layer._overlays["interpolation"].contour = ContourList()
 
 
         yield
@@ -518,6 +615,9 @@ class InterpolationWidget(MagicTemplate):
             self._labels_update_tmp = None
             if layer.mode == "erase" or not self._annotator_widget.autofill_objects:
                 self._active_labels_layer.events.labels_update(data=data, offset=offset)
+            cur_slice_data = layer.data[layer_slice_indices(layer)]
+            if not np.any(cur_slice_data):
+                self._interpolate_all()
 
     def _on_labels_update(self, event):
         if self._is_painting:
@@ -525,18 +625,35 @@ class InterpolationWidget(MagicTemplate):
             return
         self._execute_interpolation(layer_slice_indices(self._active_labels_layer)[self.dimension])
 
+    def _on_set_data(self, event):
+        ...
+
     def _store_contour(self, data):
         idx, contour_list = data
+        uniques = np.empty(self.n_contour_points, dtype=bool)
         for i, contour in enumerate(contour_list):
-            uniques = np.empty(len(contour), dtype=bool)
-            uniques[:-1] = np.any(contour[:-1] != contour[1:], axis=1)
+
+            int_cnt = np.round(contour).astype(int)
+            uniques[:-1] = np.any(int_cnt[:-1] != int_cnt[1:], axis=1)
             uniques[-1] = True
             contour = contour[uniques]
             contour = np.fliplr(contour)
             contour_list[i] = contour
-        self.active_labels_layer._overlays["interpolation"].points_per_slice[idx] = contour_list
-        if idx == self.active_labels_layer._overlays["interpolation"].current_slice:
-            self.active_labels_layer._overlays["interpolation"].events.points_per_slice()
+        with self.contour_mutex:
+            self._stored_contours[idx] = contour_list
+        if idx == self.current_slice:
+            with self.contour_mutex:
+                self.active_labels_layer._overlays["interpolation"].contour = ContourList(contour_list)
+
+    def _reset_contours(self):
+        if self.dimension is None:
+            with self.contour_mutex:
+                self._stored_contours = None
+            return
+        with self.contour_mutex:
+            self._stored_contours = [[] for _ in range(self.active_labels_layer.data.shape[self.dimension])]
+            if self.active_labels_layer is not None:
+                self.active_labels_layer._overlays["interpolation"].contour = ContourList()
 
     def _reset_interpolation_worker(self):
         self.interpolation_worker = None
