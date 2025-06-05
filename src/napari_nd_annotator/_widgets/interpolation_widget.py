@@ -390,8 +390,8 @@ class InterpolationWidget(MagicTemplate):
                 mask_slice = self.active_labels_layer.data[cur_slice]
                 rr, cc = skimage.draw.polygon(contour[:, 1], contour[:, 0], mask_slice.shape)
                 mask_slice[rr, cc] = self.active_labels_layer.selected_label
-            with self.contour_mutex:
-                self._stored_contours[i] = []
+        self._reset_contours()
+        self.active_labels_layer.refresh()
 
     def _interpolate_all(self):
         if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
@@ -401,7 +401,7 @@ class InterpolationWidget(MagicTemplate):
             axis=tuple(layer_dims_displayed(self.active_labels_layer))
         ))
         self._reset_contours()
-        slices_with_data = np.squeeze(slices_with_data)
+        slices_with_data = np.atleast_1d(np.squeeze(slices_with_data))
         for idx in slices_with_data:
             self._start_interpolation(idx, 1)
         self._update_overlay()
