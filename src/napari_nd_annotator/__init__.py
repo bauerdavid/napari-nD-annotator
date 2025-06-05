@@ -1,5 +1,5 @@
 
-__version__ = "0.3.1a1"
+__version__ = "0.3.1a2"
 
 from ._widgets import AnnotatorWidget, InterpolationWidget, MinimalSurfaceWidget
 from packaging import version
