@@ -241,6 +241,8 @@ class MinimalContourWidget(MagicTemplate):
         self.modifiers = None
 
     def __post_init__(self):
+        if self._viewer is not None:
+            self._initialize(self._viewer)
         VispyMinimalContourOverlay.mc_calculator.set_param(self.param)
         self.local_intensity_correction_checkbox.changed.connect(VispyMinimalContourOverlay.mc_calculator.set_use_local_maximum)
 
@@ -279,8 +281,6 @@ class MinimalContourWidget(MagicTemplate):
         self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._set_image)
         self._on_label_change()
         self._on_selected_label_change()
-        if self._viewer is not None:
-            self._initialize(self._viewer)
 
     def __magicclass_serialize__(self):
         d = serialize(self)
@@ -391,7 +391,7 @@ class MinimalContourWidget(MagicTemplate):
 
     def _apply_blurring(self):
         image_layer = self.image_layer
-        if image_layer is None:
+        if image_layer is None or self.viewer is None:
             return
         image_layer.data = self._orig_image.copy()
         with warnings.catch_warnings():
@@ -488,6 +488,8 @@ class MinimalContourWidget(MagicTemplate):
 
     @blur_image_checkbox.connect
     def _set_use_smoothing(self, _, update_image=True):
+        if self.viewer is None:
+            return
         self._apply_blurring()
         if update_image:
             self._set_image("_set_use_smoothing")
@@ -756,6 +758,8 @@ class MinimalContourWidget(MagicTemplate):
             self.viewer.window.qt_viewer.canvas.native.setFocus()
 
     def _on_active_layer_changed(self, *_):
+        if self.viewer is None:
+            return
         active_layer = self.viewer.layers.selection.active
         self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
         if self._labels_layer:
