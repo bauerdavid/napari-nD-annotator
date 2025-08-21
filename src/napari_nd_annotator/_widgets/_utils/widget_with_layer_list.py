@@ -1,5 +1,5 @@
 from pathlib import Path
-
+from typing import Optional, Union
 import napari
 from magicgui.widgets import Container, FunctionGui, create_widget
 from qtpy.QtWidgets import QWidget, QComboBox, QVBoxLayout, QSizePolicy, QScrollArea
@@ -59,10 +59,10 @@ class WidgetWithLayerList2(Container, metaclass=PostInitCaller):
         name = name.replace("<", "-").replace(">", "-")  # e.g. <locals>
         return user_cache_dir() / f"{self.__class__.__module__}.{name}"
 
-    def _dump(self, path: str | Path | None = None) -> None:
+    def _dump(self, path: Optional[Union[str, Path]] = None) -> None:
         super()._dump(path or self._dump_path)
 
-    def _load(self, path: str | Path | None = None, quiet: bool = False) -> None:
+    def _load(self, path: Optional[Union[str, Path]] = None, quiet: bool = False) -> None:
         super()._load(path or self._dump_path, quiet=quiet)
 
 

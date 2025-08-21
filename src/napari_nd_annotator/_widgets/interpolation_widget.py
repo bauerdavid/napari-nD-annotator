@@ -2,6 +2,7 @@ import asyncio.locks
 import threading
 import time
 from copy import deepcopy
+from typing import Optional
 
 import napari
 import numpy as np
@@ -516,7 +517,7 @@ class InterpolationWidget(MagicTemplate):
         self._interpolate_all()
 
     @property
-    def active_labels_layer(self) -> Labels | None:
+    def active_labels_layer(self) -> Optional[Labels]:
         return self._active_labels_layer
 
     @active_labels_layer.setter

@@ -1,7 +1,7 @@
 import json
 import traceback
 from pathlib import Path
-
+from typing import Union, Optional
 import itertools
 
 import napari
@@ -112,12 +112,12 @@ class AnnotatorWidget(MagicTemplate):
         return user_cache_dir("napari") / f"{self.__class__.__module__}.{name}"
 
     @debounce
-    def _dump(self, path: str | Path | None = None) -> None:
+    def _dump(self, path: Optional[Union[str, Path]] = None) -> None:
         data = serialize(self)
         with open(path or self._dump_path, "w") as save_file:
             json.dump(data, save_file)
 
-    def _load(self, path: str | Path | None = None, quiet: bool = False) -> None:
+    def _load(self, path: Optional[Union[str, Path]] = None, quiet: bool = False) -> None:
         try:
             with open(path or self._dump_path) as save_file:
                 data = json.load(save_file)
