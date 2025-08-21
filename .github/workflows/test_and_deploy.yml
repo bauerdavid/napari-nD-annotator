@@ -127,7 +127,7 @@ jobs:
 
   build_wheels_windows:
     name: Build wheels on Windows
-    runs-on: windows-2019
+    runs-on: windows-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
