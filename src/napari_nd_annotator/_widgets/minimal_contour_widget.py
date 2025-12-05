@@ -15,7 +15,7 @@ from napari.layers import Image, Labels
 from napari.utils.action_manager import action_manager
 from napari.utils._dtype import get_dtype_limits
 from napari.utils.events import Event
-from napari._qt.layer_controls.qt_image_controls_base import _QDoubleRangeSlider
+from superqt.sliders import QDoubleRangeSlider
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
 from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton, QtModePushButton
 from napari._qt.qt_resources import get_current_stylesheet
@@ -654,7 +654,7 @@ class MinimalContourWidget(MagicTemplate):
         if image_layer in qt_viewer.controls.widgets:
             controls = qt_viewer.controls.widgets[image_layer]
             for child in controls.children():
-                if type(child) == _QDoubleRangeSlider:
+                if type(child) == QDoubleRangeSlider:
                     try:
                         child.sliderReleased.connect(self._set_image, Qt.UniqueConnection)
                     except TypeError:
