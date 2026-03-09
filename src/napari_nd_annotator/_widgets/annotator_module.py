@@ -71,7 +71,7 @@ class AnnotatorWidget(MagicTemplate):
         self._active_labels_layer = None
         self._active_bbox_layer = None
 
-        self._viewer.layers.selection.events.connect(self._on_layer_selection_change)
+        self._viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
         self._viewer.layers.selection.events.connect(lock_layer)
         self._viewer.layers.events.inserted.connect(self._move_bbox_to_top)
         self._viewer.layers.events.moved.connect(self._move_bbox_to_top)
@@ -244,12 +244,11 @@ class AnnotatorWidget(MagicTemplate):
             self.active_labels_layer.mouse_drag_callbacks.append(self._fill_holes)
 
     def _on_layer_selection_change(self, event=None):
-        if event is None or event.type == "changed":
-            active_layer = self._viewer.layers.selection.active
-            if isinstance(active_layer, Labels):
-                self.active_labels_layer = active_layer
-            else:
-                self.active_labels_layer = None
+        active_layer = self._viewer.layers.selection.active
+        if isinstance(active_layer, Labels):
+            self.active_labels_layer = active_layer
+        else:
+            self.active_labels_layer = None
 
     @staticmethod
     def _draw_line(x1, y1, x2, y2, brush_size, output):
@@ -334,7 +333,7 @@ class AnnotatorWidget(MagicTemplate):
             if (self.active_labels_layer is not None and self._active_bbox_layer.ndim == self.active_labels_layer.ndim
                     or self.active_labels_layer is None and self._active_bbox_layer.ndim == 2):
                 return
-            with self.viewer.layers.selection.events.blocker(self._on_layer_selection_change):
+            with self.viewer.layers.selection.events.changed.blocker(self._on_layer_selection_change):
                 self.viewer.layers.remove(self._active_bbox_layer)
         self._active_bbox_layer = BoundingBoxLayer(name="%s active object" % LOCK_CHAR, face_color="transparent",
                                                   edge_color="green", ndim=self.active_labels_layer.ndim if self.active_labels_layer else 2)
@@ -345,7 +344,7 @@ class AnnotatorWidget(MagicTemplate):
             "size": 10,
             "color": "green"
         }
-        with self.viewer.layers.selection.events.blocker(self._on_layer_selection_change):
+        with self.viewer.layers.selection.events.changed.blocker(self._on_layer_selection_change):
             prev_selection = self.viewer.layers.selection.copy()
             self.viewer.add_layer(self._active_bbox_layer)
             if len(prev_selection) == 1 and self._active_bbox_layer not in prev_selection:

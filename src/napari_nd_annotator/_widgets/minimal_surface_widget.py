@@ -130,7 +130,7 @@ class ColorPairsCallback:
         self._last_color = None
 
     def __call__(self, event):
-        if event.type != "data" or getattr(event, "action", "add") not in ["add", "added"]:
+        if getattr(event, "action", "add") not in ["add", "added"]:
             return
         points_layer = event.source
         if len(points_layer.selected_data) > 1:
@@ -1170,7 +1170,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._viewer = viewer
         self.minimal_contour_widget = minimal_contour_widget
         self.points_layer = self.viewer.add_points(ndim=3, size=2, name="3D Anchors [DO NOT REMOVE]")
-        self.points_layer.events.connect(ColorPairsCallback())
+        self.points_layer.events.data.connect(ColorPairsCallback())
         self.points_layer.mouse_drag_callbacks.append(self._drag_points_callback)
         self.viewer.layers.events.inserted.connect(keep_layer_on_top(self.points_layer))
         self.viewer.layers.events.moved.connect(keep_layer_on_top(self.points_layer))

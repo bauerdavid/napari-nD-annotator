@@ -118,10 +118,13 @@ class WidgetWithLayerList(PersistentWidget):
             self.combobox.currentIndexChanged.connect(self.on_layer_index_change)
             self.combobox.setToolTip(display_name)
             self.combobox.setSizePolicy(QSizePolicy.Ignored, self.combobox.sizePolicy().verticalPolicy())
-            self.viewer.layers.events.connect(self.on_layer_list_change)
+            self.viewer.layers.events.inserted.connect(self._on_layer_list_change)
+            self.viewer.layers.events.removed.connect(self._on_layer_removed)
+            self.viewer.layers.events.moved.connect(self._on_layer_list_change)
+            self.viewer.layers.events.renamed.connect(self._on_layer_renamed)
             self._moved_layer = None
             self._layer_name = None
-            self.on_layer_list_change()
+            self._on_layer_list_change()
 
         @property
         def viewer(self) -> napari.Viewer:
@@ -158,38 +161,46 @@ class WidgetWithLayerList(PersistentWidget):
             elif index > 0:
                 self._layer_name = self.combobox.itemText(index)
 
-        def on_layer_list_change(self, event=None):
-            type_ = event.type if event else None
-            if type_ not in ["moved", "inserted", "removed", "name", None]:
+        def _on_layer_list_change(self, *_):
+            filtered = self._get_layers_of_type()
+            if len(filtered) == 0:
                 return
-            filtered = list(filter(lambda layer: isinstance(layer, self.layer_type), self.viewer.layers))
-            if len(filtered) == 0 and type_ != "removed":
+            self._update_combobox(filtered)
+
+        def _on_layer_removed(self, *_):
+            filtered = self._get_layers_of_type()
+            self._update_combobox(filtered)
+
+        def _update_combobox(self, layer_names):
+            if self.combobox.count() == len(layer_names) and \
+                    all((layer.name == self.combobox.itemText(i+1) for i, layer in enumerate(layer_names))):
                 return
-            if type_ in ["moved", "inserted", "removed", None]:
-                if self.combobox.count() == len(filtered) and \
-                        all((layer.name == self.combobox.itemText(i+1) for i, layer in enumerate(filtered))):
-                    return
-                self.combobox.blockSignals(True)
-                self.combobox.clear()
-                self.combobox.addItem("[%s]" % self.display_name)
-                for layer in filtered:
-                    self.combobox.addItem(layer.name)
-                    if layer.name == self._layer_name:
-                        self.combobox.setCurrentText(layer.name)
-                self.combobox.blockSignals(False)
-                if self._layer_name != self.combobox.currentText():
-                    self.combobox.currentTextChanged.emit(self.combobox.currentText())
-                    self.combobox.currentIndexChanged.emit(self.combobox.currentIndex())
-                if self.combobox.count() > 1 and (self.combobox.currentIndex() == 0 or self.layer not in filtered):
-                    self.layer = filtered[0]
-                elif self.combobox.count() == 1:
-                    self.layer = None
-            elif type_ == "name":
-                self.combobox.blockSignals(True)
-                for i in range(len(filtered)):
-                    if self.combobox.itemText(i+1) != filtered[i].name:
-                        if self.combobox.itemText(i+1) == self._layer_name:
-                            self._layer_name = filtered[i].name
-                        self.combobox.setItemText(i+1, filtered[i].name)
-                        break
-                self.combobox.blockSignals(False)
+            self.combobox.blockSignals(True)
+            self.combobox.clear()
+            self.combobox.addItem("[%s]" % self.display_name)
+            for name in layer_names:
+                self.combobox.addItem(name)
+                if name == self._layer_name:
+                    self.combobox.setCurrentText(name)
+            self.combobox.blockSignals(False)
+            if self._layer_name != self.combobox.currentText():
+                self.combobox.currentTextChanged.emit(self.combobox.currentText())
+                self.combobox.currentIndexChanged.emit(self.combobox.currentIndex())
+            if self.combobox.count() > 1 and (self.combobox.currentIndex() == 0 or self.layer not in layer_names):
+                self.layer = layer_names[0]
+            elif self.combobox.count() == 1:
+                self.layer = None
+
+        def _on_layer_renamed(self, *_):
+            filtered = self._get_layers_of_type()
+            self.combobox.blockSignals(True)
+            for i in range(len(filtered)):
+                if self.combobox.itemText(i+1) != filtered[i].name:
+                    if self.combobox.itemText(i+1) == self._layer_name:
+                        self._layer_name = filtered[i].name
+                    self.combobox.setItemText(i+1, filtered[i].name)
+                    break
+            self.combobox.blockSignals(False)
+
+        def _get_layers_of_type(self):
+            return [layer for layer in self.viewer.layers if isinstance(layer, self.layer_type)]
