@@ -121,7 +121,6 @@ class AnnotatorWidget(MagicTemplate):
         try:
             with open(path or self._dump_path) as save_file:
                 data = json.load(save_file)
-                print(data)
                 deserialize(self, data)
         except Exception as e:
             if not quiet:

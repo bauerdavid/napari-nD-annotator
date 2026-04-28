@@ -1002,7 +1002,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
         def _update_ranges(self):
             if not self.layers:
                 return
-            print("layers:", self.layers)
             nan = np.finfo(float).max
             negnan = np.finfo(float).min
 
@@ -1092,9 +1091,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def __post_init__(self):
         self.call_button.clicked.connect(self._start_estimation)
-        print(self.native.children()[1].sizeHint().width())
-        print(self.native.children()[1].verticalScrollBar().sizeHint().width())
-        print(self.native.children()[1].widget().layout().getContentsMargins()[2])
         self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
                                     + self.native.children()[1].verticalScrollBar().sizeHint().width()
                                     + 2 * self.native.children()[1].widget().layout().getContentsMargins()[2])
@@ -1325,7 +1321,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _toggle_blur_demo(self):
         is_checked = not self.try_blurring_button.native.isChecked()
         self.try_blurring_button.native.setChecked(is_checked)
-        print(is_checked)
         if len(self.points_layer.data) < 2:
             return
         image_layer = self.image_layer
@@ -1385,7 +1380,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if self.image_layer.ndim == 2:
             warnings.warn("Minimal Surface works only with 3D images!")
         is_enabled = self.image_layer is not None and self.image_layer.ndim==3
-        print("is enabled: ", is_enabled)
         for container in self._collapsible_group:
             container.enabled = is_enabled
         self.ClippingWidget.enabled = is_enabled
