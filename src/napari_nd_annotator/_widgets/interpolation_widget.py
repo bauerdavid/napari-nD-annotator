@@ -542,6 +542,7 @@ class InterpolationWidget(MagicTemplate):
         if "interpolation" not in self._active_labels_layer._overlays:
             interpolation_overlay = InterpolationOverlay()
             self._active_labels_layer._overlays.update({"interpolation": interpolation_overlay})
+            self._active_labels_layer._overlays["interpolation"].visible = True
             labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._active_labels_layer]
             if labels_control.button_grid.itemAtPosition(1, 1) is not None:
                 return

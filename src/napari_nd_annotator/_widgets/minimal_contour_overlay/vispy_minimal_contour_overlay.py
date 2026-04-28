@@ -82,7 +82,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
     mc_calculator = MinimalContourCalculator(None, 3)
     _features_shape = None
     def __init__(
-            self, *, layer: Labels, overlay: MinimalContourOverlay, parent=None
+            self, *, layer: Labels, overlay: MinimalContourOverlay, parent=None, **kwargs
     ):
         self._features = None
         points = [(0, 0), (1, 1)]
@@ -105,6 +105,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
             layer=layer,
             overlay=overlay,
             parent=parent,
+            **kwargs
         )
 
         self.layer.mouse_move_callbacks.append(self._on_mouse_move)

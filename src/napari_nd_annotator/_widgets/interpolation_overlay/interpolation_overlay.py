@@ -1,5 +1,5 @@
 import numpy as np
-from napari._pydantic_compat import Field
+from pydantic import Field
 from napari.components.overlays import SceneOverlay
 import threading
 from copy import deepcopy

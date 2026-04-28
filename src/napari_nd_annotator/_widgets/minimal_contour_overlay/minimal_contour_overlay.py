@@ -1,5 +1,5 @@
 import numpy as np
-from napari._pydantic_compat import Field
+from pydantic import Field
 from napari.components.overlays import SceneOverlay
 from napari.layers import Labels
 import scipy

@@ -766,6 +766,7 @@ class MinimalContourWidget(MagicTemplate):
             if "minimal_contour" not in self._labels_layer._overlays:
                 self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
                 self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
+                self._labels_layer._overlays["minimal_contour"].visible=True
                 labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._labels_layer]
                 mc_btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
                 action_manager.bind_button(

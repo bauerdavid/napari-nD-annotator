@@ -27,9 +27,7 @@ def execute_last(function=None, delay=0.2):
             def call_it(*args, **kwargs):
                 _store["retry_worker"] = None
                 with mutex:
-                    print("calling function", flush=True)
                     fn(*args, **kwargs)
-                    print("called function", flush=True)
 
             @thread_worker
             def retry(*args, **kwargs):
@@ -54,7 +52,7 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
     layer: Labels
 
     def __init__(
-        self, *, layer: Labels, overlay: InterpolationOverlay, parent=None
+        self, *, layer: Labels, overlay: InterpolationOverlay, parent=None, **kwargs
     ):
         points = np.asarray([(0, 0), (1, 1)])
         self._polygons = [Polygon(
@@ -68,6 +66,7 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
             layer=layer,
             overlay=overlay,
             parent=parent,
+            **kwargs
         )
         # self.overlay.events.points_per_slice.connect(self._on_points_change)
         self.overlay.events.contour.connect(self._on_points_change)
@@ -89,7 +88,6 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
 
     # @execute_last
     def _on_points_change(self):
-        print("on_points_change")
         # print("initial checks in points change:", time.time() - start, flush=True)
         contours = self.overlay.contour.copy()
         n_contours = len(contours)
@@ -107,11 +105,9 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
                 poly.visible = True
                 poly.pos = points
             else:
-                print("setting poly invisible", flush=True)
                 poly.visible = False
 
     def _set_color(self, color):
-        print("set_color")
         border_color = tuple(color[:3]) + (1,)  # always opaque
         polygon_color = color
 
@@ -125,7 +121,6 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
             poly.border_color = border_color
 
     def _update_color(self):
-        print("_update_color")
         layer = self.layer
         if layer._selected_label == layer.colormap.background_value:
             self._set_color((1, 0, 0, 0))
@@ -139,7 +134,6 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
         return self.layer._slice_input.displayed
 
     def reset(self):
-        print("reset")
         super().reset()
         self._on_points_change()
 
