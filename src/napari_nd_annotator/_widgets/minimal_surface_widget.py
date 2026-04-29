@@ -1102,7 +1102,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._on_feature_changed(self.used_feature)
         self.try_blurring_button.native.setCheckable(True)
         self._on_blur_checked(self.blur_image_checkbox.value)
-        self._on_labels_changed()
+
         self._ensure_3d_image()
 
     def __magicclass_serialize__(self):
@@ -1172,6 +1172,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.viewer.layers.events.moved.connect(keep_layer_on_top(self.points_layer))
         self.ImageSliceWidget.viewer = self.viewer
         self.ImageSliceWidget.clipping_widget = self.ClippingWidget
+        self._on_labels_changed()
         self._ensure_3d_image()
         self._set_slice_widget_image()
         self._update_custom_feature_image()
