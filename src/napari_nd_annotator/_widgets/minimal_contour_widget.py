@@ -150,6 +150,11 @@ class SelectedLayerTracker:
 class MinimalContourWidget(MagicTemplate):
     non_labels_layer_txt = field("Select a Labels layer.", widget_type="Label").with_options(visible=False)
     layer_has_no_source = field("The selected layer has no source image layer.", widget_type="Label").with_options(visible=False)
+
+    @magicclass(layout="horizontal", name="source_image_container", labels=False)
+    class SourceImageWidget(MagicTemplate):
+        source_image_txt = field("Source: None", widget_type="Label")
+        def change_source_image(self): ...
     @magicclass(widget_type="collapsible", name="Image Features")
     class ImageFeaturesWidget(MagicTemplate):
         ...
@@ -304,6 +309,8 @@ class MinimalContourWidget(MagicTemplate):
         d = serialize(self)
         if "labels_layer_combobox" in d:
             del d["labels_layer_combobox"]
+        if "source_image_container" in d:
+            del d["source_image_container"]
         return d
 
     @property
@@ -775,6 +782,7 @@ class MinimalContourWidget(MagicTemplate):
         self.BlurWidget.visible = False
         self.non_labels_layer_txt.visible = False
         self.layer_has_no_source.visible = False
+        self.SourceImageWidget.visible = False
 
     def _show_no_labels_layer_selected_txt(self):
         self._hide_widgets()
@@ -783,6 +791,7 @@ class MinimalContourWidget(MagicTemplate):
     def _show_layer_has_no_source_txt(self):
         self._hide_widgets()
         self.layer_has_no_source.visible = True
+        self.SourceImageWidget.visible = True
 
     def _show_base_widgets(self):
         self._hide_widgets()
@@ -790,6 +799,61 @@ class MinimalContourWidget(MagicTemplate):
         self.LabelOptionsWidget.visible = True
         self.ContourWidget.visible = True
         self.BlurWidget.visible = True
+        self.SourceImageWidget.visible = True
+        image_layer = self.image_layer
+        self.SourceImageWidget.source_image_txt.value = "Source: %s" % (image_layer.name if image_layer is not None else "None")
+
+    def _select_source_image_dialog(self, labels_layer):
+        """Show a dialog to select/change the source image layer for labels_layer.
+        Returns True if a source was successfully assigned, False otherwise."""
+        image_layers = list(map(lambda layer: layer.name, filter(lambda layer: isinstance(layer, Image), self.viewer.layers)))
+        if len(image_layers) == 0:
+            return False
+        dialog = QDialog(self.native)
+        dialog.setWindowTitle("Select Source Image")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Please select the source image layer for '%s'." % labels_layer.name))
+        combo_box = QComboBox(dialog)
+        combo_box.addItems(image_layers)
+        # pre-select the current source image if set
+        current = labels_layer.metadata.get("source_image_layer")
+        if current is not None and current.name in image_layers:
+            combo_box.setCurrentIndex(image_layers.index(current.name))
+        layout.addWidget(combo_box)
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        if dialog.exec() != QDialog.Accepted:
+            return False
+        source_layer = self.viewer.layers[image_layers[combo_box.currentIndex()]]
+        if source_layer.ndim != labels_layer.ndim or source_layer.data.shape[:source_layer.ndim] != labels_layer.data.shape:
+            if QMessageBox.question(self.native, "Resizing required",
+                    f"The sizes of '{labels_layer.name}' and '{source_layer.name}' do not match.\n"
+                    f"Do you want to resize '{labels_layer.name}'? This will reset its current content."
+                    ) != QMessageBox.StandardButton.Yes:
+                return False
+            name = labels_layer.name
+            dtype = labels_layer.data.dtype
+            with self.viewer.layers.selection.events.active.blocker(self._on_active_layer_changed):
+                self.viewer.layers.remove(labels_layer)
+            new_labels = self.viewer.add_labels(
+                np.zeros(source_layer.data.shape[:source_layer.ndim], dtype=dtype), name=name)
+            new_labels.metadata["source_image_layer"] = source_layer
+            self.viewer.layers.selection.select_only(new_labels)
+            return True
+        labels_layer.metadata["source_image_layer"] = source_layer
+        return True
+
+    @set_design(location=SourceImageWidget, text="Change")
+    def change_source_image(self):
+        """Change the source image layer for the currently active labels layer."""
+        if self.labels_layer is None:
+            return
+        if self._select_source_image_dialog(self.labels_layer):
+            self._on_image_changed()
+            self.SourceImageWidget.source_image_txt.value = "Source: %s" % (
+                self.image_layer.name if self.image_layer is not None else "None")
 
     def _on_active_layer_changed(self, *_):
         if self.viewer is None:
@@ -800,44 +864,17 @@ class MinimalContourWidget(MagicTemplate):
             self._show_no_labels_layer_selected_txt()
             return
         if "source_image_layer" not in self._labels_layer.metadata:
-
             image_layers = list(map(lambda layer: layer.name, filter(lambda layer: isinstance(layer, Image), self.viewer.layers)))
-
             if len(image_layers) == 0:
                 self._show_layer_has_no_source_txt()
                 return
-            # show dialog to select source image
-            dialog = QDialog(self.native)
-            dialog.setWindowTitle("Select Source Image")
-            layout = QVBoxLayout(dialog)
-            layout.addWidget(QLabel("The selected labels layer has no source image.\nPlease select the source image layer."))
-            combo_box = QComboBox(dialog)
-            combo_box.addItems(image_layers)
-            layout.addWidget(combo_box)
-            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
-            button_box.accepted.connect(dialog.accept)
-            button_box.rejected.connect(dialog.reject)
-            layout.addWidget(button_box)
-            if dialog.exec() == QDialog.Accepted:
-                source_layer = self.viewer.layers[image_layers[combo_box.currentIndex()]]
-                if source_layer.ndim != self._labels_layer.ndim or source_layer.data.shape[:source_layer.ndim] == self._labels_layer.data.shape:
-                    if QMessageBox.question(self.native, "Resizing required", f"The sizes of '{self._labels_layer.name}' and '{source_layer.name}' do not match.\nDo you want to resize '{self._labels_layer.name}'? This will reset its current content.") != QMessageBox.StandardButton.Yes:
-                        self._show_layer_has_no_source_txt()
-                        return
-                    name = self._labels_layer.name
-                    dtype = self._labels_layer.data.dtype
-                    with self.viewer.layers.selection.events.active.blocker(self._on_active_layer_changed):
-                         self.viewer.layers.remove(self._labels_layer)
-                    new_labels = self.viewer.add_labels(
-                        np.zeros(source_layer.data.shape[:source_layer.ndim], dtype=dtype),
-                        name=name)
-                    new_labels.metadata["source_image_layer"] = source_layer
-
-                    self.viewer.layers.selection.select_only(new_labels)
-                    return
-                self._labels_layer.metadata["source_image_layer"] = source_layer
-            else:
-                self._show_no_labels_layer_selected_txt()
+            assigned = self._select_source_image_dialog(self._labels_layer)
+            if not assigned:
+                self._show_layer_has_no_source_txt()
+                return
+            # if _select_source_image_dialog triggered a layer replacement it calls select_only
+            # which re-triggers this callback — bail out early to avoid double-processing
+            if self._labels_layer not in self.viewer.layers:
                 return
         if "minimal_contour" not in self._labels_layer._overlays:
             self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
