@@ -21,7 +21,7 @@ from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton, QtModePushButt
 from napari._qt.qt_resources import get_current_stylesheet
 
 from qtpy.QtCore import Signal, QObject, QEvent, QThread, Qt
-from qtpy.QtWidgets import QLabel, QSizePolicy
+from qtpy.QtWidgets import QLabel, QSizePolicy, QMessageBox, QComboBox, QDialog, QDialogButtonBox, QVBoxLayout
 from magicclass.serialize import serialize
 from magicclass import MagicTemplate, field, abstractapi, magicclass, vfield, set_design
 from magicclass.widgets import FreeWidget
@@ -128,11 +128,28 @@ class EventFilter(QObject):
         # self.widget.selected_id_label.move(pos)
         return False
 
+# a class for storing the original layer when creating a new labels layer as metadata
+class SelectedLayerTracker:
+    def __init__(self, viewer):
+        self._prev_active = None
+        viewer.layers.events.inserting.connect(self._store_selected)
+        viewer.layers.events.inserted.connect(self._add_metadata)
+
+    def _store_selected(self, event):
+        if type(layer := event.source.selection.active) == Image:
+            self._prev_active = layer
+
+    def _add_metadata(self, event):
+        if self._prev_active is None or type(event.value) is not Labels:
+            return
+        event.value.metadata["source_image_layer"] = self._prev_active
+        self._prev_active = None
+
 
 @magicclass(name="Minimal Contour", widget_type="scrollable", properties={"x_enabled": False})
 class MinimalContourWidget(MagicTemplate):
-    image_layer_combobox = field(Image, label="Image")
-
+    non_labels_layer_txt = field("Select a Labels layer.", widget_type="Label").with_options(visible=False)
+    layer_has_no_source = field("The selected layer has no source image layer.", widget_type="Label").with_options(visible=False)
     @magicclass(widget_type="collapsible", name="Image Features")
     class ImageFeaturesWidget(MagicTemplate):
         ...
@@ -239,6 +256,7 @@ class MinimalContourWidget(MagicTemplate):
         self.demo_image_widget.native.setAttribute(Qt.WA_ShowWithoutActivating)
 
         self.modifiers = None
+        self.selected_layer_tracker = None
 
     def __post_init__(self):
         if self._viewer is not None:
@@ -284,8 +302,6 @@ class MinimalContourWidget(MagicTemplate):
 
     def __magicclass_serialize__(self):
         d = serialize(self)
-        if "image_layer_combobox" in d:
-            del d["image_layer_combobox"]
         if "labels_layer_combobox" in d:
             del d["labels_layer_combobox"]
         return d
@@ -296,11 +312,7 @@ class MinimalContourWidget(MagicTemplate):
 
     @property
     def image_layer(self):
-        return self.image_layer_combobox.value
-
-    @image_layer.setter
-    def image_layer(self, new_layer):
-        self.image_layer_combobox.value = new_layer
+        return self.labels_layer.metadata.get("source_image_layer", None) if self.labels_layer is not None else None
 
     @property
     def image_data(self):
@@ -434,7 +446,6 @@ class MinimalContourWidget(MagicTemplate):
         if self.labels_layer is not None:
             extend_mask(self.labels_layer)
 
-    @image_layer_combobox.connect
     def _on_image_changed(self, *args):
         self._store_orig_image(*args)
         self.feature_editor.run_button.setEnabled(self.image_layer is not None)
@@ -757,39 +768,106 @@ class MinimalContourWidget(MagicTemplate):
             warnings.simplefilter("ignore")
             self.viewer.window.qt_viewer.canvas.native.setFocus()
 
+    def _hide_widgets(self):
+        self.ImageFeaturesWidget.visible = False
+        self.LabelOptionsWidget.visible = False
+        self.ContourWidget.visible = False
+        self.BlurWidget.visible = False
+        self.non_labels_layer_txt.visible = False
+        self.layer_has_no_source.visible = False
+
+    def _show_no_labels_layer_selected_txt(self):
+        self._hide_widgets()
+        self.non_labels_layer_txt.visible = True
+
+    def _show_layer_has_no_source_txt(self):
+        self._hide_widgets()
+        self.layer_has_no_source.visible = True
+
+    def _show_base_widgets(self):
+        self._hide_widgets()
+        self.ImageFeaturesWidget.visible = True
+        self.LabelOptionsWidget.visible = True
+        self.ContourWidget.visible = True
+        self.BlurWidget.visible = True
+
     def _on_active_layer_changed(self, *_):
         if self.viewer is None:
             return
         active_layer = self.viewer.layers.selection.active
         self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
-        if self._labels_layer:
-            if "minimal_contour" not in self._labels_layer._overlays:
-                self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
-                self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
-                self._labels_layer._overlays["minimal_contour"].visible=True
-                labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._labels_layer]
-                mc_btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
-                action_manager.bind_button(
-                    'napari-nD-annotator:activate_labels_mc_mode',
-                    mc_btn,
-                    # extra_tooltip_text=extra_tooltip_text,
-                )
-                for button in labels_control.button_group.buttons():
-                    button.toggled.connect(self._disable_mc_mode)
-                mc_btn.setStyleSheet(get_current_stylesheet([mc_contour_style_path]))
-                labels_control.button_group.addButton(mc_btn)
-                labels_control._EDIT_BUTTONS += (mc_btn,)
-                labels_control.mc_button = mc_btn
-                labels_control.button_grid.addWidget(labels_control.mc_button, 1, 0)
+        if not self._labels_layer:
+            self._show_no_labels_layer_selected_txt()
+            return
+        if "source_image_layer" not in self._labels_layer.metadata:
 
-                def switch_to_mc_mode(*_, **__):
-                    mc_btn.blockSignals(True)
-                    mc_btn.setChecked(True)
-                    mc_btn.blockSignals(False)
-                    self._enable_mc_mode()
-                    # btn.setChecked(True)
-                self._labels_layer.bind_key("0", switch_to_mc_mode)
-            self.labels_layer._overlays["minimal_contour"].contour_smoothness = self.contour_smoothness if self.is_contour_smoothing_enabled else 1.
+            image_layers = list(map(lambda layer: layer.name, filter(lambda layer: isinstance(layer, Image), self.viewer.layers)))
+
+            if len(image_layers) == 0:
+                self._show_layer_has_no_source_txt()
+                return
+            # show dialog to select source image
+            dialog = QDialog(self.native)
+            dialog.setWindowTitle("Select Source Image")
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(QLabel("The selected labels layer has no source image.\nPlease select the source image layer."))
+            combo_box = QComboBox(dialog)
+            combo_box.addItems(image_layers)
+            layout.addWidget(combo_box)
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
+            button_box.accepted.connect(dialog.accept)
+            button_box.rejected.connect(dialog.reject)
+            layout.addWidget(button_box)
+            if dialog.exec() == QDialog.Accepted:
+                source_layer = self.viewer.layers[image_layers[combo_box.currentIndex()]]
+                if source_layer.ndim != self._labels_layer.ndim or source_layer.data.shape[:source_layer.ndim] == self._labels_layer.data.shape:
+                    if QMessageBox.question(self.native, "Resizing required", f"The sizes of '{self._labels_layer.name}' and '{source_layer.name}' do not match.\nDo you want to resize '{self._labels_layer.name}'? This will reset its current content.") != QMessageBox.StandardButton.Yes:
+                        self._show_layer_has_no_source_txt()
+                        return
+                    name = self._labels_layer.name
+                    dtype = self._labels_layer.data.dtype
+                    with self.viewer.layers.selection.events.active.blocker(self._on_active_layer_changed):
+                         self.viewer.layers.remove(self._labels_layer)
+                    new_labels = self.viewer.add_labels(
+                        np.zeros(source_layer.data.shape[:source_layer.ndim], dtype=dtype),
+                        name=name)
+                    new_labels.metadata["source_image_layer"] = source_layer
+
+                    self.viewer.layers.selection.select_only(new_labels)
+                    return
+                self._labels_layer.metadata["source_image_layer"] = source_layer
+            else:
+                self._show_no_labels_layer_selected_txt()
+                return
+        if "minimal_contour" not in self._labels_layer._overlays:
+            self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
+            self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
+            self._labels_layer._overlays["minimal_contour"].visible=True
+            labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._labels_layer]
+            mc_btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
+            action_manager.bind_button(
+                'napari-nD-annotator:activate_labels_mc_mode',
+                mc_btn,
+                # extra_tooltip_text=extra_tooltip_text,
+            )
+            for button in labels_control.button_group.buttons():
+                button.toggled.connect(self._disable_mc_mode)
+            mc_btn.setStyleSheet(get_current_stylesheet([mc_contour_style_path]))
+            labels_control.button_group.addButton(mc_btn)
+            labels_control._EDIT_BUTTONS += (mc_btn,)
+            labels_control.mc_button = mc_btn
+            labels_control.button_grid.addWidget(labels_control.mc_button, 1, 0)
+
+            def switch_to_mc_mode(*_, **__):
+                mc_btn.blockSignals(True)
+                mc_btn.setChecked(True)
+                mc_btn.blockSignals(False)
+                self._enable_mc_mode()
+                # btn.setChecked(True)
+            self._labels_layer.bind_key("0", switch_to_mc_mode)
+        self.labels_layer._overlays["minimal_contour"].contour_smoothness = self.contour_smoothness if self.is_contour_smoothing_enabled else 1.
+        self._on_image_changed()
+        self._show_base_widgets()
 
     def _on_ctrl_pressed(self, _):
         if self.labels_layer is None:
@@ -800,7 +878,6 @@ class MinimalContourWidget(MagicTemplate):
 
 
     def _set_viewer_callbacks(self):
-        self.viewer.layers.events.connect(self.image_layer_combobox.reset_choices)
         self.viewer.layers.selection.events.active.connect(self._on_active_layer_changed)
 
         def change_layer_callback(num):
@@ -827,7 +904,8 @@ class MinimalContourWidget(MagicTemplate):
     def _initialize(self, viewer: napari.Viewer):
         self._viewer = viewer
         self._initialize_helper_layers()
-        self.feature_manager = FeatureManager(self.viewer)
+        self.feature_manager = FeatureManager(viewer)
+        self._selected_layer_tracker = SelectedLayerTracker(self.viewer)
         self._set_viewer_callbacks()
         self._store_orig_image()
         self._apply_blurring()
