@@ -121,7 +121,8 @@ class WidgetWithLayerList(PersistentWidget):
             self.viewer.layers.events.inserted.connect(self._on_layer_list_change)
             self.viewer.layers.events.removed.connect(self._on_layer_removed)
             self.viewer.layers.events.moved.connect(self._on_layer_list_change)
-            self.viewer.layers.events.renamed.connect(self._on_layer_renamed)
+            if "renamed" in self.viewer.layers.events:
+                self.viewer.layers.events.renamed.connect(self._on_layer_renamed)
             self._moved_layer = None
             self._layer_name = None
             self._on_layer_list_change()
@@ -171,23 +172,23 @@ class WidgetWithLayerList(PersistentWidget):
             filtered = self._get_layers_of_type()
             self._update_combobox(filtered)
 
-        def _update_combobox(self, layer_names):
-            if self.combobox.count() == len(layer_names) and \
-                    all((layer.name == self.combobox.itemText(i+1) for i, layer in enumerate(layer_names))):
+        def _update_combobox(self, layers):
+            if self.combobox.count() == len(layers) and \
+                    all((layer.name == self.combobox.itemText(i+1) for i, layer in enumerate(layers))):
                 return
             self.combobox.blockSignals(True)
             self.combobox.clear()
             self.combobox.addItem("[%s]" % self.display_name)
-            for name in layer_names:
-                self.combobox.addItem(name)
-                if name == self._layer_name:
-                    self.combobox.setCurrentText(name)
+            for layer in layers:
+                self.combobox.addItem(layer.name)
+                if layer.name == self._layer_name:
+                    self.combobox.setCurrentText(layer.name)
             self.combobox.blockSignals(False)
             if self._layer_name != self.combobox.currentText():
                 self.combobox.currentTextChanged.emit(self.combobox.currentText())
                 self.combobox.currentIndexChanged.emit(self.combobox.currentIndex())
-            if self.combobox.count() > 1 and (self.combobox.currentIndex() == 0 or self.layer not in layer_names):
-                self.layer = layer_names[0]
+            if self.combobox.count() > 1 and (self.combobox.currentIndex() == 0 or self.layer not in layers):
+                self.layer = layers[0]
             elif self.combobox.count() == 1:
                 self.layer = None
 
