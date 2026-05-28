@@ -71,12 +71,14 @@ jobs:
           conda create -n build $OPENMP_URL
           PREFIX="$(conda run -n build python -c 'import sys; print(sys.prefix)')"
       
-          export CC=/usr/bin/clang
-          export CXX=/usr/bin/clang++
-          export CPPFLAGS="-Xpreprocessor -fopenmp -I$PREFIX/include ${CPPFLAGS}"
-          export CFLAGS="-Wno-implicit-function-declaration -Xpreprocessor -fopenmp -I$PREFIX/include ${CFLAGS}"
-          export CXXFLAGS="-Xpreprocessor -fopenmp -I$PREFIX/include ${CXXFLAGS}"
-          export LDFLAGS="-Wl,-S -Wl,-rpath,$PREFIX/lib -L$PREFIX/lib -lomp ${LDFLAGS}"
+          export CIBW_ENVIRONMENT_MACOS="CC=/usr/bin/clang \
+          CXX=/usr/bin/clang++ \
+          CPPFLAGS='-Xpreprocessor -fopenmp -I$PREFIX/include' \
+          CFLAGS='-Wno-implicit-function-declaration -Xpreprocessor -fopenmp -I$PREFIX/include' \
+          CXXFLAGS='-Xpreprocessor -fopenmp -I$PREFIX/include' \
+          LDFLAGS='-Wl,-S -Wl,-rpath,$PREFIX/lib -L$PREFIX/lib -lomp' \
+          MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
+          MACOS_DEPLOYMENT_TARGET=$MACOS_DEPLOYMENT_TARGET"
       
           python -m cibuildwheel --output-dir dist
         env:
