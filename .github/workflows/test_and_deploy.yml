@@ -26,9 +26,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13]
-        # TODO: add "universal2" once a universal2 libomp is available
-        cibw_arch: ["x86_64", "arm64"]
+        include:
+          - os: macos-15-intel
+            cibw_arch: x86_64
+          - os: macos-15
+            cibw_arch: arm64
         
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +88,7 @@ jobs:
           # Note that we do NOT activate the conda environment, we just add the
           # library install path to CFLAGS/CXXFLAGS/LDFLAGS below.
           conda create -n build $OPENMP_URL
-          PREFIX="/Users/runner/miniconda3/envs/build"
+          PREFIX="$(conda run -n build python -c 'import sys; print(sys.prefix)')"
           export CC=/usr/bin/clang
           export CXX=/usr/bin/clang++
           export CPPFLAGS="$CPPFLAGS -Xpreprocessor -fopenmp"
