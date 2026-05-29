@@ -46,40 +46,29 @@ jobs:
         run: |
           python -m pip install cibuildwheel
 
-      # Needed to install a specific libomp version later
-      - name: Setup Conda
-        uses: conda-incubator/setup-miniconda@d2e6a045a86077fb6cad6f5adf368e9076ddaa8d # v3.1.0
-        with:
-          python-version: "3.12"
-          channels: conda-forge
-          channel-priority: true
-          miniforge-variant: Miniforge3
-          miniforge-version: latest
+      - name: Install LLVM and OpenMP via Homebrew
+        run: |
+          brew install llvm libomp
 
       - name: Build wheels for CPython Mac OS
         run: |
           if [[ "$CIBW_ARCHS_MACOS" == arm64 ]]; then
               export MACOSX_DEPLOYMENT_TARGET=12.0
               export MACOS_DEPLOYMENT_TARGET=12.0
-              OPENMP_URL="https://anaconda.org/conda-forge/llvm-openmp/11.1.0/download/osx-arm64/llvm-openmp-11.1.0-hf3c4609_1.tar.bz2"
           else
               export MACOSX_DEPLOYMENT_TARGET=10.9
               export MACOS_DEPLOYMENT_TARGET=10.9
-              OPENMP_URL="https://anaconda.org/conda-forge/llvm-openmp/11.1.0/download/osx-64/llvm-openmp-11.1.0-hda6cdc1_1.tar.bz2"
           fi
-      
-          conda create -n build $OPENMP_URL
-          PREFIX="$(conda run -n build python -c 'import sys; print(sys.prefix)')"
-      
-          export CIBW_ENVIRONMENT_MACOS="CC=/usr/bin/clang \
-          CXX=/usr/bin/clang++ \
-          CPPFLAGS='-Xpreprocessor -fopenmp -I$PREFIX/include' \
-          CFLAGS='-Wno-implicit-function-declaration -Xpreprocessor -fopenmp -I$PREFIX/include' \
-          CXXFLAGS='-Xpreprocessor -fopenmp -I$PREFIX/include' \
-          LDFLAGS='-Wl,-S -Wl,-rpath,$PREFIX/lib -L$PREFIX/lib -lomp' \
+          
+          # Explicitly target Homebrew's LLVM toolchain. It natively handles raw -fopenmp flags
+          export CIBW_ENVIRONMENT_MACOS="CC=\$(brew --prefix llvm)/bin/clang \
+          CXX=\$(brew --prefix llvm)/bin/clang++ \
+          CFLAGS='-I\$(brew --prefix libomp)/include' \
+          CXXFLAGS='-I\$(brew --prefix libomp)/include' \
+          LDFLAGS='-L\$(brew --prefix libomp)/lib -lomp' \
           MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
           MACOS_DEPLOYMENT_TARGET=$MACOS_DEPLOYMENT_TARGET"
-      
+          
           python -m cibuildwheel --output-dir dist
         env:
           CIBW_ARCHS_MACOS: ${{ matrix.cibw_arch }}
