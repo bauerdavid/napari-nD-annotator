@@ -1,4 +1,5 @@
 import sys
+import subprocess
 from setuptools import setup, Extension
 import os
 import numpy as np
@@ -24,10 +25,34 @@ def no_cythonize(extensions, **_ignore):
         extension.sources[:] = sources
     return extensions
 
-extra_compile_args = ["/std:c++17", "/openmp"] if sys.platform == "win32"\
-    else ["-std=c++17", "-fopenmp"] if sys.platform == "darwin"\
-    else ["-std=c++17", "-fopenmp"]
-extra_link_args = [] if sys.platform in ["win32", "darwin"] else ["-lgomp"]
+
+def get_brew_prefix(package):
+    try:
+        result = subprocess.run(
+            ["brew", "--prefix", package],
+            capture_output=True, text=True, check=True
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+if sys.platform == "win32":
+    extra_compile_args = ["/std:c++17", "/openmp"]
+    extra_link_args = []
+elif sys.platform == "darwin":
+    libomp_prefix = get_brew_prefix("libomp")
+    if libomp_prefix:
+        extra_compile_args = ["-std=c++17", "-Xpreprocessor", "-fopenmp", f"-I{libomp_prefix}/include"]
+        extra_link_args = [f"-L{libomp_prefix}/lib", "-lomp"]
+    else:
+        # Fallback if brew/libomp is not available
+        extra_compile_args = ["-std=c++17"]
+        extra_link_args = []
+else:
+    extra_compile_args = ["-std=c++17", "-fopenmp"]
+    extra_link_args = ["-lgomp"]
+
 extensions = [
     Extension(
         "napari_nd_annotator.minimal_contour._eikonal_wrapper",
