@@ -53,8 +53,8 @@ jobs:
       - name: Build wheels for CPython Mac OS
         run: |
           if [[ "$CIBW_ARCHS_MACOS" == arm64 ]]; then
-              export MACOSX_DEPLOYMENT_TARGET=12.0
-              export MACOS_DEPLOYMENT_TARGET=12.0
+              export MACOSX_DEPLOYMENT_TARGET=15.0
+              export MACOS_DEPLOYMENT_TARGET=15.0
           else
               export MACOSX_DEPLOYMENT_TARGET=10.9
               export MACOS_DEPLOYMENT_TARGET=10.9
