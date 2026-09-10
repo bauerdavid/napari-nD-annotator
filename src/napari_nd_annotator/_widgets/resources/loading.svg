@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+    width="103.3727mm"
+    height="103.37324mm"
+    viewBox="0 0 103.3727 103.37324"
+    version="1.1"
+    id="svg1"
+    xml:space="preserve"
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:svg="http://www.w3.org/2000/svg">
+    <defs id="defs1" />
+    <g id="layer1">
+        <g id="g1">
+            <ellipse
+                    style="fill:none;stroke:#2693f9;stroke-width:20;stroke-dasharray:none;stroke-opacity:1"
+                    id="path1"
+                    cx="50"
+                    cy="50"
+                    rx="40"
+                    ry="40" />
+            <path
+                    style="fill:none;stroke:#23ccff;stroke-width:20;stroke-dasharray:none;stroke-opacity:1"
+                    id="circle1"
+                    d="M 10,50 A 40,40 0 0 1 21.71572875,21.71572875" />
+            <animateTransform
+                      attributeName="transform"
+                      begin="0s"
+                      dur="1s"
+                      type="rotate"
+                      from="0 50 50"
+                      to="360 50 50"
+                      repeatCount="indefinite" />
+        </g>
+    </g>
+</svg>

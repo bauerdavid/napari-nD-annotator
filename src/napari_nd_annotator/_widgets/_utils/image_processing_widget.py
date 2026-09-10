@@ -3,7 +3,6 @@ from copy import deepcopy
 import sys
 
 import napari
-from PyQt5.QtWidgets import QTextEdit
 from magicclass import magicclass, field, bind_key
 from magicclass.widgets import FreeWidget
 from magicgui.types import Undefined
@@ -30,7 +29,7 @@ def execute_script(script, other_locals=None):
 
 
 class ScriptWorker(QObject):
-    done = Signal("PyQt_PyObject")
+    done = Signal(object)
     script = None
     variables = None
     _output_variables = {}

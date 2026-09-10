@@ -5,7 +5,7 @@ from functools import lru_cache
 
 import numpy as np
 import skimage
-from PyQt5.QtCore import QMutex, Qt
+from qtpy.QtCore import QMutex, Qt
 from napari._vispy.overlays.base import LayerOverlayMixin, VispySceneOverlay
 from napari._vispy.utils import visual
 from napari.layers import Labels

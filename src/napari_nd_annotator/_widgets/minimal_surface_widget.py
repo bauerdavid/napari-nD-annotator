@@ -162,12 +162,12 @@ class ColorPairsCallback:
 
 
 class EstimationWorker(QObject):
-    image_data_received = Signal(str, "PyQt_PyObject", "PyQt_PyObject")
-    mask_data_received = Signal("PyQt_PyObject", "PyQt_PyObject")
+    image_data_received = Signal(str, object, object)
+    mask_data_received = Signal(object, object)
     remove_layer = Signal(str)
     layer_invalidated = Signal(str)
     all_done = Signal()
-    annotation_needed_signal = Signal("PyQt_PyObject", "PyQt_PyObject")
+    annotation_needed_signal = Signal(object, object)
     slice_annotations_done = Signal(int)
     object_annotated = Signal(int)
     MANUAL_ANNOTATION = "Manual"
@@ -1429,7 +1429,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
 
 class ShortestPathsWidget(WidgetWithLayerList):
-    shapes_data_received = Signal(str, "PyQt_PyObject", "PyQt_PyObject")
+    shapes_data_received = Signal(str, object, object)
 
     def __init__(self, viewer: napari.Viewer):
         super().__init__(viewer, [("meeting_plane", Image), ("distance_map", Image), ("starting_points", Points)], "nd_annotator_shortest_paths")

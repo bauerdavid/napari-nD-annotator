@@ -9,8 +9,6 @@ import numpy as np
 import cv2
 import scipy.ndimage
 import skimage.draw
-from PyQt5.QtCore import QEvent
-from PyQt5.QtGui import QCursor, QPalette
 from magicclass import magicclass, field, vfield, bind_key, MagicTemplate
 from magicgui._util import debounce
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
@@ -21,14 +19,19 @@ from napari.utils.action_manager import action_manager
 from napari.qt.threading import thread_worker
 
 from scipy.interpolate import interp1d
-from qtpy.QtCore import QThread, QObject, Signal, Qt
-from qtpy.QtSvg import QSvgWidget
+from qtpy.QtCore import QThread, QObject, Signal, Qt, QEvent
+from qtpy.QtGui import QCursor, QPalette
+try:
+    # QSvgWidget lives in QtSvgWidgets on Qt6, and in QtSvg on Qt5
+    from qtpy.QtSvgWidgets import QSvgWidget
+except ImportError:
+    from qtpy.QtSvg import QSvgWidget
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
-from .resources import interpolate_style_path
+from .resources import interpolate_style_path, loading_icon_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization, \
     layer_get_order, layer_dims_displayed, layer_dims_order
 from ..mean_contour import settings
@@ -148,7 +151,7 @@ class MoveLoadingIconEventFilter(QObject):
 
 
 class InterpolationWorker(QObject):
-    done = Signal("PyQt_PyObject")
+    done = Signal(object)
     progress = Signal(int)
     dimension: int
     n_contour_points: int
@@ -306,7 +309,7 @@ class InterpolationWidget(MagicTemplate):
 
         self.viewer.dims.events.current_step.connect(self._current_step_changed)
         self.viewer.dims.events.order.connect(self._dims_order_changed)
-        self.loading_icon = QSvgWidget("C:\\Users\\User\\Downloads\\loading.svg", self._viewer.window._qt_window)
+        self.loading_icon = QSvgWidget(loading_icon_path, self._viewer.window._qt_window)
         self.loading_icon.setStyleSheet("background: transparent;")
         self.loading_icon.setAutoFillBackground(False)
         palette = self.loading_icon.palette()
