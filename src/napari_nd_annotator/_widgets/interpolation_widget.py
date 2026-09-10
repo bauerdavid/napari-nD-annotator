@@ -31,7 +31,7 @@ from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
-from .resources import interpolate_style_path
+from .resources import interpolate_style_path, loading_icon_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization, \
     layer_get_order, layer_dims_displayed, layer_dims_order
 from ..mean_contour import settings
@@ -309,7 +309,7 @@ class InterpolationWidget(MagicTemplate):
 
         self.viewer.dims.events.current_step.connect(self._current_step_changed)
         self.viewer.dims.events.order.connect(self._dims_order_changed)
-        self.loading_icon = QSvgWidget("C:\\Users\\User\\Downloads\\loading.svg", self._viewer.window._qt_window)
+        self.loading_icon = QSvgWidget(loading_icon_path, self._viewer.window._qt_window)
         self.loading_icon.setStyleSheet("background: transparent;")
         self.loading_icon.setAutoFillBackground(False)
         palette = self.loading_icon.palette()
