@@ -29,7 +29,7 @@ def execute_script(script, other_locals=None):
 
 
 class ScriptWorker(QObject):
-    done = Signal("PyQt_PyObject")
+    done = Signal(object)
     script = None
     variables = None
     _output_variables = {}

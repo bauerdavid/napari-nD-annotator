@@ -151,7 +151,7 @@ class MoveLoadingIconEventFilter(QObject):
 
 
 class InterpolationWorker(QObject):
-    done = Signal("PyQt_PyObject")
+    done = Signal(object)
     progress = Signal(int)
     dimension: int
     n_contour_points: int

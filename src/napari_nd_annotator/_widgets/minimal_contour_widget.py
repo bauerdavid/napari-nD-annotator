@@ -372,7 +372,7 @@ class MinimalContourWidget(MagicTemplate):
         self._change_contour_width(self.contour_width)
 
     class DrawWorker(QObject):
-        done = Signal("PyQt_PyObject")
+        done = Signal(object)
         contour: np.ndarray
         mask_shape: tuple
 

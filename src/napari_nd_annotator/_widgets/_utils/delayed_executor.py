@@ -22,8 +22,8 @@ class DelayedQueue:
 
 
 class DelayedExecutor(QObject):
-    processing = Signal("PyQt_PyObject")
-    processed = Signal("PyQt_PyObject")
+    processing = Signal(object)
+    processed = Signal(object)
 
     def __init__(self, func, parent=None):
         super().__init__(parent)
