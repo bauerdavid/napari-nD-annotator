@@ -9,7 +9,6 @@ from skimage.filters import gaussian
 
 import napari
 from napari.layers.labels._labels_utils import get_dtype
-from napari.layers.labels.labels import _coerce_indices_for_vectorization
 from napari.layers.labels._labels_constants import Mode
 from napari.layers import Image, Labels
 from napari.utils.action_manager import action_manager
@@ -34,7 +33,7 @@ from ._utils import ScriptExecuteWidget, ProgressWidget
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from ._utils.callbacks import reduce_mask, extend_mask
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
-    layer_get_order
+    layer_get_order, _coerce_indices_for_vectorization
 from ..minimal_contour import FeatureManager
 from .._napari_version import NAPARI_VERSION
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
