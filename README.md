@@ -6,6 +6,7 @@
 [![tests](https://github.com/bauerdavid/napari-nD-annotator/workflows/tests/badge.svg)](https://github.com/bauerdavid/napari-nD-annotator/actions)
 [![codecov](https://codecov.io/gh/bauerdavid/napari-nD-annotator/branch/main/graph/badge.svg)](https://codecov.io/gh/bauerdavid/napari-nD-annotator)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-nD-annotator)](https://napari-hub.org/plugins/napari-nD-annotator)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/napari-nd-annotator?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/napari-nd-annotator)
 
 **A toolbox for annotating objects one by one in nD.**
 
