@@ -9,8 +9,6 @@ import numpy as np
 import cv2
 import scipy.ndimage
 import skimage.draw
-from PyQt5.QtCore import QEvent
-from PyQt5.QtGui import QCursor, QPalette
 from magicclass import magicclass, field, vfield, bind_key, MagicTemplate
 from magicgui._util import debounce
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
@@ -21,8 +19,13 @@ from napari.utils.action_manager import action_manager
 from napari.qt.threading import thread_worker
 
 from scipy.interpolate import interp1d
-from qtpy.QtCore import QThread, QObject, Signal, Qt
-from qtpy.QtSvg import QSvgWidget
+from qtpy.QtCore import QThread, QObject, Signal, Qt, QEvent
+from qtpy.QtGui import QCursor, QPalette
+try:
+    # QSvgWidget lives in QtSvgWidgets on Qt6, and in QtSvg on Qt5
+    from qtpy.QtSvgWidgets import QSvgWidget
+except ImportError:
+    from qtpy.QtSvg import QSvgWidget
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
