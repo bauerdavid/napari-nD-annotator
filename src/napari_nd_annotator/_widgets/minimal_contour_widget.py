@@ -19,7 +19,7 @@ from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
 from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton, QtModePushButton
 from napari._qt.qt_resources import get_current_stylesheet
 
-from qtpy.QtCore import Signal, QObject, QEvent, QThread, Qt
+from qtpy.QtCore import Signal, QObject, QEvent, QThread, Qt, QTimer
 from qtpy.QtWidgets import QLabel, QSizePolicy, QMessageBox, QComboBox, QDialog, QDialogButtonBox, QVBoxLayout
 from magicclass.serialize import serialize
 from magicclass import MagicTemplate, field, abstractapi, magicclass, vfield, set_design
@@ -42,29 +42,29 @@ from napari_nd_annotator._widgets.resources import mc_contour_style_path, interp
 def delay_function(function=None, delay=0.2):
 
     def decorator(fn):
-        from threading import Timer
-
         _store: dict = {"timer": None, "last_call": 0.0, "args": (), "kwargs": {}}
+
+        def call_it():
+            _store["last_call"] = time.time()
+            return fn(*_store["args"], **_store["kwargs"])
 
         @wraps(fn)
         def delayed(*args, **kwargs):
             _store["args"] = args
             _store["kwargs"] = kwargs
-            def call_it():
-                _store["timer"] = None
-                _store["last_call"] = time.time()
-                return fn(*_store["args"], **_store["kwargs"])
 
             now = time.time()
             if not _store["last_call"] or (now - _store["last_call"]) > delay:
-                ret = call_it()
-                return ret
-            else:
-                if _store["timer"] is not None:
-                    _store["timer"].cancel()
-                _store["timer"] = Timer(delay, call_it)
-                _store["timer"].start()
-            _store["last_call"] = time.time()
+                return call_it()
+            if _store["timer"] is None:
+                # QTimer fires on the GUI thread. A threading.Timer would run fn
+                # on a worker thread, where refreshing a layer leaves the canvas
+                # unrepainted until something else triggers a redraw.
+                timer = QTimer()
+                timer.setSingleShot(True)
+                timer.timeout.connect(call_it)
+                _store["timer"] = timer
+            _store["timer"].start(int(delay * 1000))
             return None
 
         return delayed
