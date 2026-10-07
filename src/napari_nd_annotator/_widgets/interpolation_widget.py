@@ -19,7 +19,7 @@ from napari.utils.action_manager import action_manager
 from napari.qt.threading import thread_worker
 
 from scipy.interpolate import interp1d
-from qtpy.QtCore import QThread, QObject, Signal, Qt, QEvent
+from qtpy.QtCore import QThread, QObject, Signal, Qt, QEvent, QTimer
 from qtpy.QtGui import QCursor, QPalette
 try:
     # QSvgWidget lives in QtSvgWidgets on Qt6, and in QtSvg on Qt5
@@ -286,6 +286,7 @@ class InterpolationWidget(MagicTemplate):
         self._active_labels_layer = None
         self._is_painting = False
         self._labels_update_tmp = None
+        self._recompute_pending = False
         self.workers = []
         self.workers_mutex = threading.Lock()
         self.overlay_worker = None
@@ -620,6 +621,15 @@ class InterpolationWidget(MagicTemplate):
             self._labels_update_tmp = None
             if layer.mode == "erase" or not self._annotator_widget.autofill_objects:
                 self._active_labels_layer.events.labels_update(data=data, offset=offset)
+            else:
+                # Autofill paints the final shape from its own mouse_drag
+                # callback, which may run either before or after this one. If it
+                # ran first its labels_update arrived while _is_painting was
+                # still set and was swallowed, so nothing would recompute.
+                # Retry once the drag has unwound, by which point the data is
+                # final whichever order the callbacks ran in.
+                self._recompute_pending = True
+                QTimer.singleShot(0, self._recompute_after_drag)
             cur_slice_data = layer.data[layer_slice_indices(layer)]
             if not np.any(cur_slice_data):
                 self._interpolate_all()
@@ -628,7 +638,16 @@ class InterpolationWidget(MagicTemplate):
         if self._is_painting:
             self._labels_update_tmp = (event.data, event.offset)
             return
+        self._recompute_pending = False
         self._execute_interpolation(layer_slice_indices(self._active_labels_layer)[self.dimension])
+
+    def _recompute_after_drag(self):
+        if not self._recompute_pending:
+            return
+        self._recompute_pending = False
+        if self.active_labels_layer is None or self.dimension is None:
+            return
+        self._execute_interpolation(layer_slice_indices(self.active_labels_layer)[self.dimension])
 
     def _on_set_data(self, event):
         ...
