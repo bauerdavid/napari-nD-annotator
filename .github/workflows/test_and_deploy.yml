@@ -155,8 +155,8 @@ jobs:
           name: sdist
           path: dist
 
-      - uses: pypa/gh-action-pypi-publish@v1.5.0
+      - uses: pypa/gh-action-pypi-publish@v1.13.0
         with:
           password: ${{ secrets.TWINE_API_KEY }}
-          skip_existing: true
-          # To test: repository_url: https://test.pypi.org/legacy/
+          skip-existing: true
+          # To test: repository-url: https://test.pypi.org/legacy/
