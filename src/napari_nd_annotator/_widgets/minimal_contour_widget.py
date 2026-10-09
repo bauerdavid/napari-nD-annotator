@@ -895,11 +895,8 @@ class MinimalContourWidget(MagicTemplate):
             labels_control.button_grid.addWidget(labels_control.mc_button, 1, 0)
 
             def switch_to_mc_mode(*_, **__):
-                mc_btn.blockSignals(True)
-                mc_btn.setChecked(True)
-                mc_btn.blockSignals(False)
+                self._labels_layer.mode = Mode.PAN_ZOOM
                 self._enable_mc_mode()
-                # btn.setChecked(True)
             self._labels_layer.bind_key("0", switch_to_mc_mode)
         self.labels_layer._overlays["minimal_contour"].contour_smoothness = self.contour_smoothness if self.is_contour_smoothing_enabled else 1.
         self._on_image_changed()
@@ -950,8 +947,30 @@ class MinimalContourWidget(MagicTemplate):
         action_manager.register_action("napari-nD-annotator:activate_labels_mc_mode", self._enable_mc_mode,
                                        "We're switching to MC mode", None)
 
+    def _check_mc_button(self):
+        """Tick the minimal contour button, taking the check back from pan/zoom.
+
+        The button has no mode of its own, so it borrows PAN_ZOOM. Clicking it
+        while another tool is active is a real mode transition, and napari
+        answers the mode event by ticking its own pan/zoom button, which steals
+        our check because the two share an exclusive button group. The clicked
+        signal that brings us here fires after that cascade has unwound, so it
+        is late enough to claim the check back.
+        """
+        if self.viewer is None or self.labels_layer is None:
+            return
+        controls = self.viewer.window.qt_viewer.controls.widgets.get(self.labels_layer)
+        mc_button = getattr(controls, "mc_button", None)
+        if mc_button is None or mc_button.isChecked():
+            return
+        # Blocked so _set_mode doesn't run again; the group still unchecks pan/zoom.
+        mc_button.blockSignals(True)
+        mc_button.setChecked(True)
+        mc_button.blockSignals(False)
+
     def _enable_mc_mode(self, *args, **kwargs):
         if self.labels_layer is not None:
+            self._check_mc_button()
             self.labels_layer._overlays["minimal_contour"].enabled = True
 
     def _disable_mc_mode(self, state):
