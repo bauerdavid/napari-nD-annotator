@@ -33,7 +33,7 @@ from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
 from .resources import interpolate_style_path, loading_icon_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization, \
-    layer_get_order, layer_dims_displayed, layer_dims_order
+    layer_get_order, layer_dims_displayed, layer_dims_order, viewer_qt_viewer
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
@@ -547,7 +547,7 @@ class InterpolationWidget(MagicTemplate):
             interpolation_overlay = InterpolationOverlay()
             self._active_labels_layer._overlays.update({"interpolation": interpolation_overlay})
             self._active_labels_layer._overlays["interpolation"].visible = True
-            labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._active_labels_layer]
+            labels_control: QtLabelsControls = viewer_qt_viewer(self.viewer).controls.widgets[self._active_labels_layer]
             if labels_control.button_grid.itemAtPosition(1, 1) is not None:
                 return
             interpolate_button = QtModePushButton(

@@ -42,7 +42,7 @@ from napari.layers._source import layer_source
 
 from ._utils import WidgetWithLayerList, ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
-from .._helper_functions import layer_dims_displayed
+from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 from .._napari_version import NAPARI_VERSION
@@ -247,15 +247,15 @@ class EstimationWorker(QObject):
         self.slice_image_layer = self.viewer.add_image(image_slice)
         self.slice_labels_layer = self.viewer.add_labels(np.zeros_like(image_slice, dtype=int))
         self.prev_ndisplay = self.viewer.dims.ndisplay
-        self.prev_camera_center = self.viewer.camera.center
-        self.prev_camera_zoom = self.viewer.camera.zoom
-        self.prev_camera_angles = self.viewer.camera.angles
+        self.prev_camera_center = viewer_camera(self.viewer).center
+        self.prev_camera_zoom = viewer_camera(self.viewer).zoom
+        self.prev_camera_angles = viewer_camera(self.viewer).angles
         self.viewer.dims.ndisplay = 2
         visible_extent = self.slice_labels_layer.extent.world[:, layer_dims_displayed(self.slice_labels_layer)]
-        self.viewer.camera.center = visible_extent.mean(0)
+        viewer_camera(self.viewer).center = visible_extent.mean(0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer.camera.zoom = np.min(np.divide(self.viewer._canvas_size, visible_extent.max(0)-visible_extent.min(0)))*0.95
+            viewer_camera(self.viewer).zoom = np.min(np.divide(viewer_canvas_size(self.viewer), visible_extent.max(0)-visible_extent.min(0)))*0.95
         self.slice_labels_layer.brush_size = 1
         self.slice_labels_layer.mode = "paint"
         self.minimal_surface_widget.call_button.enabled = True
@@ -273,11 +273,11 @@ class EstimationWorker(QObject):
         if self.prev_ndisplay is not None:
             self.viewer.dims.ndisplay = self.prev_ndisplay
         if self.prev_ndisplay is not None:
-            self.viewer.camera.center = self.prev_camera_center
+            viewer_camera(self.viewer).center = self.prev_camera_center
         if self.prev_camera_zoom is not None:
-            self.viewer.camera.zoom = self.prev_camera_zoom
+            viewer_camera(self.viewer).zoom = self.prev_camera_zoom
         if self.prev_camera_angles is not None:
-            self.viewer.camera.angles = self.prev_camera_angles
+            viewer_camera(self.viewer).angles = self.prev_camera_angles
         self.slice_labels_layer = None
         self.slice_image_layer = None
 

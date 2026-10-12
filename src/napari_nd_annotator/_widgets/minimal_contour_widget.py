@@ -33,7 +33,7 @@ from ._utils import ScriptExecuteWidget, ProgressWidget
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from ._utils.callbacks import reduce_mask, extend_mask
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
-    layer_get_order, _coerce_indices_for_vectorization
+    layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer
 from ..minimal_contour import FeatureManager
 from .._napari_version import NAPARI_VERSION
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
@@ -665,9 +665,7 @@ class MinimalContourWidget(MagicTemplate):
                 self._prev_img_layer.data = self._orig_image
             self._orig_image = image_layer.data.copy() if image_layer is not None else None
         self._prev_img_layer = image_layer
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            qt_viewer = self.viewer.window.qt_viewer
+        qt_viewer = viewer_qt_viewer(self.viewer)
         if image_layer in qt_viewer.controls.widgets:
             controls = qt_viewer.controls.widgets[image_layer]
             for child in controls.children():
@@ -770,9 +768,7 @@ class MinimalContourWidget(MagicTemplate):
         bg_color = (255*bg_color).astype(int)
         color = (np.zeros(3) if v > 0.7 else np.ones(3)*255).astype(int)
         self.selected_id_label.setStyleSheet("background-color: rgb(%d,%d,%d); color: rgb(%d,%d,%d)" % (tuple(bg_color[:-1]) + tuple(color)))
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer.window.qt_viewer.canvas.native.setFocus()
+        viewer_qt_viewer(self.viewer).canvas.native.setFocus()
 
     def _hide_widgets(self):
         self.ImageFeaturesWidget.visible = False
@@ -879,7 +875,7 @@ class MinimalContourWidget(MagicTemplate):
             self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
             self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
             self._labels_layer._overlays["minimal_contour"].visible=True
-            labels_control: QtLabelsControls = self.viewer.window.qt_viewer.controls.widgets[self._labels_layer]
+            labels_control: QtLabelsControls = viewer_qt_viewer(self.viewer).controls.widgets[self._labels_layer]
             mc_btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
             action_manager.bind_button(
                 'napari-nD-annotator:activate_labels_mc_mode',
@@ -929,10 +925,8 @@ class MinimalContourWidget(MagicTemplate):
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")
         self.viewer.dims.events.order.connect(self._set_image, position="last")
         self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer.window.qt_viewer.window().installEventFilter(self.event_filter)
-            self.viewer.window.qt_viewer.window().setMouseTracking(True)
+        viewer_qt_viewer(self.viewer).window().installEventFilter(self.event_filter)
+        viewer_qt_viewer(self.viewer).window().setMouseTracking(True)
 
     def _initialize(self, viewer: napari.Viewer):
         self._viewer = viewer
@@ -959,7 +953,7 @@ class MinimalContourWidget(MagicTemplate):
         """
         if self.viewer is None or self.labels_layer is None:
             return
-        controls = self.viewer.window.qt_viewer.controls.widgets.get(self.labels_layer)
+        controls = viewer_qt_viewer(self.viewer).controls.widgets.get(self.labels_layer)
         mc_button = getattr(controls, "mc_button", None)
         if mc_button is None or mc_button.isChecked():
             return

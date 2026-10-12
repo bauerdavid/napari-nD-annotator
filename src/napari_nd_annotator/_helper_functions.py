@@ -103,3 +103,40 @@ else:
             return (*order, max(order) + 1)
 
         return order
+
+
+def viewer_canvas_size(viewer):
+    """Size of the canvas in pixels, as (height, width).
+
+    napari 0.9 removed the private ``Viewer._canvas_size`` in favour of the
+    public ``viewer.canvas.size``, which has the same (height, width) order.
+    """
+    canvas = getattr(viewer, "canvas", None)
+    if canvas is not None and hasattr(canvas, "size"):
+        return canvas.size
+    return viewer._canvas_size
+
+
+def viewer_camera(viewer):
+    """The camera model of the viewer.
+
+    napari 0.9 deprecated ``viewer.camera`` in favour of ``viewer.scene.camera``;
+    older versions have no ``viewer.scene``.
+    """
+    scene = getattr(viewer, "scene", None)
+    if scene is not None and hasattr(scene, "camera"):
+        return scene.camera
+    return viewer.camera
+
+
+def viewer_qt_viewer(viewer):
+    """The ``QtViewer`` of the viewer's window.
+
+    napari deprecated the public ``Window.qt_viewer`` (to be removed in 0.10 at the
+    earliest) but kept it as the private ``Window._qt_viewer``, which older versions
+    don't have.
+    """
+    window = viewer.window
+    if hasattr(window, "_qt_viewer"):
+        return window._qt_viewer
+    return window.qt_viewer
