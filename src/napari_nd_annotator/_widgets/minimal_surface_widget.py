@@ -819,7 +819,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             if answer == QMessageBox.StandardButton.Yes:
                 new_labels = self._viewer.add_labels(
                     np.zeros(self.image_layer.data.shape[:self.image_layer.ndim], dtype=np.uint16))
-                self.labels.layer = new_labels
+                self.labels_layer = new_labels
             else:
                 return
         image = self.image_layer
