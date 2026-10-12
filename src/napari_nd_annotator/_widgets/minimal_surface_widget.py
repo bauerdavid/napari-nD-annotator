@@ -456,8 +456,8 @@ class EstimationWorker(QObject):
                 bb_slice = bb_2_slice(bounding_box)
                 point1 = (self.points[2 * i] - offset).reshape(-1)
                 point2 = (self.points[2 * i + 1] - offset).reshape(-1)
-                point1[2] *= self.z_scale
-                point2[2] *= self.z_scale
+                point1[0] *= self.z_scale
+                point2[0] *= self.z_scale
                 self.pt_pairs.append((point1, point2))
                 data = self.image[bb_slice]
                 data = zoom(data, (self.z_scale, 1, 1))
