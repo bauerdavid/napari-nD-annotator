@@ -80,7 +80,8 @@ CYTHONIZE = cythonize is not None
 
 if CYTHONIZE:
     compiler_directives = {"language_level": 3, "embedsignature": True}
-    extensions = cythonize(extensions, compiler_directives=compiler_directives)
+    # force=True: never reuse a stale pre-generated .cpp (e.g. one shipped in an sdist, generated against a different numpy)
+    extensions = cythonize(extensions, compiler_directives=compiler_directives, force=True)
 else:
     extensions = no_cythonize(extensions)
 
