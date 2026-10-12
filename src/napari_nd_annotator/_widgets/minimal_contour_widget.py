@@ -13,7 +13,6 @@ from napari.layers.labels._labels_constants import Mode
 from napari.layers import Image, Labels
 from napari.utils.action_manager import action_manager
 from napari.utils._dtype import get_dtype_limits
-from napari.utils.events import Event
 from superqt.sliders import QDoubleRangeSlider
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
 from napari._qt.widgets.qt_mode_buttons import QtModeRadioButton, QtModePushButton
@@ -629,25 +628,6 @@ class MinimalContourWidget(MagicTemplate):
             diff = delta[0]
             diff *= min(max(1, labels_layer.brush_size//10), 5)
             labels_layer.brush_size = max(1, labels_layer.brush_size + diff)
-
-    def _on_right_click(self, layer, event: Event):
-        # TODO remove
-        return
-        if event.button != 2 or layer.mode != Mode.ADD:
-            return
-        self.remove_last_anchor = True
-        if self.last_segment_length is None:
-            return
-        with self.anchor_points.events.data.blocker():
-            if self.last_added_with_shift:
-                self.anchor_points.data = self.anchor_points.data[1:]
-                self.output.data = self.output.data[self.last_segment_length:]
-            else:
-                self.anchor_points.data = self.anchor_points.data[:-1]
-                self.output.data = self.output.data[:-self.last_segment_length]
-        self.point_triangle[-1] = self.anchor_points.data[0][list(layer_dims_displayed(self.anchor_points))]
-        self.point_triangle[0] = self.anchor_points.data[-1][list(layer_dims_displayed(self.anchor_points))]
-        self.last_segment_length = None
 
     def _blur_image(self, img):
         return gaussian(
