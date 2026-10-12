@@ -35,6 +35,7 @@ from qtpy.QtWidgets import (
 
 import napari
 from napari.layers import Image, Labels, Points, Shapes, Layer
+from napari.layers.labels._labels_constants import Mode
 from napari.utils.colormaps.standardize_color import transform_color
 from napari.utils.notifications import show_info
 from napari.layers._source import layer_source
@@ -301,10 +302,11 @@ class EstimationWorker(QObject):
         self.threshold_annotation_dialog.hide()
 
     def minimal_contour_annotation(self):
-        self.viewer.layers.selection.select_only(self.minimal_contour_widget.anchor_points)
-        self.minimal_contour_widget.image_layer = self.slice_image_layer
-        self.minimal_contour_widget.labels_layer = self.slice_labels_layer
-        self.minimal_contour_widget.anchor_points.mode = "add"
+        # the widget follows the active labels layer; its source image (the slice image) was recorded when it was added
+        self.viewer.layers.selection.select_only(self.slice_labels_layer)
+        # the minimal contour tool borrows the pan/zoom mode, like the button and the "0" shortcut do
+        self.slice_labels_layer.mode = Mode.PAN_ZOOM
+        self.minimal_contour_widget._enable_mc_mode()
         self.manual_annotation_dialog.show()
 
     def finish_minimal_contour_annotation(self):
