@@ -4,7 +4,6 @@ import warnings
 import cv2
 import napari
 import numpy as np
-from packaging import version
 
 from qtpy.QtCore import QEvent, Qt, QObject
 from qtpy.QtGui import QImage, QPixmap, QHideEvent, QShowEvent
@@ -17,14 +16,10 @@ from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
 from .projections import SliceDisplayWidget
-from .._napari_version import NAPARI_VERSION
 
-if NAPARI_VERSION >= version.parse("0.4.15"):
-    try:
-        from napari_bbox import BoundingBoxLayer
-    except ImportError:
-        BoundingBoxLayer = None
-else:
+try:
+    from napari_bbox import BoundingBoxLayer
+except ImportError:
     BoundingBoxLayer = None
 
 import itertools
@@ -455,8 +450,6 @@ if BoundingBoxLayer:
             if len(layer.data)>len(previous_data):
                 self.bounding_box_layer.features["label"].iat[-1] = self.next_index()
                 text = dict(layer.text)
-                if NAPARI_VERSION == "0.4.15":
-                    del text["values"]
                 text["text"] = "{label:d}"
                 layer.text = text
                 layer.refresh_text()

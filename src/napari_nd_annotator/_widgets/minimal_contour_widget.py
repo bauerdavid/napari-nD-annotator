@@ -35,7 +35,6 @@ from ._utils.callbacks import reduce_mask, extend_mask
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
     layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer
 from ..minimal_contour import FeatureManager
-from .._napari_version import NAPARI_VERSION
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -692,10 +691,7 @@ class MinimalContourWidget(MagicTemplate):
         self._apply_blurring()
         if not image_layer.visible:
             image_layer.set_view_slice()
-        if NAPARI_VERSION < "0.5.0":
-            image_layer._slice_dims(self.viewer.dims.point, self.viewer.dims.ndisplay, self.viewer.dims.order)
-        else:
-            image_layer._slice_dims(self.viewer.dims)
+        image_layer._slice_dims(self.viewer.dims)
         self.autoincrease_label_id = (image_layer.ndim == 2)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

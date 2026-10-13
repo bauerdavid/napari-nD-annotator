@@ -4,7 +4,6 @@ from magicgui.widgets import PushButton
 from time import sleep
 from copy import deepcopy
 from collections.abc import Iterable
-from packaging import version
 from threading import Thread
 import numpy as np
 import itertools
@@ -46,7 +45,6 @@ from ._utils.callbacks import keep_layer_on_top
 from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
-from .._napari_version import NAPARI_VERSION
 
 
 try:
@@ -972,14 +970,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
                     state["name"] = u"\U0001F47B " + layer.name
                     state["opacity"] /= 2.
                     state["experimental_clipping_planes"] = []
-                    if NAPARI_VERSION <= version.parse("0.4.16") and "interpolation" in state:
-                        interpolation = state["interpolation"]
-                        state["interpolation"] = "nearest"
                     with layer_source(parent=layer):
                         new = Layer.create(deepcopy(data), state, type_str)
                     self.viewer.add_layer(new)
-                    if NAPARI_VERSION <= version.parse("0.4.16") and "interpolation" in state:
-                        new.interpolation = interpolation
                     self.viewer.layers.link_layers([layer, new])
                     self.viewer.layers.unlink_layers([layer, new],
                                                       ["opacity", "experimental_clipping_planes", "blending"])
