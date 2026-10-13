@@ -74,6 +74,11 @@ jobs:
           if [ "$NAPARI" = "latest" ]; then NAPARI_SPEC="napari"; else NAPARI_SPEC="napari==$NAPARI"; echo "$NAPARI_SPEC" >> constraints.txt; fi
           python -m pip install -c constraints.txt "$NAPARI_SPEC" ${{ matrix.qt }} pytest
           python -m pip install -c constraints.txt .
+          # opencv-python bundles its own Qt platform plugins, which replace PyQt5's and abort the process
+          # at the first QApplication; the headless build of the same version has none
+          OPENCV_VERSION=$(python -c "import importlib.metadata as m; print(m.version('opencv-python'))")
+          python -m pip uninstall -y opencv-python
+          python -m pip install -c constraints.txt "opencv-python-headless==$OPENCV_VERSION"
           python -m pip list | grep -i -E "napari|numpy|pydantic|qt|vispy|magic"
 
       - name: Run the compatibility tests

@@ -105,7 +105,9 @@ def test_labels_layer_gets_overlays_and_controls(viewer, annotator):
 def test_slice_annotation_fits_and_restores_camera(viewer, annotator):
     from napari_nd_annotator._widgets.minimal_surface_widget import EstimationWorker
     tools = annotator.ToolsWidget
-    worker = EstimationWorker(viewer, tools.minimal_contour_widget, tools.minimal_surface_widget)
+    # without the minimal-surface package the Minimal Surface widget is None; the worker only needs its call button
+    surface_widget = tools.minimal_surface_widget or SimpleNamespace(call_button=SimpleNamespace(enabled=False))
+    worker = EstimationWorker(viewer, tools.minimal_contour_widget, surface_widget)
     worker.init_slice_annotation_fun = lambda: None
     worker.finish_slice_annotation_fun = lambda: None
     viewer.add_image(np.zeros((5, 20, 20)), name="image")
