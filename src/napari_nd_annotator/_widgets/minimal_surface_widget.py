@@ -498,7 +498,8 @@ class EstimationWorker(QObject):
                 obj_pixel = np.argwhere(output == output.max())[0]
                 obj_label = labelled[tuple(obj_pixel)]
                 mask = (labelled == obj_label)
-                mask = zoom(mask, (1/self.z_scale, 1, 1), order=0)
+                orig_z = bounding_box[:, 0].max() - bounding_box[:, 0].min()
+                mask = zoom(mask, (orig_z / mask.shape[0], 1, 1), order=0)
                 # self.image_data_received.emit("Result", output, {"colormap": "plasma", "translate": offset})
                 self.mask_data_received.emit(mask, offset)
                 postscript = " - %d" % (i + 1)
