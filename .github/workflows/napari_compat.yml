@@ -34,14 +34,12 @@ jobs:
           - napari: "0.4.18"
             python: "3.10"
             qt: PyQt5
-            constraints: "numpy<2
-pydantic<2"
+            constraints: "numpy<2\npydantic<2"
             experimental: true
           - napari: "0.4.19"
             python: "3.10"
             qt: PyQt5
-            constraints: "numpy<2
-pydantic<2"
+            constraints: "numpy<2\npydantic<2"
             experimental: true
           - napari: "0.5.6"
             python: "3.11"
