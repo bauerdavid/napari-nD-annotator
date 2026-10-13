@@ -4,7 +4,6 @@ from magicgui.widgets import PushButton
 from time import sleep
 from copy import deepcopy
 from collections.abc import Iterable
-from packaging import version
 import numpy as np
 import itertools
 import colorsys
@@ -32,6 +31,7 @@ from qtpy.QtWidgets import (
 
 import napari
 from napari.layers import Image, Labels, Points, Shapes, Layer
+from napari.layers.labels._labels_constants import Mode
 from napari.utils.colormaps.standardize_color import transform_color
 from napari.utils.notifications import show_info
 from napari.layers._source import layer_source
@@ -39,10 +39,9 @@ from napari.layers._source import layer_source
 
 from ._utils import ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
-from .._helper_functions import layer_dims_displayed, viewer_canvas_size
+from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
-from .._napari_version import NAPARI_VERSION
 
 
 try:
@@ -245,15 +244,15 @@ class EstimationWorker(QObject):
         self.slice_image_layer = self.viewer.add_image(image_slice)
         self.slice_labels_layer = self.viewer.add_labels(np.zeros_like(image_slice, dtype=int))
         self.prev_ndisplay = self.viewer.dims.ndisplay
-        self.prev_camera_center = self.viewer.camera.center
-        self.prev_camera_zoom = self.viewer.camera.zoom
-        self.prev_camera_angles = self.viewer.camera.angles
+        self.prev_camera_center = viewer_camera(self.viewer).center
+        self.prev_camera_zoom = viewer_camera(self.viewer).zoom
+        self.prev_camera_angles = viewer_camera(self.viewer).angles
         self.viewer.dims.ndisplay = 2
         visible_extent = self.slice_labels_layer.extent.world[:, layer_dims_displayed(self.slice_labels_layer)]
-        self.viewer.camera.center = visible_extent.mean(0)
+        viewer_camera(self.viewer).center = visible_extent.mean(0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer.camera.zoom = np.min(np.divide(viewer_canvas_size(self.viewer), visible_extent.max(0)-visible_extent.min(0)))*0.95
+            viewer_camera(self.viewer).zoom = np.min(np.divide(viewer_canvas_size(self.viewer), visible_extent.max(0)-visible_extent.min(0)))*0.95
         self.slice_labels_layer.brush_size = 1
         self.slice_labels_layer.mode = "paint"
         self.minimal_surface_widget.call_button.enabled = True
@@ -271,11 +270,11 @@ class EstimationWorker(QObject):
         if self.prev_ndisplay is not None:
             self.viewer.dims.ndisplay = self.prev_ndisplay
         if self.prev_ndisplay is not None:
-            self.viewer.camera.center = self.prev_camera_center
+            viewer_camera(self.viewer).center = self.prev_camera_center
         if self.prev_camera_zoom is not None:
-            self.viewer.camera.zoom = self.prev_camera_zoom
+            viewer_camera(self.viewer).zoom = self.prev_camera_zoom
         if self.prev_camera_angles is not None:
-            self.viewer.camera.angles = self.prev_camera_angles
+            viewer_camera(self.viewer).angles = self.prev_camera_angles
         self.slice_labels_layer = None
         self.slice_image_layer = None
 
@@ -299,10 +298,11 @@ class EstimationWorker(QObject):
         self.threshold_annotation_dialog.hide()
 
     def minimal_contour_annotation(self):
-        self.viewer.layers.selection.select_only(self.minimal_contour_widget.anchor_points)
-        self.minimal_contour_widget.image_layer = self.slice_image_layer
-        self.minimal_contour_widget.labels_layer = self.slice_labels_layer
-        self.minimal_contour_widget.anchor_points.mode = "add"
+        # the widget follows the active labels layer; its source image (the slice image) was recorded when it was added
+        self.viewer.layers.selection.select_only(self.slice_labels_layer)
+        # the minimal contour tool borrows the pan/zoom mode, like the button and the "0" shortcut do
+        self.slice_labels_layer.mode = Mode.PAN_ZOOM
+        self.minimal_contour_widget._enable_mc_mode()
         self.manual_annotation_dialog.show()
 
     def finish_minimal_contour_annotation(self):
@@ -971,14 +971,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
                     state["name"] = u"\U0001F47B " + layer.name
                     state["opacity"] /= 2.
                     state["experimental_clipping_planes"] = []
-                    if NAPARI_VERSION <= version.parse("0.4.16") and "interpolation" in state:
-                        interpolation = state["interpolation"]
-                        state["interpolation"] = "nearest"
                     with layer_source(parent=layer):
                         new = Layer.create(deepcopy(data), state, type_str)
                     self.viewer.add_layer(new)
-                    if NAPARI_VERSION <= version.parse("0.4.16") and "interpolation" in state:
-                        new.interpolation = interpolation
                     self.viewer.layers.link_layers([layer, new])
                     self.viewer.layers.unlink_layers([layer, new],
                                                       ["opacity", "experimental_clipping_planes", "blending"])

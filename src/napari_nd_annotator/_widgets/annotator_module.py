@@ -17,18 +17,12 @@ import numpy as np
 from skimage.draw import draw
 from scipy.ndimage import binary_fill_holes, find_objects
 import math
-from packaging import version
 import warnings
 from dataclasses import field as dfield
 
-from .._napari_version import NAPARI_VERSION
-
-if NAPARI_VERSION >= version.parse("0.4.15"):
-    try:
-        from napari_bbox import BoundingBoxLayer
-    except ImportError:
-        BoundingBoxLayer = None
-else:
+try:
+    from napari_bbox import BoundingBoxLayer
+except ImportError:
     BoundingBoxLayer = None
 
 from .interpolation_widget import InterpolationWidget

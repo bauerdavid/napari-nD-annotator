@@ -41,6 +41,13 @@ You can install `napari-nD-annotator` via [pip]:
 The plugin is also available in [napari-hub], to install it directly from napari, please refer to
 [plugin installation instructions] at the official [napari] website.
 
+### napari compatibility
+The plugin requires `napari>=0.5.0` (it draws with napari's overlay API and builds on the 0.5 layer controls); version-specific
+code paths handle the differences between napari releases.
+It was last checked against napari 0.5.0, 0.5.6 and 0.9.2 (and the Minimal Surface widget end to end against 0.9.2). napari's internal (underscore) API is used in a few
+places, so a new napari release can break the plugin before the package metadata is updated - please [file an issue] if it does.
+A GitHub workflow (`napari_compat`) runs smoke tests against several napari versions, including the newest one, every week.
+
 
 ### Optional packages
 There are some functionalities which require additional Python packages.
