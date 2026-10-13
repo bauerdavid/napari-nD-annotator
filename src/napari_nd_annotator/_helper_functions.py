@@ -1,10 +1,8 @@
 import napari
 import numpy as np
 from napari import layers
-from packaging import version
+from napari.utils.misc import reorder_after_dim_reduction
 import warnings
-
-from ._napari_version import NAPARI_VERSION
 
 try:
     from napari.layers.labels.labels import _coerce_indices_for_vectorization
@@ -39,70 +37,43 @@ except ImportError:
         return tuple(indices)
 
 
-if NAPARI_VERSION < "0.4.18":
-    def layer_dims_displayed(layer: layers.Layer):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return layer._dims_displayed
-
-    def layer_dims_not_displayed(layer: layers.Layer):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return layer._dims_not_displayed
-
-    def layer_ndisplay(layer: layers.Layer):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return layer._ndisplay
-
-    def layer_dims_order(layer: layers.Layer):
-        return layer._dims_order
-
-else:
-    def layer_dims_displayed(layer: layers.Layer):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return layer._slice_input.displayed
-
-    def layer_dims_not_displayed(layer: layers.Layer):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return layer._slice_input.not_displayed
-
-    def layer_ndisplay(layer: layers.Layer):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return layer._slice_input.ndisplay
-
-    def layer_dims_order(layer: layers.Layer):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return layer._slice_input.order
+def layer_dims_displayed(layer: layers.Layer):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return layer._slice_input.displayed
 
 
-if NAPARI_VERSION < "0.5.0":
-    def layer_slice_indices(layer: layers.Layer):
-        return layer._slice_indices
-
-    def layer_get_order(layer: layers.Layer):
-        return layer._get_order()
-else:
-    from napari.utils.misc import reorder_after_dim_reduction
+def layer_dims_not_displayed(layer: layers.Layer):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return layer._slice_input.not_displayed
 
 
-    def layer_slice_indices(layer: layers.Layer):
-        return tuple(slice(None) if np.isnan(p) else int(p) for p in layer._data_slice.point)
+def layer_ndisplay(layer: layers.Layer):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return layer._slice_input.ndisplay
 
 
-    def layer_get_order(layer: layers.Layer):
-        order = reorder_after_dim_reduction(layer._slice_input.displayed)
-        if len(layer.data.shape) != layer.ndim:
-            # if rgb need to keep the final axis fixed during the
-            # transpose. The index of the final axis depends on how many
-            # axes are displayed.
-            return (*order, max(order) + 1)
+def layer_dims_order(layer: layers.Layer):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return layer._slice_input.order
 
-        return order
+
+def layer_slice_indices(layer: layers.Layer):
+    return tuple(slice(None) if np.isnan(p) else int(p) for p in layer._data_slice.point)
+
+
+def layer_get_order(layer: layers.Layer):
+    order = reorder_after_dim_reduction(layer._slice_input.displayed)
+    if len(layer.data.shape) != layer.ndim:
+        # if rgb need to keep the final axis fixed during the
+        # transpose. The index of the final axis depends on how many
+        # axes are displayed.
+        return (*order, max(order) + 1)
+
+    return order
 
 
 def viewer_canvas_size(viewer):
@@ -115,3 +86,28 @@ def viewer_canvas_size(viewer):
     if canvas is not None and hasattr(canvas, "size"):
         return canvas.size
     return viewer._canvas_size
+
+
+def viewer_camera(viewer):
+    """The camera model of the viewer.
+
+    napari 0.9 deprecated ``viewer.camera`` in favour of ``viewer.scene.camera``;
+    older versions have no ``viewer.scene``.
+    """
+    scene = getattr(viewer, "scene", None)
+    if scene is not None and hasattr(scene, "camera"):
+        return scene.camera
+    return viewer.camera
+
+
+def viewer_qt_viewer(viewer):
+    """The ``QtViewer`` of the viewer's window.
+
+    napari deprecated the public ``Window.qt_viewer`` (to be removed in 0.10 at the
+    earliest) but kept it as the private ``Window._qt_viewer``, which older versions
+    don't have.
+    """
+    window = viewer.window
+    if hasattr(window, "_qt_viewer"):
+        return window._qt_viewer
+    return window.qt_viewer
