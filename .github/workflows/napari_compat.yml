@@ -81,6 +81,13 @@ jobs:
           python -m pip install -c constraints.txt "opencv-python-headless==$OPENCV_VERSION"
           python -m pip list | grep -i -E "napari|numpy|pydantic|qt|vispy|magic"
 
+      - name: Check that the plugin imports
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          # shows the real error when the plugin cannot be imported (pytest only reports "module not found")
+          xvfb-run -a -s "-screen 0 1280x1024x24" python -c "import napari_nd_annotator as p; print('imported', p.__file__)"
+
       - name: Run the compatibility tests
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
