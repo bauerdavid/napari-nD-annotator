@@ -29,12 +29,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the oldest napari that setup.cfg allows; the overlay code probably needs a newer one,
-          # in which case this entry shows where the real lower bound is
-          - napari: "0.4.11"
-            python: "3.9"
+          # the oldest napari releases to try; the overlay API the plugin draws with
+          # (napari/_vispy/overlays) arrived around 0.4.18, which is why 0.4.11 cannot work
+          - napari: "0.4.18"
+            python: "3.10"
             qt: PyQt5
-            constraints: "numpy<2\npydantic<2"
+            constraints: "numpy<2
+pydantic<2"
+            experimental: true
+          - napari: "0.4.19"
+            python: "3.10"
+            qt: PyQt5
+            constraints: "numpy<2
+pydantic<2"
             experimental: true
           - napari: "0.5.6"
             python: "3.11"
