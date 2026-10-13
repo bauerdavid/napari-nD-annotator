@@ -160,7 +160,7 @@ class ColorPairsCallback:
 class EstimationWorker(QObject):
     image_data_received = Signal(str, object, object)
     mask_data_received = Signal(object, object)
-    distance_map_received = Signal(str, object, object)
+    distance_map_received = Signal(str, int, object, object)
     contour_points_received = Signal(str, object, object)
     remove_layer = Signal(str)
     layer_invalidated = Signal(str)
@@ -408,6 +408,23 @@ class EstimationWorker(QObject):
         # estimator.hook_stage_finished_event(minimal_surface.TRANSPORT_FUNCTION_STAGE,
         #                                     lambda: self.data_finalizer("Transport Function%s" % postscript)())
 
+        anchor_maps = {}
+
+        def anchor_map_initialized(distance_map, anchor_idx):
+            anchor_maps[anchor_idx] = distance_map
+
+        def anchor_maps_finished():
+            # the arrays are views of the estimator's memory, which is reused afterwards
+            for anchor_idx, distance_map in anchor_maps.items():
+                self.distance_map_received.emit(
+                    "Distance map - %d (anchor %d)" % (idx + 1, anchor_idx + 1),
+                    anchor_idx,
+                    distance_map.copy(),
+                    {"translate": self.bboxes[idx].min(0), "scale": (1 / self.z_scale, 1., 1.)})
+
+        estimator.hook_stage_data_init_event(minimal_surface.AREA_EIKONAL_STAGE, anchor_map_initialized)
+        estimator.hook_stage_finished_event(minimal_surface.AREA_EIKONAL_STAGE, anchor_maps_finished)
+
         def tform_calculated(rotation, translation):
             self.rotation_matrix = np.flip(rotation.copy()).reshape(3, 3)
             self.translation_matrix = np.flip(translation.copy())
@@ -497,8 +514,6 @@ class EstimationWorker(QObject):
                 mask = zoom(mask, (orig_z / mask.shape[0], 1, 1), order=0)
                 # self.image_data_received.emit("Result", output, {"colormap": "plasma", "translate": offset})
                 self.mask_data_received.emit(mask, offset)
-                self.distance_map_received.emit("Distance map - %d" % (i + 1), estimator.get_distance_map(),
-                                                {"translate": offset, "scale": (1 / self.z_scale, 1., 1.)})
                 postscript = " - %d" % (i + 1)
                 # self.remove_layer.emit("Transport Function")
                 self.object_annotated.emit(i)
@@ -1066,7 +1081,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
     z_scale = vfield(float, location=ImageFeaturesWidget).with_options(min=0.01, max=20., value=1.)
     use_correction = vfield(bool, location=ImageFeaturesWidget)
 
-    distance_map_combobox = field(Image, label="Distance map", location=ShortestPathsWidget)
+    distance_map_combobox = field(Image, label="Distance map (anchor 1)", location=ShortestPathsWidget)
+    second_distance_map_combobox = field(Image, label="Distance map (anchor 2)", location=ShortestPathsWidget)
     start_points_combobox = field(Points, label="Start points", location=ShortestPathsWidget)
 
     blur_image_checkbox = field(bool, label="Blur image", location=BlurringWidget)
@@ -1125,7 +1141,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             del d["image_layer_combobox"]
         if "labels_layer_combobox" in d:
             del d["labels_layer_combobox"]
-        for key in ("distance_map_combobox", "start_points_combobox"):
+        for key in ("distance_map_combobox", "second_distance_map_combobox", "start_points_combobox"):
             if key in d:
                 del d[key]
         return d
@@ -1228,7 +1244,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.labels_layer.data[bb_slice][data > 0] = self.labels_layer.data.max()+1
         self.labels_layer.refresh()
 
-    def _distance_map_received(self, layer_name, data, layer_args):
+    def _distance_map_received(self, layer_name, anchor_idx, data, layer_args):
         if layer_name in self._viewer.layers:
             layer = self._viewer.layers[layer_name]
             layer.data = data
@@ -1236,7 +1252,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             layer.scale = layer_args["scale"]
         else:
             layer = self._viewer.add_image(data, name=layer_name, colormap="plasma", visible=False, **layer_args)
-        self.distance_map_combobox.value = layer
+        [self.distance_map_combobox, self.second_distance_map_combobox][anchor_idx].value = layer
 
     def _contour_points_received(self, layer_name, points, layer_args):
         if points is None:
@@ -1252,51 +1268,60 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     @set_design(text="Show shortest paths", location=ShortestPathsWidget)
     def show_shortest_paths(self):
-        distance_map_layer = self.distance_map_combobox.value
         points_layer = self.start_points_combobox.value
-        if distance_map_layer is None or points_layer is None:
+        distance_map_layers = [self.distance_map_combobox.value, self.second_distance_map_combobox.value]
+        if points_layer is None or all(layer is None for layer in distance_map_layers):
             warnings.warn("Select a distance map and a Points layer with the start points")
             return
-        if distance_map_layer.ndim != 3 or points_layer.ndim != 3:
-            warnings.warn("The distance map and the start points should be 3D")
+        if points_layer.ndim != 3 or any(layer is not None and layer.ndim != 3 for layer in distance_map_layers):
+            warnings.warn("The distance maps and the start points should be 3D")
             return
         if len(points_layer.data) == 0:
             warnings.warn("The start points layer is empty")
             return
-        # data_to_world and world_to_data convert a single position, not an array of them
-        points = np.asarray([distance_map_layer.world_to_data(points_layer.data_to_world(point))
-                             for point in points_layer.data])
-        points = np.rint(points).astype(np.int64)
-        inside = np.all((points >= 0) & (points < np.asarray(distance_map_layer.data.shape)), axis=1)
-        if not inside.all():
-            warnings.warn("Skipped %d start point(s) outside the distance map" % (~inside).sum())
-        points = points[inside]
-        if len(points) == 0:
-            return
-        distance_map = np.ascontiguousarray(distance_map_layer.data, dtype=float)
         estimator = minimal_surface.MinimalSurfaceCalculator()
-        paths = [estimator.resolve_shortest_paths(point, distance_map) for point in points]
-        # a path ends by repeating its last point up to the iteration limit
-        paths = [path[np.r_[True, np.any(np.diff(path, axis=0) != 0, axis=1)]] for path in paths]
-        paths = [path for path in paths if len(path) > 1]
-        if not paths:
-            warnings.warn("The start points are already at the source, there are no paths to show")
-            return
-        colors = np.asarray(generate_label_colors(len(paths))) / 255
-        if "Shortest paths" in self._viewer.layers:
-            self._viewer.layers.remove("Shortest paths")
-        self._viewer.add_layer(Shapes(
-            paths,
-            name="Shortest paths",
-            shape_type="path",
-            edge_color=np.concatenate([colors, np.ones([len(colors), 1])], axis=1),
-            edge_width=1,
-            scale=distance_map_layer.scale,
-            translate=distance_map_layer.translate,
-            rotate=distance_map_layer.rotate,
-            shear=distance_map_layer.shear,
-            affine=distance_map_layer.affine
-        ))
+        colors = np.asarray(generate_label_colors(len(points_layer.data))) / 255
+        # every start point is traced on the distance map of each anchor, so the path leads to that anchor
+        for anchor_idx, distance_map_layer in enumerate(distance_map_layers):
+            layer_name = "Shortest paths (anchor %d)" % (anchor_idx + 1)
+            if layer_name in self._viewer.layers:
+                self._viewer.layers.remove(layer_name)
+            if distance_map_layer is None:
+                continue
+            # data_to_world and world_to_data convert a single position, not an array of them
+            points = [distance_map_layer.world_to_data(points_layer.data_to_world(point)) for point in points_layer.data]
+            points = np.rint(points).astype(np.int64)
+            inside = np.all((points >= 0) & (points < np.asarray(distance_map_layer.data.shape)), axis=1)
+            if not inside.all():
+                warnings.warn("Skipped %d start point(s) outside '%s'" % ((~inside).sum(), distance_map_layer.name))
+            distance_map = np.ascontiguousarray(distance_map_layer.data, dtype=float)
+            # a trace that starts on the outermost voxel layer of the map stalls there, so it starts one voxel inside
+            starts = np.clip(points, 1, np.asarray(distance_map.shape) - 2)
+            paths = []
+            path_colors = []
+            for idx in np.flatnonzero(inside):
+                path = np.vstack([points[idx], estimator.resolve_shortest_paths(starts[idx], distance_map)])
+                # a path ends by repeating its last point up to the iteration limit
+                path = path[np.r_[True, np.any(np.diff(path, axis=0) != 0, axis=1)]]
+                if len(path) > 1:
+                    paths.append(path)
+                    path_colors.append(colors[idx])
+            if not paths:
+                warnings.warn("No paths on '%s': the start points are outside it or already at the source"
+                              % distance_map_layer.name)
+                continue
+            self._viewer.add_layer(Shapes(
+                paths,
+                name=layer_name,
+                shape_type="path",
+                edge_color=np.concatenate([path_colors, np.ones([len(paths), 1])], axis=1),
+                edge_width=1,
+                scale=distance_map_layer.scale,
+                translate=distance_map_layer.translate,
+                rotate=distance_map_layer.rotate,
+                shear=distance_map_layer.shear,
+                affine=distance_map_layer.affine
+            ))
 
     def _refresh_layer(self, layer_name):
         if layer_name not in self._viewer.layers:
