@@ -349,12 +349,18 @@ class InterpolationWidget(MagicTemplate):
 
     # @thread_worker
     def _update_overlay(self):
-        if self._stored_contours is None:
-            contour = []
-        else:
-            contour = deepcopy(self._stored_contours[self.current_slice])
+        contour = deepcopy(self._contours_at(self.current_slice))
         with self.contour_mutex:
             self.active_labels_layer._overlays["interpolation"].contour = ContourList(contour)
+
+    def _contours_at(self, idx):
+        # The viewer can sit on a slice the active layer does not have (e.g. a
+        # smaller labels layer added while the viewer is further along), and the
+        # stored list can be replaced while a worker is still running.
+        with self.contour_mutex:
+            if self._stored_contours is None or idx is None or not 0 <= idx < len(self._stored_contours):
+                return []
+            return self._stored_contours[idx]
 
     @property
     def viewer(self):
@@ -498,9 +504,12 @@ class InterpolationWidget(MagicTemplate):
                 yield j, mean_cnt
             break
         with self.contour_mutex:
-            self._stored_contours[idx] = []
+            if self._stored_contours is not None and 0 <= idx < len(self._stored_contours):
+                self._stored_contours[idx] = []
 
     def _execute_interpolation(self, idx):
+        if idx is None or not 0 <= idx < self.active_labels_layer.data.shape[self.dimension]:
+            return
         for direction in [-1, 1]:
             self._start_interpolation(idx, direction)
 
@@ -595,8 +604,7 @@ class InterpolationWidget(MagicTemplate):
         self._is_painting = True
         if layer.mode in ["erase", "paint"]:
             cur_slice = layer_slice_indices(layer)
-            with self.contour_mutex:
-                cnt_list = self._stored_contours[cur_slice[self.dimension]]
+            cnt_list = self._contours_at(cur_slice[self.dimension])
             if len(cnt_list) > 0:
                 mask = np.zeros_like(layer.data[cur_slice])
                 for i in range(len(cnt_list)):
@@ -664,6 +672,8 @@ class InterpolationWidget(MagicTemplate):
             contour = np.fliplr(contour)
             contour_list[i] = contour
         with self.contour_mutex:
+            if self._stored_contours is None or not 0 <= idx < len(self._stored_contours):
+                return
             self._stored_contours[idx] = contour_list
         if idx == self.current_slice:
             with self.contour_mutex:

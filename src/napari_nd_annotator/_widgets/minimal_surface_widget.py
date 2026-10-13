@@ -456,8 +456,8 @@ class EstimationWorker(QObject):
                 bb_slice = bb_2_slice(bounding_box)
                 point1 = (self.points[2 * i] - offset).reshape(-1)
                 point2 = (self.points[2 * i + 1] - offset).reshape(-1)
-                point1[2] *= self.z_scale
-                point2[2] *= self.z_scale
+                point1[0] *= self.z_scale
+                point2[0] *= self.z_scale
                 self.pt_pairs.append((point1, point2))
                 data = self.image[bb_slice]
                 data = zoom(data, (self.z_scale, 1, 1))
@@ -498,7 +498,8 @@ class EstimationWorker(QObject):
                 obj_pixel = np.argwhere(output == output.max())[0]
                 obj_label = labelled[tuple(obj_pixel)]
                 mask = (labelled == obj_label)
-                mask = zoom(mask, (1/self.z_scale, 1, 1), order=0)
+                orig_z = bounding_box[:, 0].max() - bounding_box[:, 0].min()
+                mask = zoom(mask, (orig_z / mask.shape[0], 1, 1), order=0)
                 # self.image_data_received.emit("Result", output, {"colormap": "plasma", "translate": offset})
                 self.mask_data_received.emit(mask, offset)
                 postscript = " - %d" % (i + 1)
@@ -819,7 +820,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             if answer == QMessageBox.StandardButton.Yes:
                 new_labels = self._viewer.add_labels(
                     np.zeros(self.image_layer.data.shape[:self.image_layer.ndim], dtype=np.uint16))
-                self.labels.layer = new_labels
+                self.labels_layer = new_labels
             else:
                 return
         image = self.image_layer
