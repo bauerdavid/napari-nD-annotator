@@ -42,7 +42,7 @@ from napari.layers._source import layer_source
 
 from ._utils import WidgetWithLayerList, ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
-from .._helper_functions import layer_dims_displayed
+from .._helper_functions import layer_dims_displayed, viewer_canvas_size
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 from .._napari_version import NAPARI_VERSION
@@ -255,7 +255,7 @@ class EstimationWorker(QObject):
         self.viewer.camera.center = visible_extent.mean(0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer.camera.zoom = np.min(np.divide(self.viewer._canvas_size, visible_extent.max(0)-visible_extent.min(0)))*0.95
+            self.viewer.camera.zoom = np.min(np.divide(viewer_canvas_size(self.viewer), visible_extent.max(0)-visible_extent.min(0)))*0.95
         self.slice_labels_layer.brush_size = 1
         self.slice_labels_layer.mode = "paint"
         self.minimal_surface_widget.call_button.enabled = True
