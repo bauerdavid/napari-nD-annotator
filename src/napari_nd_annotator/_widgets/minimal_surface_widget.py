@@ -4,14 +4,12 @@ from magicgui.widgets import PushButton
 from time import sleep
 from copy import deepcopy
 from collections.abc import Iterable
-from threading import Thread
 import numpy as np
 import itertools
 import colorsys
 from random import shuffle, seed
 
 #image processing modules
-import cv2
 import skimage.measure, skimage.morphology
 from scipy.ndimage import gaussian_filter, zoom
 
@@ -26,7 +24,6 @@ from qtpy.QtWidgets import (
     QLabel,
     QCheckBox,
     QPushButton,
-    QFrame,
     QWidget,
     QApplication,
     QMessageBox
@@ -40,7 +37,7 @@ from napari.utils.notifications import show_info
 from napari.layers._source import layer_source
 
 
-from ._utils import WidgetWithLayerList, ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
+from ._utils import ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
 from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
@@ -163,6 +160,8 @@ class ColorPairsCallback:
 class EstimationWorker(QObject):
     image_data_received = Signal(str, object, object)
     mask_data_received = Signal(object, object)
+    distance_map_received = Signal(str, int, object, object)
+    contour_points_received = Signal(str, object, object)
     remove_layer = Signal(str)
     layer_invalidated = Signal(str)
     all_done = Signal()
@@ -409,18 +408,31 @@ class EstimationWorker(QObject):
         # estimator.hook_stage_finished_event(minimal_surface.TRANSPORT_FUNCTION_STAGE,
         #                                     lambda: self.data_finalizer("Transport Function%s" % postscript)())
 
+        anchor_maps = {}
+
+        def anchor_map_initialized(distance_map, anchor_idx):
+            anchor_maps[anchor_idx] = distance_map
+
+        def anchor_maps_finished():
+            # the arrays are views of the estimator's memory, which is reused afterwards
+            for anchor_idx, distance_map in anchor_maps.items():
+                self.distance_map_received.emit(
+                    "Distance map - %d (anchor %d)" % (idx + 1, anchor_idx + 1),
+                    anchor_idx,
+                    distance_map.copy(),
+                    {"translate": self.bboxes[idx].min(0), "scale": (1 / self.z_scale, 1., 1.)})
+
+        estimator.hook_stage_data_init_event(minimal_surface.AREA_EIKONAL_STAGE, anchor_map_initialized)
+        estimator.hook_stage_finished_event(minimal_surface.AREA_EIKONAL_STAGE, anchor_maps_finished)
+
         def tform_calculated(rotation, translation):
             self.rotation_matrix = np.flip(rotation.copy()).reshape(3, 3)
             self.translation_matrix = np.flip(translation.copy())
-        # print("hook_transform_calculated_event")
-        # estimator.hook_transform_calculated_event(tform_calculated)
-        # print("after hook_transform_calculated_event")
+        estimator.hook_transform_calculated_event(tform_calculated)
 
         def center_calculated(center):
             self.center_mat = np.flip(center.copy())
-        # print("hook_plane_center_calculated_event")
-        # estimator.hook_plane_center_calculated_event(center_calculated)
-        # print("after hook_plane_center_calculated_event")
+        estimator.hook_plane_center_calculated_event(center_calculated)
 
     def run(self):
         import time
@@ -561,7 +573,21 @@ class EstimationWorker(QObject):
             raise ValueError("Slice not calculated")
         mask = self.slice_annotation.astype(float) if self.slice_annotation is not None else None
         self.slice_annotation = None
+        self.contour_points_received.emit(
+            "Contour points - %d" % len(self.bboxes),
+            self.plane_contour_points(mask),
+            {"translate": self.bboxes[-1].min(0), "scale": (1 / self.z_scale, 1., 1.)})
         return mask
+
+    def plane_contour_points(self, mask):
+        # the contour of the annotated plane, in the bounding box frame of the distance map
+        contours = skimage.measure.find_contours(mask, 0.5)
+        if not contours:
+            return None
+        points = np.concatenate(contours)
+        # the plane is (rows, columns, 1): its last axis is the plane normal, at the plane center
+        points = np.concatenate([points, np.full([len(points), 1], self.center_mat[-1])], axis=1)
+        return points @ self.rotation_matrix.T + self.translation_matrix
 
 
 class SliderWithCheckbox(FreeWidget):
@@ -840,6 +866,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         estimation_worker.image_data_received.connect(self._add_image)
         estimation_worker.layer_invalidated.connect(self._refresh_layer)
         estimation_worker.mask_data_received.connect(self._mask_received)
+        estimation_worker.distance_map_received.connect(self._distance_map_received)
+        estimation_worker.contour_points_received.connect(self._contour_points_received)
         estimation_worker.remove_layer.connect(self._data_remover)
         estimation_worker.slice_annotations_done.connect(self._show_estimation_progress)
         estimation_worker.object_annotated.connect(lambda i: self.estimation_progress_widget.setValue(i+1))
@@ -1041,6 +1069,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
             for layer in self.layers:
                 layer.experimental_clipping_planes = new_clipping_planes
 
+    @magicclass(widget_type="collapsible", name="Shortest Paths")
+    class ShortestPathsWidget(MagicTemplate):
+        ...
+
     used_feature_combobox = field(widget_type="ComboBox", location=ImageFeaturesWidget).with_choices(FEATURE_KEYS)
     feature_editor = field(ScriptExecuteWidget, location=ImageFeaturesWidget).with_options(editor_key="minimal_surface_features")
     alpha = vfield(float, label="\u03B1", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(min=0, max=1, value=0.01)
@@ -1048,6 +1080,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
     iterations = vfield(int, widget_type="Slider", location=ImageFeaturesWidget).with_options(min=1, max=10000, value=10000)
     z_scale = vfield(float, location=ImageFeaturesWidget).with_options(min=0.01, max=20., value=1.)
     use_correction = vfield(bool, location=ImageFeaturesWidget)
+
+    distance_map_combobox = field(Image, label="Distance map (anchor 1)", location=ShortestPathsWidget)
+    second_distance_map_combobox = field(Image, label="Distance map (anchor 2)", location=ShortestPathsWidget)
+    start_points_combobox = field(Points, label="Start points", location=ShortestPathsWidget)
 
     blur_image_checkbox = field(bool, label="Blur image", location=BlurringWidget)
     blurring_type_combobox = (field(str, widget_type="ComboBox", location=BlurringWidget)
@@ -1088,7 +1124,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
                                     + self.native.children()[1].verticalScrollBar().sizeHint().width()
                                     + 2 * self.native.children()[1].widget().layout().getContentsMargins()[2])
-        for container in [self.ImageFeaturesWidget, self.BlurringWidget, self.SliceAnnotationWidget]:
+        for container in [self.ImageFeaturesWidget, self.BlurringWidget, self.SliceAnnotationWidget, self.ShortestPathsWidget]:
             container._widget._expand_btn.setChecked(False)
             # container._widget._inner_qwidget.setStyleSheet("padding: 0 10 0 10")
             container.collapsed = True
@@ -1105,6 +1141,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
             del d["image_layer_combobox"]
         if "labels_layer_combobox" in d:
             del d["labels_layer_combobox"]
+        for key in ("distance_map_combobox", "second_distance_map_combobox", "start_points_combobox"):
+            if key in d:
+                del d[key]
         return d
 
     @property
@@ -1204,6 +1243,85 @@ class _MinimalSurfaceWidget(MagicTemplate):
         bb_slice = tuple(slice(offs, offs + extent) for offs, extent in zip(offset, data.shape))
         self.labels_layer.data[bb_slice][data > 0] = self.labels_layer.data.max()+1
         self.labels_layer.refresh()
+
+    def _distance_map_received(self, layer_name, anchor_idx, data, layer_args):
+        if layer_name in self._viewer.layers:
+            layer = self._viewer.layers[layer_name]
+            layer.data = data
+            layer.translate = layer_args["translate"]
+            layer.scale = layer_args["scale"]
+        else:
+            layer = self._viewer.add_image(data, name=layer_name, colormap="plasma", visible=False, **layer_args)
+        [self.distance_map_combobox, self.second_distance_map_combobox][anchor_idx].value = layer
+
+    def _contour_points_received(self, layer_name, points, layer_args):
+        if points is None:
+            return
+        if layer_name in self._viewer.layers:
+            layer = self._viewer.layers[layer_name]
+            layer.data = points
+            layer.translate = layer_args["translate"]
+            layer.scale = layer_args["scale"]
+        else:
+            layer = self._viewer.add_points(points, name=layer_name, ndim=3, size=2, **layer_args)
+        self.start_points_combobox.value = layer
+
+    @set_design(text="Show shortest paths", location=ShortestPathsWidget)
+    def show_shortest_paths(self):
+        points_layer = self.start_points_combobox.value
+        distance_map_layers = [self.distance_map_combobox.value, self.second_distance_map_combobox.value]
+        if points_layer is None or all(layer is None for layer in distance_map_layers):
+            warnings.warn("Select a distance map and a Points layer with the start points")
+            return
+        if points_layer.ndim != 3 or any(layer is not None and layer.ndim != 3 for layer in distance_map_layers):
+            warnings.warn("The distance maps and the start points should be 3D")
+            return
+        if len(points_layer.data) == 0:
+            warnings.warn("The start points layer is empty")
+            return
+        estimator = minimal_surface.MinimalSurfaceCalculator()
+        colors = np.asarray(generate_label_colors(len(points_layer.data))) / 255
+        # every start point is traced on the distance map of each anchor, so the path leads to that anchor
+        for anchor_idx, distance_map_layer in enumerate(distance_map_layers):
+            layer_name = "Shortest paths (anchor %d)" % (anchor_idx + 1)
+            if layer_name in self._viewer.layers:
+                self._viewer.layers.remove(layer_name)
+            if distance_map_layer is None:
+                continue
+            # data_to_world and world_to_data convert a single position, not an array of them
+            points = [distance_map_layer.world_to_data(points_layer.data_to_world(point)) for point in points_layer.data]
+            points = np.rint(points).astype(np.int64)
+            inside = np.all((points >= 0) & (points < np.asarray(distance_map_layer.data.shape)), axis=1)
+            if not inside.all():
+                warnings.warn("Skipped %d start point(s) outside '%s'" % ((~inside).sum(), distance_map_layer.name))
+            distance_map = np.ascontiguousarray(distance_map_layer.data, dtype=float)
+            # a trace that starts on the outermost voxel layer of the map stalls there, so it starts one voxel inside
+            starts = np.clip(points, 1, np.asarray(distance_map.shape) - 2)
+            paths = []
+            path_colors = []
+            for idx in np.flatnonzero(inside):
+                path = np.vstack([points[idx], estimator.resolve_shortest_paths(starts[idx], distance_map)])
+                # a path ends by repeating its last point up to the iteration limit
+                path = path[np.r_[True, np.any(np.diff(path, axis=0) != 0, axis=1)]]
+                if len(path) > 1:
+                    paths.append(path)
+                    path_colors.append(colors[idx])
+            if not paths:
+                warnings.warn("No paths on '%s': the start points are outside it or already at the source"
+                              % distance_map_layer.name)
+                continue
+            self._viewer.add_layer(Shapes(
+                paths,
+                name=layer_name,
+                shape_type="path",
+                edge_color=np.concatenate([path_colors, np.ones([len(paths), 1])], axis=1),
+                edge_width=1,
+                scale=distance_map_layer.scale,
+                translate=distance_map_layer.translate,
+                rotate=distance_map_layer.rotate,
+                shear=distance_map_layer.shear,
+                affine=distance_map_layer.affine
+            ))
 
     def _refresh_layer(self, layer_name):
         if layer_name not in self._viewer.layers:
@@ -1420,75 +1538,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
                     slider.value = (range[0]+offset, range[1]+offset)
             else:
                 self.points_layer.add(self.points_layer.world_to_data(point))
-
-
-class ShortestPathsWidget(WidgetWithLayerList):
-    shapes_data_received = Signal(str, object, object)
-
-    def __init__(self, viewer: napari.Viewer):
-        super().__init__(viewer, [("meeting_plane", Image), ("distance_map", Image), ("starting_points", Points)], "nd_annotator_shortest_paths")
-        self.shapes_data_received.connect(self.add_shapes)
-        self.viewer = viewer
-        self.estimator = minimal_surface.MinimalSurfaceCalculator()
-        layout = QVBoxLayout()
-
-        layout.addWidget(QLabel("Extract contour from meeting plane"))
-        plane_2_contour_btn = QPushButton("Extract")
-        plane_2_contour_btn.clicked.connect(self.plane_2_contour)
-        layout.addWidget(plane_2_contour_btn)
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        line.setFixedHeight(1)
-        line.setStyleSheet("background-color: #414851;")
-        layout.addWidget(line)
-
-        run_button = QPushButton("Show shortest paths")
-        run_button.clicked.connect(self.show_shortest_paths)
-        layout.addWidget(run_button)
-        self.setLayout(layout)
-
-    def add_shapes(self, layer_name, data, layer_args):
-        if 'opacity' not in layer_args:
-            layer_args['opacity'] = 0.3
-        self.viewer.add_layer(Shapes(data, name=layer_name, shape_type="path", **layer_args))
-
-    def plane_2_contour(self):
-        if self.meeting_plane.layer is None:
-            return
-        meeting_plane_layer = self.meeting_plane.layer
-        plane_mask = (meeting_plane_layer.data > 0).astype(np.uint8)
-        contour = np.squeeze(cv2.findContours(np.squeeze(plane_mask), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0][0])
-        contour = np.concatenate([np.fliplr(contour), np.ones([len(contour), 1])], axis=1)
-        contour = contour @ meeting_plane_layer.rotate.T + meeting_plane_layer.translate
-        contour_layer = Points(contour, ndim=3, name="contour points", size=2)
-        self.viewer.add_layer(contour_layer)
-        self.starting_points.layer = contour_layer
-
-    def calculate(self, points, distance_map, translate, rotate):
-        paths = []
-        for point in points:
-            shortest_path = self.estimator.resolve_shortest_paths(point, distance_map).copy()
-            paths.append(shortest_path)
-        colors = generate_label_colors(len(paths))
-        self.shapes_data_received.emit("Shortest path", paths, {
-            'translate': translate,
-            'rotate': rotate,
-            'edge_color': np.concatenate([np.asarray(colors) / 255, np.ones([len(colors), 1])], axis=1),
-            'edge_width': 0.1
-        })
-
-    def show_shortest_paths(self):
-        distance_map = self.distance_map.layer
-        points = self.starting_points.layer
-        if distance_map is None or points is None:
-            return
-        translation = distance_map.translate
-        rotation = distance_map.rotate
-        distance_map = distance_map.data
-        points = (points.data - translation).astype(int)
-        self.viewer.window.worker2 = Thread(target=self.calculate, args=[points, distance_map, translation, rotation])
-        self.viewer.window.worker2.start()
 
 if minimal_surface is not None:
     import SimpleITK as sitk
