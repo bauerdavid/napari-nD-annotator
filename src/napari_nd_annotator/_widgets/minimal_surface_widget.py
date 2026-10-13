@@ -834,7 +834,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         n_iter = self.iterations
         use_correction = self.use_correction
         use_gradient = self.used_feature == "Gradient"
-        use_meeting_plane_points = True  # TODO check self.use_meeting_points_checkbox.isChecked()
+        use_meeting_plane_points = True
         estimation_worker = EstimationWorker(self._viewer, self.minimal_contour_widget, self)
         estimation_worker.initialize(image_data, phi_func, points_data, use_correction, beta, alpha, n_iter, use_meeting_plane_points, self.slice_annotation_method, self._blur_image if self.is_blurring_enabled else None, z_scale, use_gradient)
         estimation_worker.image_data_received.connect(self._add_image)
@@ -1089,8 +1089,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
         self.crop_mask = None
 
-        # self.use_meeting_points_checkbox = QCheckBox("Slice from meeting points") #TODO check if needed
-        # self.use_meeting_points_checkbox.setChecked(True)
         # self.slice_widget.clipping_widget.add_layer(self.points_layer)
 
     def __post_init__(self):
