@@ -1235,7 +1235,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if distance_map_layer.ndim != 3 or points_layer.ndim != 3:
             warnings.warn("The distance map and the start points should be 3D")
             return
-        points = distance_map_layer.world_to_data(points_layer.data_to_world(points_layer.data))
+        if len(points_layer.data) == 0:
+            warnings.warn("The start points layer is empty")
+            return
+        # data_to_world and world_to_data convert a single position, not an array of them
+        points = np.asarray([distance_map_layer.world_to_data(points_layer.data_to_world(point))
+                             for point in points_layer.data])
         points = np.rint(points).astype(np.int64)
         inside = np.all((points >= 0) & (points < np.asarray(distance_map_layer.data.shape)), axis=1)
         if not inside.all():
@@ -1250,6 +1255,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         paths = [path[np.r_[True, np.any(np.diff(path, axis=0) != 0, axis=1)]] for path in paths]
         paths = [path for path in paths if len(path) > 1]
         if not paths:
+            warnings.warn("The start points are already at the source, there are no paths to show")
             return
         colors = np.asarray(generate_label_colors(len(paths))) / 255
         if "Shortest paths" in self._viewer.layers:
