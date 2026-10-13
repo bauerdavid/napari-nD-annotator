@@ -23,30 +23,25 @@ jobs:
   napari_compat:
     name: napari ${{ matrix.napari }} (Python ${{ matrix.python }}, ${{ matrix.qt }})
     runs-on: ubuntu-latest
-    # an entry marked experimental reports its result but does not fail the workflow
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # 0.4.11 (setup.cfg's old minimum) cannot import the plugin, and 0.4.18/0.4.19 import it but lack the
-          # layer-controls layout it builds on (QtLabelsControls.button_grid); 0.5.0 is the candidate for the minimum
+          # setup.cfg's minimum; older releases cannot work: 0.4.11 cannot import the plugin, and 0.4.18/0.4.19
+          # import it but lack the layer-controls layout it builds on (QtLabelsControls.button_grid)
           - napari: "0.5.0"
             python: "3.10"
             qt: PyQt5
             constraints: "numpy<2"
-            experimental: true
           - napari: "0.5.6"
             python: "3.11"
             qt: PyQt5
             constraints: ""
-            experimental: false
           # newest napari, whatever that is when the job runs
           - napari: "latest"
             python: "3.13"
             qt: PyQt6
             constraints: ""
-            experimental: false
 
     steps:
       - uses: actions/checkout@v4
