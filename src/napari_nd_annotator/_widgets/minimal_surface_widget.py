@@ -161,6 +161,7 @@ class EstimationWorker(QObject):
     image_data_received = Signal(str, object, object)
     mask_data_received = Signal(object, object)
     distance_map_received = Signal(str, object, object)
+    contour_points_received = Signal(str, object, object)
     remove_layer = Signal(str)
     layer_invalidated = Signal(str)
     all_done = Signal()
@@ -410,15 +411,11 @@ class EstimationWorker(QObject):
         def tform_calculated(rotation, translation):
             self.rotation_matrix = np.flip(rotation.copy()).reshape(3, 3)
             self.translation_matrix = np.flip(translation.copy())
-        # print("hook_transform_calculated_event")
-        # estimator.hook_transform_calculated_event(tform_calculated)
-        # print("after hook_transform_calculated_event")
+        estimator.hook_transform_calculated_event(tform_calculated)
 
         def center_calculated(center):
             self.center_mat = np.flip(center.copy())
-        # print("hook_plane_center_calculated_event")
-        # estimator.hook_plane_center_calculated_event(center_calculated)
-        # print("after hook_plane_center_calculated_event")
+        estimator.hook_plane_center_calculated_event(center_calculated)
 
     def run(self):
         import time
@@ -561,7 +558,21 @@ class EstimationWorker(QObject):
             raise ValueError("Slice not calculated")
         mask = self.slice_annotation.astype(float) if self.slice_annotation is not None else None
         self.slice_annotation = None
+        self.contour_points_received.emit(
+            "Contour points - %d" % len(self.bboxes),
+            self.plane_contour_points(mask),
+            {"translate": self.bboxes[-1].min(0), "scale": (1 / self.z_scale, 1., 1.)})
         return mask
+
+    def plane_contour_points(self, mask):
+        # the contour of the annotated plane, in the bounding box frame of the distance map
+        contours = skimage.measure.find_contours(mask, 0.5)
+        if not contours:
+            return None
+        points = np.concatenate(contours)
+        # the plane is (rows, columns, 1): its last axis is the plane normal, at the plane center
+        points = np.concatenate([points, np.full([len(points), 1], self.center_mat[-1])], axis=1)
+        return points @ self.rotation_matrix.T + self.translation_matrix
 
 
 class SliderWithCheckbox(FreeWidget):
@@ -841,6 +852,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         estimation_worker.layer_invalidated.connect(self._refresh_layer)
         estimation_worker.mask_data_received.connect(self._mask_received)
         estimation_worker.distance_map_received.connect(self._distance_map_received)
+        estimation_worker.contour_points_received.connect(self._contour_points_received)
         estimation_worker.remove_layer.connect(self._data_remover)
         estimation_worker.slice_annotations_done.connect(self._show_estimation_progress)
         estimation_worker.object_annotated.connect(lambda i: self.estimation_progress_widget.setValue(i+1))
@@ -1223,7 +1235,20 @@ class _MinimalSurfaceWidget(MagicTemplate):
             layer.translate = layer_args["translate"]
             layer.scale = layer_args["scale"]
         else:
-            self._viewer.add_image(data, name=layer_name, colormap="plasma", visible=False, **layer_args)
+            layer = self._viewer.add_image(data, name=layer_name, colormap="plasma", visible=False, **layer_args)
+        self.distance_map_combobox.value = layer
+
+    def _contour_points_received(self, layer_name, points, layer_args):
+        if points is None:
+            return
+        if layer_name in self._viewer.layers:
+            layer = self._viewer.layers[layer_name]
+            layer.data = points
+            layer.translate = layer_args["translate"]
+            layer.scale = layer_args["scale"]
+        else:
+            layer = self._viewer.add_points(points, name=layer_name, ndim=3, size=2, **layer_args)
+        self.start_points_combobox.value = layer
 
     @set_design(text="Show shortest paths", location=ShortestPathsWidget)
     def show_shortest_paths(self):
