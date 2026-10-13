@@ -103,3 +103,15 @@ else:
             return (*order, max(order) + 1)
 
         return order
+
+
+def viewer_canvas_size(viewer):
+    """Size of the canvas in pixels, as (height, width).
+
+    napari 0.9 removed the private ``Viewer._canvas_size`` in favour of the
+    public ``viewer.canvas.size``, which has the same (height, width) order.
+    """
+    canvas = getattr(viewer, "canvas", None)
+    if canvas is not None and hasattr(canvas, "size"):
+        return canvas.size
+    return viewer._canvas_size

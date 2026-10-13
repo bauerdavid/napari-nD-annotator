@@ -43,7 +43,7 @@ from napari.layers._source import layer_source
 
 from ._utils import WidgetWithLayerList, ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
-from .._helper_functions import layer_dims_displayed
+from .._helper_functions import layer_dims_displayed, viewer_canvas_size
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 from .._napari_version import NAPARI_VERSION
@@ -256,7 +256,7 @@ class EstimationWorker(QObject):
         self.viewer.camera.center = visible_extent.mean(0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer.camera.zoom = np.min(np.divide(self.viewer._canvas_size, visible_extent.max(0)-visible_extent.min(0)))*0.95
+            self.viewer.camera.zoom = np.min(np.divide(viewer_canvas_size(self.viewer), visible_extent.max(0)-visible_extent.min(0)))*0.95
         self.slice_labels_layer.brush_size = 1
         self.slice_labels_layer.mode = "paint"
         self.minimal_surface_widget.call_button.enabled = True
@@ -458,8 +458,8 @@ class EstimationWorker(QObject):
                 bb_slice = bb_2_slice(bounding_box)
                 point1 = (self.points[2 * i] - offset).reshape(-1)
                 point2 = (self.points[2 * i + 1] - offset).reshape(-1)
-                point1[2] *= self.z_scale
-                point2[2] *= self.z_scale
+                point1[0] *= self.z_scale
+                point2[0] *= self.z_scale
                 self.pt_pairs.append((point1, point2))
                 data = self.image[bb_slice]
                 data = zoom(data, (self.z_scale, 1, 1))
@@ -500,7 +500,8 @@ class EstimationWorker(QObject):
                 obj_pixel = np.argwhere(output == output.max())[0]
                 obj_label = labelled[tuple(obj_pixel)]
                 mask = (labelled == obj_label)
-                mask = zoom(mask, (1/self.z_scale, 1, 1), order=0)
+                orig_z = bounding_box[:, 0].max() - bounding_box[:, 0].min()
+                mask = zoom(mask, (orig_z / mask.shape[0], 1, 1), order=0)
                 # self.image_data_received.emit("Result", output, {"colormap": "plasma", "translate": offset})
                 self.mask_data_received.emit(mask, offset)
                 postscript = " - %d" % (i + 1)
@@ -821,7 +822,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             if answer == QMessageBox.StandardButton.Yes:
                 new_labels = self._viewer.add_labels(
                     np.zeros(self.image_layer.data.shape[:self.image_layer.ndim], dtype=np.uint16))
-                self.labels.layer = new_labels
+                self.labels_layer = new_labels
             else:
                 return
         image = self.image_layer
