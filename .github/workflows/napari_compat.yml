@@ -29,17 +29,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the oldest napari releases to try; the overlay API the plugin draws with
-          # (napari/_vispy/overlays) arrived around 0.4.18, which is why 0.4.11 cannot work
-          - napari: "0.4.18"
+          # 0.4.11 (setup.cfg's old minimum) cannot import the plugin, and 0.4.18/0.4.19 import it but lack the
+          # layer-controls layout it builds on (QtLabelsControls.button_grid); 0.5.0 is the candidate for the minimum
+          - napari: "0.5.0"
             python: "3.10"
             qt: PyQt5
-            constraints: "numpy<2\npydantic<2"
-            experimental: true
-          - napari: "0.4.19"
-            python: "3.10"
-            qt: PyQt5
-            constraints: "numpy<2\npydantic<2"
+            constraints: "numpy<2"
             experimental: true
           - napari: "0.5.6"
             python: "3.11"
