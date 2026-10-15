@@ -102,6 +102,75 @@ def test_labels_layer_gets_overlays_and_controls(viewer, annotator):
     assert labels in viewer_qt_viewer(viewer).controls.widgets
 
 
+def test_label_options_follow_active_labels_layer(viewer, annotator):
+    mc = annotator.ToolsWidget.minimal_contour_widget
+    image = viewer.add_image(np.zeros((5, 20, 20)), name="image")
+    a = viewer.add_labels(np.zeros((5, 20, 20), dtype=np.uint16), name="a", metadata={"source_image_layer": image})
+    b = viewer.add_labels(np.zeros((5, 20, 20), dtype=np.uint8), name="b", metadata={"source_image_layer": image})
+
+    def is_label_callback(cb):
+        # napari keeps bound methods as (weakref to the object, method name)
+        if isinstance(cb, tuple):
+            return cb[0]() is mc and cb[1] == "_on_selected_label_change"
+        return cb == mc._on_selected_label_change
+
+    def wheel_bindings(layer):
+        return (sum(map(is_label_callback, layer.events.selected_label.callbacks)),
+                layer.mouse_wheel_callbacks.count(mc._on_mouse_wheel))
+
+    for layer, label, dtype_max in [(a, 3, 65535), (b, 7, 255), (a, 5, 65535)]:
+        viewer.layers.selection.active = layer
+        _process_events()
+        layer.selected_label = label
+        _process_events()
+        assert mc.selected_label_spinbox.value == label
+        assert mc.selected_label_spinbox.max == dtype_max
+        assert mc.color_box.layer is layer
+        other = b if layer is a else a
+        assert wheel_bindings(layer) == (1, 1)
+        assert wheel_bindings(other) == (0, 0)
+
+    # re-selecting the same layer must not connect anything twice
+    viewer.layers.selection.events.active(value=a)
+    _process_events()
+    assert wheel_bindings(a) == (1, 1)
+
+    # the spinbox writes back to the active layer only
+    mc.selected_label_spinbox.value = 9
+    assert (a.selected_label, b.selected_label) == (9, 7)
+
+    viewer.layers.selection.active = image
+    _process_events()
+    assert mc.color_box.layer is None
+    assert mc.selected_label_spinbox.value == 0
+    assert wheel_bindings(a) == (0, 0)
+    b.selected_label = 4
+    a.selected_label = 2
+    assert mc.selected_label_spinbox.value == 0
+
+
+def test_shift_and_alt_wheel_change_label_and_brush_size(viewer, annotator):
+    mc = annotator.ToolsWidget.minimal_contour_widget
+    image = viewer.add_image(np.zeros((5, 20, 20)), name="image")
+    labels = viewer.add_labels(np.zeros((5, 20, 20), dtype=np.uint16), name="labels", metadata={"source_image_layer": image})
+    viewer.layers.selection.active = labels
+    _process_events()
+    labels.selected_label = 2
+
+    def wheel(modifiers, delta):
+        mc._on_mouse_wheel(labels, SimpleNamespace(delta=np.array(delta), modifiers=modifiers))
+
+    wheel(["Shift"], [0, 1])
+    assert labels.selected_label == 3 and mc.selected_label_spinbox.value == 3
+    wheel(["Shift"], [-1, 0])   # Shift+wheel arriving as horizontal scrolling
+    assert labels.selected_label == 2
+    brush_size = labels.brush_size
+    wheel(["Alt"], [1, 0])
+    assert labels.brush_size == brush_size + 1
+    wheel([], [0, 1])
+    assert labels.selected_label == 2 and labels.brush_size == brush_size + 1
+
+
 def test_slice_annotation_fits_and_restores_camera(viewer, annotator):
     from napari_nd_annotator._widgets.minimal_surface_widget import EstimationWorker
     tools = annotator.ToolsWidget
