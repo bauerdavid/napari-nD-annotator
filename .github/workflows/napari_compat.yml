@@ -1,6 +1,8 @@
 # Runs the plugin's smoke tests (src/napari_nd_annotator/_tests/test_napari_compat.py) against several
 # napari versions, so that a napari release that breaks the plugin shows up here and not in a bug report.
 # The viewer is created but never shown; it needs OpenGL, which Mesa provides in software under xvfb.
+# Every widget in napari.yaml is also opened with add_plugin_dock_widget, i.e. the way the Plugins menu
+# opens it, with the viewer wrapped in napari's PublicOnlyProxy.
 #
 # The minimal-surface package is not installed here (it has no Linux wheels and needs SimpleITK built from
 # source), so the end-to-end Minimal Surface test is skipped; the rest of the Minimal Surface widget is not.

@@ -32,7 +32,8 @@ from ._utils import ScriptExecuteWidget, ProgressWidget
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from ._utils.callbacks import reduce_mask, extend_mask
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
-    layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer
+    layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
+    viewer_main_window
 from ..minimal_contour import FeatureManager
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
@@ -219,7 +220,7 @@ class MinimalContourWidget(MagicTemplate):
         self.draw_thread.started.connect(self.draw_worker.run)
         self._img = None
         self._features = None
-        self._viewer: napari.Viewer = viewer
+        self._viewer: napari.Viewer = unwrap_viewer(viewer)
         self._labels_layer: Labels = None
         self.apply_contrast_limits = True
         self._prev_img_layer = self.image_layer
@@ -901,11 +902,11 @@ class MinimalContourWidget(MagicTemplate):
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")
         self.viewer.dims.events.order.connect(self._set_image, position="last")
         self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
-        viewer_qt_viewer(self.viewer).window().installEventFilter(self.event_filter)
-        viewer_qt_viewer(self.viewer).window().setMouseTracking(True)
+        viewer_main_window(self.viewer).installEventFilter(self.event_filter)
+        viewer_main_window(self.viewer).setMouseTracking(True)
 
     def _initialize(self, viewer: napari.Viewer):
-        self._viewer = viewer
+        viewer = self._viewer = unwrap_viewer(viewer)
         self._initialize_helper_layers()
         self.feature_manager = FeatureManager(viewer)
         self._selected_layer_tracker = SelectedLayerTracker(self.viewer)
