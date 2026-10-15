@@ -457,35 +457,30 @@ class MinimalContourWidget(MagicTemplate):
         self.feature_editor.run_button.setToolTip("Open an image first" if self.image_layer is None else "")
         self._set_image("_on_image_changed")
 
-    # @labels_layer_combobox.connect
     def _on_label_change(self, _=None):
+        """Bind the Label Options section to the current labels layer (and unbind it from the previous one)."""
         labels_layer = self.labels_layer
         selected_label_spinbox = self.selected_label_spinbox
-        colorbox = self.color_box
         if labels_layer is not None:
             dtype_lims = get_dtype_limits(get_dtype(labels_layer))
-            selected_label_spinbox.value = labels_layer.selected_label
         else:
             dtype_lims = 0, np.iinfo(int).max
         selected_label_spinbox.min, selected_label_spinbox.max = dtype_lims
-        colorbox.layer = labels_layer
-        if self.prev_labels_layer is not None:
-            self.prev_labels_layer.events.selected_label.disconnect(self._on_selected_label_change)
-            if self._on_mouse_wheel in self.prev_labels_layer.mouse_wheel_callbacks:
-                self.prev_labels_layer.mouse_wheel_callbacks.remove(self._on_mouse_wheel)
-            # self.prev_labels_layer.bind_key("Shift", overwrite=True)(None)
-            self.prev_labels_layer.bind_key("Alt", overwrite=True)(None)
-            self.prev_labels_layer.bind_key("Control-+", overwrite=True)(None)
-            self.prev_labels_layer.bind_key("Control--", overwrite=True)(None)
-        if labels_layer is not None:
-            labels_layer.events.selected_label.connect(
-                self._on_selected_label_change
-            )
+        self.color_box.layer = labels_layer
+        prev_labels_layer = self.prev_labels_layer
+        if prev_labels_layer is not None and prev_labels_layer is not labels_layer:
+            prev_labels_layer.events.selected_label.disconnect(self._on_selected_label_change)
+            if self._on_mouse_wheel in prev_labels_layer.mouse_wheel_callbacks:
+                prev_labels_layer.mouse_wheel_callbacks.remove(self._on_mouse_wheel)
+        if labels_layer is not None and labels_layer is not prev_labels_layer:
+            labels_layer.events.selected_label.connect(self._on_selected_label_change)
             if self._on_mouse_wheel not in labels_layer.mouse_wheel_callbacks:
                 labels_layer.mouse_wheel_callbacks.append(self._on_mouse_wheel)
-            labels_layer.bind_key("Shift", overwrite=True)(self._shift_pressed)
-            self._on_selected_label_change()
         self.prev_labels_layer = labels_layer
+        if labels_layer is not None:
+            self._on_selected_label_change()
+        elif selected_label_spinbox.value != 0:
+            selected_label_spinbox.value = 0
 
     @used_feature_combobox.connect
     def _on_feature_change(self, used_feature, update_image=True):
@@ -621,11 +616,14 @@ class MinimalContourWidget(MagicTemplate):
         labels_layer = self.labels_layer
         if labels_layer is None:
             return
+        # some platforms turn Shift/Alt+wheel into horizontal scrolling, so take whichever axis moved
         delta = (np.sign(event.delta)).astype(int)
-        if self.shift_down:
-            labels_layer.selected_label = max(0, labels_layer.selected_label + delta[1])
-        elif self.alt_down:
-            diff = delta[0]
+        step = delta[1] if delta[1] != 0 else delta[0]
+        modifiers = event.modifiers
+        if "Shift" in modifiers:
+            labels_layer.selected_label = max(0, labels_layer.selected_label + step)
+        elif "Alt" in modifiers:
+            diff = step
             diff *= min(max(1, labels_layer.brush_size//10), 5)
             labels_layer.brush_size = max(1, labels_layer.brush_size + diff)
 
@@ -832,6 +830,7 @@ class MinimalContourWidget(MagicTemplate):
             return
         active_layer = self.viewer.layers.selection.active
         self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
+        self._on_label_change()
         if not self._labels_layer:
             self._show_no_labels_layer_selected_txt()
             return
@@ -902,7 +901,9 @@ class MinimalContourWidget(MagicTemplate):
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")
         self.viewer.dims.events.order.connect(self._set_image, position="last")
         self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
+        # key and wheel events go to the focused widget (usually the canvas), not to the main window
         viewer_main_window(self.viewer).installEventFilter(self.event_filter)
+        viewer_qt_viewer(self.viewer).canvas.native.installEventFilter(self.event_filter)
         viewer_main_window(self.viewer).setMouseTracking(True)
 
     def _initialize(self, viewer: napari.Viewer):
