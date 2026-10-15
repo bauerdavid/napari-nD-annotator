@@ -15,6 +15,7 @@ from napari.layers.labels._labels_constants import Mode
 from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
+from .._helper_functions import unwrap_viewer
 from .projections import SliceDisplayWidget
 
 try:
@@ -524,6 +525,7 @@ if BoundingBoxLayer:
 
     class ListWidgetBB(WidgetWithLayerList):
         def __init__(self, viewer: Viewer):
+            viewer = unwrap_viewer(viewer)
             super().__init__(viewer, [("bounding_box", BoundingBoxLayer), ("image", Image), ("labels", Labels)], add_layers=False)
             layout = QVBoxLayout()
             self.viewer = viewer

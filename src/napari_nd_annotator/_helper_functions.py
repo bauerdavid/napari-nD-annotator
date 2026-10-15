@@ -100,6 +100,19 @@ def viewer_camera(viewer):
     return viewer.camera
 
 
+def unwrap_viewer(viewer):
+    """The real viewer behind napari's ``PublicOnlyProxy``.
+
+    napari hands plugin widgets (Plugins menu, ``add_plugin_dock_widget``) a proxied
+    viewer. Everything reached through it is proxied too, and Qt rejects a proxied
+    widget (e.g. as a parent: "unexpected type 'PublicOnlyProxy'"), while private
+    attributes read through it warn. The widgets keep the unwrapped viewer instead.
+    """
+    while viewer is not None and type(viewer).__name__.endswith("PublicOnlyProxy"):
+        viewer = viewer.__wrapped__
+    return viewer
+
+
 def viewer_qt_viewer(viewer):
     """The ``QtViewer`` of the viewer's window.
 
@@ -107,7 +120,13 @@ def viewer_qt_viewer(viewer):
     earliest) but kept it as the private ``Window._qt_viewer``, which older versions
     don't have.
     """
-    window = viewer.window
+    window = unwrap_viewer(viewer).window
     if hasattr(window, "_qt_viewer"):
         return window._qt_viewer
     return window.qt_viewer
+
+
+def viewer_main_window(viewer):
+    """The viewer's Qt main window, found from its ``QtViewer`` with Qt's own
+    ``QWidget.window()`` instead of the private ``Window._qt_window``."""
+    return viewer_qt_viewer(viewer).window()

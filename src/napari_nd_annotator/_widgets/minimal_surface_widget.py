@@ -39,7 +39,7 @@ from napari.layers._source import layer_source
 
 from ._utils import ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
-from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera
+from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 
@@ -1196,7 +1196,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         return self._try_blurring_button
 
     def _initialize(self, viewer: napari.Viewer, minimal_contour_widget: MinimalContourWidget):
-        self._viewer = viewer
+        self._viewer = unwrap_viewer(viewer)
         self.minimal_contour_widget = minimal_contour_widget
         self.points_layer = self.viewer.add_points(ndim=3, size=2, name="3D Anchors [DO NOT REMOVE]")
         self.points_layer.events.data.connect(ColorPairsCallback())

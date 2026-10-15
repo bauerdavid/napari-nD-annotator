@@ -42,7 +42,7 @@ from ._utils.callbacks import (
 )
 from ._utils.help_dialog import HelpDialog
 from .._helper_functions import layer_ndisplay, layer_dims_displayed, layer_slice_indices, layer_dims_order, \
-    _coerce_indices_for_vectorization, layer_get_order
+    _coerce_indices_for_vectorization, layer_get_order, unwrap_viewer
 
 
 @magicclass(name="Annotation Toolbox")
@@ -60,7 +60,7 @@ class AnnotatorWidget(MagicTemplate):
         persist = dfield(default=bool)
 
     def __init__(self, viewer: napari.Viewer, persist=True):
-        self._viewer = viewer
+        self._viewer = unwrap_viewer(viewer)
         self.persist = persist
         self._active_labels_layer = None
         self._active_bbox_layer = None
