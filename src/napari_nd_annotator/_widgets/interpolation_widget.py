@@ -33,7 +33,7 @@ from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
 from .resources import interpolate_style_path, loading_icon_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization, \
-    layer_get_order, layer_dims_displayed, layer_dims_order, viewer_qt_viewer
+    layer_get_order, layer_dims_displayed, layer_dims_order, viewer_qt_viewer, unwrap_viewer, viewer_main_window
 from ..mean_contour import settings
 from ..mean_contour.meanContour import MeanThread
 from ..mean_contour._contour import calcRpsvInterpolation
@@ -280,7 +280,12 @@ class InterpolationWidget(MagicTemplate):
                                     "tooltip": f"Maximum number of iterations for {RPSV}. Can be fewer if points converge."
                                 })
 
-    def __init__(self):
+    def __init__(self, viewer: napari.Viewer = None):
+        # set when opened on its own ("Slice Interpolator"); inside the Annotation Toolbox
+        # the toolbox calls _initialize instead
+        self._standalone_viewer = viewer
+        self._viewer = None
+        self._annotator_widget = None
         self.progress_dialog = ProgressWidget(self.native, message="Interpolating slices...")
         # self.interpolation_worker.done.connect(lambda _: self.progress_dialog.setVisible(False))
         self._active_labels_layer = None
@@ -297,9 +302,11 @@ class InterpolationWidget(MagicTemplate):
     def __post_init__(self):
         self._on_method_changed(self.method)
         self.native.layout().addStretch()
+        if self._standalone_viewer is not None:
+            self._initialize(self._standalone_viewer, None)
 
     def _initialize(self, viewer: napari.Viewer, annotator_widget):
-        self._viewer = viewer
+        self._viewer = unwrap_viewer(viewer)
         self._on_active_layer_changed()
         self.viewer.dims.events.ndisplay.connect(self._ndisplay_changed)
         # self.viewer.dims.events.ndisplay.connect(lambda _: self._reset_contours() if self.viewer.dims.ndisplay == 3)
@@ -310,7 +317,8 @@ class InterpolationWidget(MagicTemplate):
 
         self.viewer.dims.events.current_step.connect(self._current_step_changed)
         self.viewer.dims.events.order.connect(self._dims_order_changed)
-        self.loading_icon = QSvgWidget(loading_icon_path, self._viewer.window._qt_window)
+        main_window = viewer_main_window(self.viewer)
+        self.loading_icon = QSvgWidget(loading_icon_path, main_window)
         self.loading_icon.setStyleSheet("background: transparent;")
         self.loading_icon.setAutoFillBackground(False)
         palette = self.loading_icon.palette()
@@ -325,7 +333,7 @@ class InterpolationWidget(MagicTemplate):
         self.loading_icon.show()
         self.event_filter = MoveLoadingIconEventFilter(self.loading_icon)
         self.loading_icon.installEventFilter(self.event_filter)
-        self.viewer.window._qt_window.installEventFilter(self.event_filter)
+        main_window.installEventFilter(self.event_filter)
         self.native.setMouseTracking(True)
 
     @debounce
@@ -627,7 +635,8 @@ class InterpolationWidget(MagicTemplate):
         if self._labels_update_tmp is not None:
             data, offset = self._labels_update_tmp
             self._labels_update_tmp = None
-            if layer.mode == "erase" or not self._annotator_widget.autofill_objects:
+            autofill = self._annotator_widget is not None and self._annotator_widget.autofill_objects
+            if layer.mode == "erase" or not autofill:
                 self._active_labels_layer.events.labels_update(data=data, offset=offset)
             else:
                 # Autofill paints the final shape from its own mouse_drag

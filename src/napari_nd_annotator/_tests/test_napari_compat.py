@@ -15,7 +15,7 @@ from unittest import mock
 import numpy as np
 import pytest
 
-from napari_nd_annotator._helper_functions import viewer_camera, viewer_qt_viewer
+from napari_nd_annotator._helper_functions import viewer_camera, viewer_qt_viewer, viewer_main_window, unwrap_viewer
 
 
 def _process_events():
@@ -51,6 +51,12 @@ def test_viewer_qt_viewer_prefers_private_attribute():
 
 def test_viewer_qt_viewer_falls_back_to_public_attribute():
     assert viewer_qt_viewer(SimpleNamespace(window=SimpleNamespace(qt_viewer="public"))) == "public"
+
+
+def test_unwrap_viewer_leaves_plain_objects_alone():
+    plain = SimpleNamespace()
+    assert unwrap_viewer(plain) is plain
+    assert unwrap_viewer(None) is None
 
 
 # --- the plugin inside a real viewer ---------------------------------------------------
@@ -90,6 +96,56 @@ def test_viewer_helpers_on_installed_napari(viewer):
     assert hasattr(viewer_qt_viewer(viewer), "controls")
     from napari_nd_annotator._helper_functions import viewer_canvas_size
     assert len(viewer_canvas_size(viewer)) == 2
+
+
+# --- the widgets opened the way napari opens them ---------------------------------------
+# The Plugins menu, ``napari -w`` and ``add_plugin_dock_widget`` pass the widget a viewer wrapped in
+# napari's PublicOnlyProxy, which Qt does not accept as a widget; constructing a widget with the real
+# viewer, as the tests above do, hides that.
+
+PLUGIN = "napari-nD-annotator"
+
+
+def _manifest_widgets():
+    # read at collection time, before napari has discovered its plugins
+    from npe2 import PluginManifest
+    manifest = PluginManifest.from_distribution(PLUGIN)
+    return [w.display_name for w in manifest.contributions.widgets]
+
+
+def test_manifest_lists_every_widget():
+    assert set(_manifest_widgets()) >= {"Annotation Toolbox", "Slice Interpolator", "Object List"}
+
+
+@pytest.fixture
+def no_persisted_settings(tmp_path):
+    # the Annotation Toolbox opened from the menu saves its settings; keep them out of the user's cache
+    with mock.patch("magicgui._util.user_cache_dir", lambda *_: tmp_path):
+        yield
+
+
+@pytest.mark.parametrize("name", _manifest_widgets())
+def test_widget_opens_as_plugin_dock_widget(viewer, deprecations, no_persisted_settings, name):
+    dock_widget, widget = viewer.window.add_plugin_dock_widget(PLUGIN, name)
+    _process_events()
+    assert dock_widget is not None and widget is not None
+
+    if name == "Annotation Toolbox":
+        tools = widget.ToolsWidget
+        assert widget._viewer is viewer
+        assert tools.interpolation_widget.loading_icon.parent() is viewer_main_window(viewer)
+        assert tools.minimal_contour_widget.viewer is viewer
+    elif name == "Slice Interpolator":
+        # on its own it has no Annotation Toolbox to set it up, so it has to do so itself
+        assert widget.viewer is viewer
+        assert widget.loading_icon.parent() is viewer_main_window(viewer)
+
+    viewer.add_image(np.zeros((5, 20, 20)), name="image")
+    labels = viewer.add_labels(np.zeros((5, 20, 20), dtype=np.uint16), name="labels")
+    viewer.layers.selection.active = labels
+    _process_events()
+    if name in ("Annotation Toolbox", "Slice Interpolator"):
+        assert "interpolation" in labels._overlays
 
 
 def test_labels_layer_gets_overlays_and_controls(viewer, annotator):
