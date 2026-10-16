@@ -18,6 +18,7 @@ import warnings
 import keyword
 import psygnal
 from . import ProgressWidget
+from .shortcuts import BY_ID
 
 
 def execute_script(script, other_locals=None):
@@ -179,7 +180,7 @@ class ScriptExecuteWidget(FreeWidget):
         self.script_thread.started.connect(self.script_worker.run, Qt.DirectConnection)
         self.script_thread.finished.connect(lambda: self.progress_dialog.setVisible(False))
 
-    @bind_key("Ctrl+Enter")
+    @bind_key(BY_ID["run_script"].keys[0])
     def Run(self):
         self.script_thread.wait()
         variables = self.variables
@@ -199,14 +200,14 @@ class ScriptExecuteWidget(FreeWidget):
     # def value(self):
     #     return self._variables
 
-    @bind_key("Ctrl-+")
+    @bind_key(BY_ID["script_font_larger"].keys[0])
     def _increase_font_size(self):
         font = self.code_editor.font()
         font.setPointSize(font.pointSize() + 1)
         self.code_editor.setFont(font)
         self.text_settings.setValue("script_font_size", font.pointSize())
 
-    @bind_key("Ctrl--")
+    @bind_key(BY_ID["script_font_smaller"].keys[0])
     def _decrease_font_size(self):
         font = self.code_editor.font()
         font.setPointSize(font.pointSize() - 1)

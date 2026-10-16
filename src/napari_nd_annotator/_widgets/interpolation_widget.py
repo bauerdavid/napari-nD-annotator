@@ -31,6 +31,7 @@ from skimage.measure import regionprops
 from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
+from ._utils.shortcuts import LABELS, bind_all
 from .resources import interpolate_style_path, loading_icon_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization, \
     layer_get_order, layer_dims_displayed, layer_dims_order, viewer_qt_viewer, unwrap_viewer, viewer_main_window
@@ -578,7 +579,7 @@ class InterpolationWidget(MagicTemplate):
             labels_control.button_group.addButton(interpolate_button)
             labels_control.interpolate_button = interpolate_button
             labels_control.button_grid.addWidget(labels_control.interpolate_button, 1, 1)
-            self._active_labels_layer.bind_key("I", self.Interpolate)
+            bind_all(self._active_labels_layer, LABELS, {"interpolate": self.Interpolate})
         self._reset_contours()
         self._interpolate_all()
 

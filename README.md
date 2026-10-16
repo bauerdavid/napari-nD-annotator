@@ -156,23 +156,33 @@ https://user-images.githubusercontent.com/36735863/191025028-3f807bd2-1f2e-40d2-
 
 ### Shortcuts
 
-| Action                                        | Mouse               | Keyboard       |
-|-----------------------------------------------|---------------------|----------------|
-| Increment selected label                      | `Shift + Wheel ⬆️`  | `E`            |
-| Decrement selected label                      | `Shift + Wheel ⬇️`  | `Q`            |
-| Previous slice                                | `Ctrl + Wheel ⬆️`\* | `A`            |
-| Next slice                                    | `Ctrl + Wheel ⬇️`\* | `D`            |
-| Increase paint brush size of labels layer     | `Alt + Wheel ⬆️`    | `W`            |
-| Decrease paint brush size of labels layer     | `Alt + Wheel ⬇️`    | `S`            |
-| Interpolate                                   | -                   | `Ctrl+I`       |
-| Change between 'Anchors' and the labels layer | -                   | `Ctrl+Tab`     |
-| Jump to layer `#i`                            | -                   | `Ctrl+'i'`\*\* |
+<!-- shortcuts:start -->
+| Action | Mouse | Keyboard |
+|---|---|---|
+| Increment selected label | `Shift+Wheel ⬆️` | `E` |
+| Decrement selected label | `Shift+Wheel ⬇️` | `Q` |
+| Previous slice | `Ctrl+Wheel ⬆️`\* | `A` |
+| Next slice | `Ctrl+Wheel ⬇️`\* | `D` |
+| Increase paint brush size | `Alt+Wheel ⬆️` | `W` |
+| Decrease paint brush size | `Alt+Wheel ⬇️` | `S` |
+| Extend the selected label by one pixel (dilation) | - | `Ctrl+Plus` |
+| Reduce the selected label by one pixel (erosion) | - | `Ctrl+Minus` |
+| Interpolate | - | `I` |
+| Switch to minimal contour mode | - | `0` |
+| Hold to draw straight lines in minimal contour mode | - | `Ctrl` |
+| Clear the minimal contour being drawn | - | `Escape` |
+| Jump to the layer at the given index | - | `Ctrl+1 – Ctrl+9` |
+| Hold to hide the bounding boxes (Object List) | - | `D` |
+| Run the script (feature editor) | - | `Ctrl+Enter` |
+| Increase the script editor font size | - | `Ctrl+Plus` |
+| Decrease the script editor font size | - | `Ctrl+Minus` |
+<!-- shortcuts:end -->
 
-> *Built-in functionality of [napari]
-> 
-> **`i`: 0-9
+> \*Built-in functionality of [napari]
 
 > **Note**: you can check the list of available shortcuts by clicking the `?` button in the bottom right corner of the main widget.
+> The table above and that dialog are generated from `src/napari_nd_annotator/_widgets/_utils/shortcuts.py`; to add or change a shortcut edit it there
+> and regenerate the table with `python -m napari_nd_annotator._widgets._utils.shortcuts`.
 
 ## License
 
