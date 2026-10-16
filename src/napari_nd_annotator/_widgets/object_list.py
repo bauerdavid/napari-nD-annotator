@@ -15,7 +15,7 @@ from napari.layers.labels._labels_constants import Mode
 from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
-from .._helper_functions import unwrap_viewer
+from .._helper_functions import unwrap_viewer, viewer_qt_viewer
 from .projections import SliceDisplayWidget
 
 try:
@@ -184,15 +184,16 @@ if BoundingBoxLayer:
                 mask_layer.selected_label = self.idx
                 mask_layer.translate = self.crop_translate(self.mask_layer)
                 mask_layer.brush_size = self.mask_layer.brush_size
-                try:
-                    mask_layer.mode = self.mask_layer.mode
-                except (ValueError, TypeError):
-                    mask_layer.mode = Mode.PAINT
                 if image_layer is not None:
                     # lets the minimal contour widget find the image to work on
                     mask_layer.metadata["source_image_layer"] = image_layer
                 self.mask_layer.events.data.connect(mask_layer.refresh)
                 self.viewer.add_layer(mask_layer)
+                # set after adding, so that the layer controls follow the mode
+                try:
+                    mask_layer.mode = self.mask_layer.mode
+                except (ValueError, TypeError):
+                    mask_layer.mode = Mode.PAINT
             else:
                 mask_layer = None
             return image_layer, mask_layer
@@ -233,6 +234,13 @@ if BoundingBoxLayer:
                 self.viewer.window.add_dock_widget(self.parent.projections_widget)
             self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
             self.viewer.layers.selection.select_only(self.parent.crop_mask_layer)
+            # the minimal contour tool is not a napari mode (it borrows pan/zoom), so it is carried over separately
+            mc_overlay = self.mask_layer._overlays.get("minimal_contour")
+            if mc_overlay is not None and mc_overlay.enabled:
+                mc_button = getattr(viewer_qt_viewer(self.viewer).controls.widgets.get(self.parent.crop_mask_layer),
+                                    "mc_button", None)
+                if mc_button is not None:
+                    mc_button.click()
             self.mask_layer.selected_label = self.idx
             self.mask_layer.visible = False
             self.image_layer.visible = False
@@ -465,7 +473,7 @@ if BoundingBoxLayer:
             self._mouse_down = True
             yield
             if len(layer.data)>len(previous_data):
-                self.bounding_box_layer.features["label"].iat[-1] = self.next_index()
+                self.bounding_box_layer.features.iloc[-1, self.bounding_box_layer.features.columns.get_loc("label")] = self.next_index()
                 text = dict(layer.text)
                 text["text"] = "{label:d}"
                 layer.text = text

@@ -3,12 +3,15 @@
 Like the other viewer tests these need a GL-capable Qt platform, and the napari-bbox plugin.
 """
 import itertools
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from napari.layers.labels._labels_constants import Mode
 
 pytest.importorskip("napari_bbox")
+
+from napari_nd_annotator._helper_functions import viewer_qt_viewer  # noqa: E402
 
 SCALE = (3., 1., 1.)
 TRANSLATE = (5., 2., 3.)
@@ -104,11 +107,13 @@ def test_selecting_an_object_keeps_the_labels_mode(viewer, scene, mode):
     labels.mode = mode
     _, crop_labels = _select_object(viewer, labels, object_list)
     assert crop_labels.mode == mode
+    # the layer controls show the same tool
+    controls = viewer_qt_viewer(viewer).controls.widgets[crop_labels]
+    assert controls.button_group.checkedButton().mode == mode
 
 
 def test_minimal_contour_writes_back_to_the_original_labels(viewer, scene):
     from napari_nd_annotator import AnnotatorWidget
-    from napari_nd_annotator._helper_functions import viewer_qt_viewer
     _, labels, object_list = scene
     annotator = AnnotatorWidget(viewer, persist=False)
     viewer.window.add_dock_widget(annotator, name="Annotator")
@@ -132,3 +137,36 @@ def test_minimal_contour_writes_back_to_the_original_labels(viewer, scene):
     expected[BBOX_MIN[0] + 2, BBOX_MIN[1] + 2:BBOX_MIN[1] + 8, BBOX_MIN[2] + 3:BBOX_MIN[2] + 10] = True
     np.testing.assert_array_equal(labels.data == OBJECT_ID, expected)
     assert np.all(labels.data[~expected] == 0)
+
+
+def test_minimal_contour_tool_is_carried_over(viewer, scene):
+    from napari_nd_annotator import AnnotatorWidget
+    _, labels, object_list = scene
+    annotator = AnnotatorWidget(viewer, persist=False)
+    viewer.window.add_dock_widget(annotator, name="Annotator")
+    viewer.layers.selection.select_only(labels)
+    viewer_qt_viewer(viewer).controls.widgets[labels].mc_button.click()
+    _process_events()
+    assert labels._overlays["minimal_contour"].enabled
+    _, crop_labels = _select_object(viewer, labels, object_list)
+    mc_button = viewer_qt_viewer(viewer).controls.widgets[crop_labels].mc_button
+    assert mc_button.isChecked()
+    assert crop_labels._overlays["minimal_contour"].enabled
+
+
+def test_new_bounding_boxes_get_consecutive_labels(viewer, scene):
+    _, _, object_list = scene
+    bbox_layer = object_list.bounding_box_layer
+    object_list.indices = 2
+    for i, (box_min, box_max) in enumerate((([1, 5, 5], [4, 20, 20]), ([2, 25, 25], [6, 30, 30]))):
+        event = SimpleNamespace(type="mouse_press")
+        callback = object_list.bounding_box_change(bbox_layer, event)
+        next(callback)
+        corners = np.where(list(itertools.product((False, True), repeat=3)), box_max, box_min)
+        bbox_layer.add(corners*SCALE + TRANSLATE)  # what drawing a box does
+        event.type = "mouse_release"
+        for _ in callback:
+            pass
+        _process_events()
+        assert list(bbox_layer.features["label"]) == [OBJECT_ID] + list(range(2, 3 + i))
+        assert [object_list.item(j).idx for j in range(object_list.count())] == list(bbox_layer.features["label"])
