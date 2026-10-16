@@ -31,6 +31,7 @@ from ._utils.changeable_color_box import QtChangeableColorBox
 from ._utils import ScriptExecuteWidget, ProgressWidget
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from ._utils.callbacks import reduce_mask, extend_mask
+from ._utils.shortcuts import LABELS, VIEWER, bind_all
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
     layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
     viewer_main_window
@@ -848,7 +849,7 @@ class MinimalContourWidget(MagicTemplate):
             if self._labels_layer not in self.viewer.layers:
                 return
         if "minimal_contour" not in self._labels_layer._overlays:
-            self._labels_layer.bind_key("Control", self._on_ctrl_pressed)
+            bind_all(self._labels_layer, LABELS, {"straight_lines": self._on_ctrl_pressed})
             self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
             self._labels_layer._overlays["minimal_contour"].visible=True
             labels_control: QtLabelsControls = viewer_qt_viewer(self.viewer).controls.widgets[self._labels_layer]
@@ -869,7 +870,7 @@ class MinimalContourWidget(MagicTemplate):
             def switch_to_mc_mode(*_, **__):
                 self._labels_layer.mode = Mode.PAN_ZOOM
                 self._enable_mc_mode()
-            self._labels_layer.bind_key("0", switch_to_mc_mode)
+            bind_all(self._labels_layer, LABELS, {"minimal_contour_mode": switch_to_mc_mode})
         self.labels_layer._overlays["minimal_contour"].contour_smoothness = self.contour_smoothness if self.is_contour_smoothing_enabled else 1.
         self._on_image_changed()
         self._show_base_widgets()
@@ -894,8 +895,7 @@ class MinimalContourWidget(MagicTemplate):
 
             return change_layer
 
-        for i in range(1, 10):
-            self.viewer.bind_key("Control-%d" % i, overwrite=True)(change_layer_callback(i))
+        bind_all(self.viewer, VIEWER, {"jump_to_layer": lambda key: change_layer_callback(int(key[-1]))})
         self.viewer.dims.events.current_step.connect(self._delayed_set_image, position="last")
 
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")

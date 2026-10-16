@@ -11,6 +11,7 @@ from napari._vispy.utils import visual
 from napari.layers import Labels
 from napari.layers.labels._labels_constants import Mode
 from napari.layers.labels._labels_utils import mouse_event_to_labels_coordinate
+from .._utils.shortcuts import LABELS, bind_all
 from napari.settings import get_settings
 from napari_nd_annotator.minimal_contour._eikonal_wrapper import MinimalContourCalculator
 from vispy.scene import Polygon, Line, Compound, Markers
@@ -121,7 +122,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         layer.events.selected_label.connect(self._update_color)
         layer.events.colormap.connect(self._update_color)
         layer.events.opacity.connect(self._update_color)
-        layer.bind_key("Escape", self.clear, overwrite=True)
+        bind_all(layer, LABELS, {"clear_contour": self.clear})
         # set completion radius based on settings
 
         self.reset()
