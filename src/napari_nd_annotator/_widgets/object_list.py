@@ -142,10 +142,10 @@ if BoundingBoxLayer:
             if self.parent.crop_image_layer is not None and \
                 self.parent.selected_idx == self.parent.indexFromItem(self).row():
                 self.parent.crop_image_layer.data = self.image_layer.data[self.bbox_idx]
-                self.parent.crop_image_layer.translate = tuple(self.bounding_box[0, :])
+                self.parent.crop_image_layer.translate = self.crop_translate(self.image_layer)
                 self.parent.crop_image_layer.refresh()
                 self.parent.crop_mask_layer.data = self.mask_layer.data[self.bbox_idx]
-                self.parent.crop_mask_layer.translate = tuple(self.bounding_box[0, :])
+                self.parent.crop_mask_layer.translate = self.crop_translate(self.mask_layer)
                 self.parent.crop_mask_layer.refresh()
             self.update_icon()
 
@@ -163,22 +163,34 @@ if BoundingBoxLayer:
         def name(self, name):
             self.object_item.name = name
 
+        def crop_translate(self, layer):
+            # the bounding box is in data (index) coordinates, translate is in world coordinates
+            return self.bounding_box[0, :]*layer.scale + layer.translate
+
         def create_layers(self):
             if self.image_layer is not None:
                 image_layer = Image(self.image_layer.data[self.bbox_idx],
                                     name="Cropped %s %d" % (self.image_layer.name, self.idx),
-                                    colormap=self.image_layer.colormap, rgb=self.image_layer.rgb)
-                image_layer.translate = self.bounding_box[0, :]+self.image_layer.translate
+                                    colormap=self.image_layer.colormap, rgb=self.image_layer.rgb,
+                                    scale=self.image_layer.scale)
+                image_layer.translate = self.crop_translate(self.image_layer)
                 self.viewer.add_layer(image_layer)
             else:
                 image_layer = None
             if self.mask_layer is not None:
                 mask_layer = Labels(self.mask_layer.data[self.bbox_idx],
-                                    name="Cropped %s %d" % (self.mask_layer.name, self.idx))
+                                    name="Cropped %s %d" % (self.mask_layer.name, self.idx),
+                                    scale=self.mask_layer.scale)
                 mask_layer.selected_label = self.idx
-                mask_layer.translate = self.bounding_box[0, :]+self.mask_layer.translate
-                mask_layer.brush_size = 1
-                mask_layer.mode = Mode.PAINT
+                mask_layer.translate = self.crop_translate(self.mask_layer)
+                mask_layer.brush_size = self.mask_layer.brush_size
+                try:
+                    mask_layer.mode = self.mask_layer.mode
+                except (ValueError, TypeError):
+                    mask_layer.mode = Mode.PAINT
+                if image_layer is not None:
+                    # lets the minimal contour widget find the image to work on
+                    mask_layer.metadata["source_image_layer"] = image_layer
                 self.mask_layer.events.data.connect(mask_layer.refresh)
                 self.viewer.add_layer(mask_layer)
             else:
@@ -200,9 +212,11 @@ if BoundingBoxLayer:
             if self.parent.projections_widget is not None:
                 self.viewer.window.remove_dock_widget(self.parent.projections_widget)
                 self.parent.projections_widget = None
-            if self.mask_layer is not None:
+            # napari stores the mode on hiding a layer and restores it on showing it, but setting
+            # `visible = True` on a layer that is already visible resets the mode to pan/zoom
+            if self.mask_layer is not None and not self.mask_layer.visible:
                 self.mask_layer.visible = True
-            if self.image_layer is not None:
+            if self.image_layer is not None and not self.image_layer.visible:
                 self.image_layer.visible = True
 
         def on_select(self):
@@ -396,9 +410,11 @@ if BoundingBoxLayer:
         def bounding_box_corners(self):
             if self._bounding_box_layer is None or len(self._bounding_box_layer.data) == 0:
                 return []
-            b_data = np.round(np.asarray(self._bounding_box_layer.data)).astype(int)
+            b_data = np.asarray(self._bounding_box_layer.data)
             if self.image_layer is not None:
-                b_data -= self.image_layer.translate.astype(int)
+                # the bounding boxes are in world coordinates, the item bounding boxes in data (index) ones
+                b_data = (b_data - self.image_layer.translate) / self.image_layer.scale
+            b_data = np.round(b_data).astype(int)
             return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
         def eventFilter(self, source: QObject, event: QEvent) -> bool:
@@ -458,17 +474,21 @@ if BoundingBoxLayer:
                 yield
             self._mouse_down = False
             new_data = np.asarray(layer.data)
+            # the bounding boxes are in world coordinates
             if self.image_layer:
                 im_size = self.image_layer.data.shape
                 if self.image_layer.rgb:
                     im_size = im_size[:-1]
+                world_min = np.asarray(self.image_layer.translate)
+                world_max = np.asarray(im_size)*self.image_layer.scale + world_min
             else:
-                im_size = (np.inf,)*new_data.shape[-1]
-            if len(new_data) > 0 and (np.any(np.all(new_data > im_size, 1))\
-                    or np.any(np.all(new_data < 0, 1))):
+                world_min = np.zeros(new_data.shape[-1])
+                world_max = np.full(new_data.shape[-1], np.inf)
+            if len(new_data) > 0 and (np.any(np.all(new_data > world_max, 1))\
+                    or np.any(np.all(new_data < world_min, 1))):
                 layer.data = previous_data
             if len(new_data) > len(previous_data):
-                layer.data[-1][:] = np.clip(layer.data[-1], 0, np.asarray(self.image_layer.data.shape) - 1)
+                layer.data[-1][:] = np.clip(layer.data[-1], world_min, world_max - self.image_layer.scale)
                 layer.data = layer.data
             self.update_items()
             if self.projections_widget is not None:
