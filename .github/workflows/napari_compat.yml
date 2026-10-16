@@ -6,7 +6,8 @@
 # opens it, with the viewer wrapped in napari's PublicOnlyProxy.
 #
 # The minimal-surface package is not installed here (it has no Linux wheels and needs SimpleITK built from
-# source), so the end-to-end Minimal Surface test is skipped; the rest of the Minimal Surface widget is not.
+# source), so the end-to-end Minimal Surface test is skipped; minimal_surface.yml runs it with the package
+# built from source. The rest of the Minimal Surface widget is tested here.
 
 name: napari_compat
 

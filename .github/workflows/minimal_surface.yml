@@ -1,0 +1,104 @@
+# Runs the end-to-end test of the Minimal Surface widget (src/napari_nd_annotator/_tests/test_minimal_surface_widget.py)
+# with the real minimal-surface package, which napari_compat.yml cannot install: it has no PyPI wheels for Linux and
+# links against the SimpleITK C++ libraries.
+#
+# As in minimal-surface's own build.yml, conda-forge provides those libraries (libsimpleitk, libitk-devel) and
+# minimal-surface master is built against them with SIMPLEITK_PATH. The napari, Qt and plugin packages come from
+# pip, as in napari_compat.yml. Once minimal-surface publishes Linux wheels to PyPI, the micromamba, checkout and
+# build steps can be replaced by `pip install minimal-surface`.
+#
+# REQUIRE_MINIMAL_SURFACE=1 turns the test's skips (package missing, no OpenGL context) into failures, so that this
+# job cannot go green without having run the estimation.
+
+name: minimal_surface
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: minimal-surface-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # a login shell, so that the micromamba environment is active in every step
+    shell: bash -el {0}
+
+jobs:
+  minimal_surface:
+    name: Minimal Surface widget (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: bauerdavid/minimal-surface
+          ref: master
+          path: minimal-surface
+
+      - name: Install system libraries for Qt, xvfb and software OpenGL
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 \
+            libxcb-cursor0 libdbus-1-3 libfontconfig1
+
+      - name: Set up the conda environment with SimpleITK
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: ms
+          init-shell: bash
+          condarc: |
+            channels:
+              - conda-forge
+            channel_priority: strict
+          create-args: >-
+            python=${{ matrix.python }}
+            libsimpleitk=2.5.*
+            libitk-devel
+            numpy
+            pip
+            compilers
+
+      - name: Build and install minimal-surface
+        run: |
+          export SIMPLEITK_PATH="$CONDA_PREFIX"
+          python -m pip wheel ./minimal-surface --no-deps --wheel-dir dist -v
+          python -m pip install --no-deps dist/*.whl
+
+      - name: Install napari and the plugin
+        run: |
+          python -m pip install napari PyQt6 pytest
+          python -m pip install .
+          # opencv-python bundles its own Qt platform plugins, which can abort the process at the first
+          # QApplication; the headless build of the same version has none
+          OPENCV_VERSION=$(python -c "import importlib.metadata as m; print(m.version('opencv-python'))")
+          python -m pip uninstall -y opencv-python
+          python -m pip install "opencv-python-headless==$OPENCV_VERSION"
+          python -m pip list | grep -i -E "napari|numpy|qt|vispy|simpleitk|minimal"
+
+      - name: Run the Minimal Surface widget test
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          REQUIRE_MINIMAL_SURFACE: "1"
+        run: |
+          # run the installed package (not the checkout) so that the wheel contents are tested too
+          xvfb-run -a -s "-screen 0 1280x1024x24" python -m pytest -v -rs --pyargs napari_nd_annotator._tests.test_minimal_surface_widget
