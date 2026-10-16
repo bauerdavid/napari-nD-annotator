@@ -8,7 +8,13 @@ pressing "Done" on the slice annotation is simulated, and every exception raised
 The test needs the optional ``minimal_surface`` package and an OpenGL context (napari creates its
 canvas even if the viewer is not shown), so it is skipped when either is missing. On Linux CI run it
 under xvfb with software GL, with ``QT_QPA_PLATFORM`` unset (the ``offscreen`` platform has no GL).
+Set ``REQUIRE_MINIMAL_SURFACE=1`` (as the CI jobs that install minimal-surface do) to make a missing
+package or a missing GL context a failure instead of a skip.
+
+Besides the exceptions, the test fails if the run triggered a deprecation warning from the plugin
+(the ``deprecations`` fixture of ``test_napari_compat.py``).
 """
+import os
 import threading
 import time
 import traceback
@@ -17,7 +23,20 @@ import numpy as np
 import pytest
 from qtpy import QtWidgets
 
-pytest.importorskip("minimal_surface")
+# the fixtures of the compatibility tests: the Annotation Toolbox docked in a viewer, and the deprecation check
+from .test_napari_compat import deprecations, annotator  # noqa: F401
+
+
+def _skip(reason):
+    if os.environ.get("REQUIRE_MINIMAL_SURFACE") == "1":
+        pytest.fail(reason, pytrace=False)
+    pytest.skip(reason, allow_module_level=True)
+
+
+try:
+    import minimal_surface  # noqa: F401
+except ImportError as e:
+    _skip("the optional minimal_surface package is not installed: %r" % e)
 
 BALL_CENTER = (20, 30, 30)
 BALL_SHAPE = (40, 60, 60)
@@ -38,7 +57,7 @@ def viewer(qtbot):
     try:
         viewer = napari.Viewer(show=False)
     except Exception as e:  # no GL context / no usable Qt platform
-        pytest.skip("cannot create a napari viewer (no OpenGL context?): %r" % e)
+        _skip("cannot create a napari viewer (no OpenGL context?): %r" % e)
     yield viewer
     viewer.close()
     QtWidgets.QApplication.processEvents()
@@ -84,6 +103,8 @@ def no_dialogs(monkeypatch):
                         staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes))
 
 
+# F1-F4 of the 2026-10-12 widget scan: the "Minimal contour" slice annotation, z_scale, float32 images (fixed in
+# minimal-surface master) and a Labels layer of another shape; they were strict xfails until fixed
 @pytest.mark.parametrize(
     "dtype, method, z_scale, mismatch",
     [
@@ -91,27 +112,18 @@ def no_dialogs(monkeypatch):
         ("uint16", "Threshold", 1.0, False),
         ("float64", "Manual", 1.0, False),
         ("uint16", "Manual", 1.0, False),
-        pytest.param("float64", "Minimal contour", 1.0, False, id="float64-Minimal contour-F1",
-                     marks=pytest.mark.xfail(strict=True, reason="F1")),
-        # the process is killed by an access violation in the C++ code, so the test must not even run
-        pytest.param("float64", "Threshold", 2.0, False, id="float64-Threshold-F2",
-                     marks=pytest.mark.xfail(strict=True, run=False, reason="F2")),
-        pytest.param("float32", "Threshold", 1.0, False, id="float32-Threshold-F3",
-                     marks=pytest.mark.xfail(strict=True, reason="F3")),
-        pytest.param("float64", "Threshold", 1.0, True, id="float64-Threshold-F4",
-                     marks=pytest.mark.xfail(strict=True, reason="F4")),
+        pytest.param("float64", "Minimal contour", 1.0, False, id="float64-Minimal contour-F1"),
+        pytest.param("float64", "Threshold", 2.0, False, id="float64-Threshold-F2"),
+        pytest.param("float32", "Threshold", 1.0, False, id="float32-Threshold-F3"),
+        pytest.param("float64", "Threshold", 1.0, True, id="float64-Threshold-F4"),
     ],
 )
-def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, workers, dtype, method, z_scale, mismatch):
-    from napari_nd_annotator import AnnotatorWidget
-
+def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, workers, dtype, method, z_scale, mismatch):
     with qtbot.capture_exceptions() as exceptions:
         monkeypatch.setattr(threading, "excepthook",
                             lambda args: exceptions.append((args.exc_type, args.exc_value, args.exc_traceback)))
 
-        widget = AnnotatorWidget(viewer, persist=False)
-        viewer.window.add_dock_widget(widget, name="Annotator")
-        ms = widget.ToolsWidget.minimal_surface_widget
+        ms = annotator.ToolsWidget.minimal_surface_widget
 
         layer = viewer.add_image(_ball_image(dtype), name="ball")
         ms.image_layer = layer
