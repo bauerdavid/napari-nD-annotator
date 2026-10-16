@@ -606,6 +606,9 @@ if BoundingBoxLayer:
             if self.list_widget is None:
                 self.create_list_widget()
             self.list_widget.bounding_box_layer = self.bounding_box.layer
+            self.reset_index_after_existing_labels()
+
+        def reset_index_after_existing_labels(self):
             if "label" in self.bounding_box.layer.features and len(self.bounding_box.layer.features):
                 self.reset_index(max(self.bounding_box.layer.features["label"]) + 1)
             else:
@@ -647,6 +650,7 @@ if BoundingBoxLayer:
             self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box.layer, self.image_layer, self.labels.layer, self.channels_dim, 1)
             self.list_widget_container.addWidget(self.list_widget)
             self.list_widget_container.setCurrentIndex(1)
+            self.reset_index_after_existing_labels()
 
         def remove_list_widget(self):
             while self.list_widget_container.count() > 1:

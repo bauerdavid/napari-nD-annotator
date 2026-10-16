@@ -170,3 +170,11 @@ def test_new_bounding_boxes_get_consecutive_labels(viewer, scene):
         _process_events()
         assert list(bbox_layer.features["label"]) == [OBJECT_ID] + list(range(2, 3 + i))
         assert [object_list.item(j).idx for j in range(object_list.count())] == list(bbox_layer.features["label"])
+
+
+def test_new_bounding_box_labels_continue_after_the_existing_ones(viewer, scene):
+    from napari_nd_annotator import ListWidgetBB
+    # the widget is opened when the bounding box layer already has objects
+    widget = ListWidgetBB(viewer)
+    assert widget.list_widget.bounding_box_layer is scene[2].bounding_box_layer
+    assert widget.list_widget.next_index() == OBJECT_ID + 1
