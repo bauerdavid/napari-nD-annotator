@@ -41,8 +41,13 @@ from ._utils.callbacks import (
     LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
+from ._utils.shortcuts import LABELS, bind_all, unbind_all
 from .._helper_functions import layer_ndisplay, layer_dims_displayed, layer_slice_indices, layer_dims_order, \
     _coerce_indices_for_vectorization, layer_get_order, unwrap_viewer
+
+
+_ANNOTATOR_LABELS_SHORTCUTS = ("extend_mask", "reduce_mask", "decrement_label", "increment_label", "previous_slice",
+                               "next_slice", "increase_brush", "decrease_brush")
 
 
 @magicclass(name="Annotation Toolbox")
@@ -149,12 +154,7 @@ class AnnotatorWidget(MagicTemplate):
     def _unset_labels_callbacks(self):
         if self.active_labels_layer is None:
             return
-        self.active_labels_layer.bind_key("Control-+", overwrite=True)(None)
-        self.active_labels_layer.bind_key("Control--", overwrite=True)(None)
-        self.active_labels_layer.bind_key("Q", overwrite=True)(None)
-        self.active_labels_layer.bind_key("E", overwrite=True)(None)
-        self.active_labels_layer.bind_key("A", overwrite=True)(None)
-        self.active_labels_layer.bind_key("D", overwrite=True)(None)
+        unbind_all(self.active_labels_layer, LABELS, _ANNOTATOR_LABELS_SHORTCUTS)
 
     def _set_labels_callbacks(self):
         if self.active_labels_layer is None:
@@ -162,14 +162,16 @@ class AnnotatorWidget(MagicTemplate):
         if self._start_update_bbox not in self.active_labels_layer.events.selected_label.callbacks:
             self.active_labels_layer.events.selected_label.connect(self._start_update_bbox)
             self.active_labels_layer.events.data.connect(self._start_update_bbox)
-        self.active_labels_layer.bind_key("Control-+", overwrite=True)(extend_mask)
-        self.active_labels_layer.bind_key("Control--", overwrite=True)(reduce_mask)
-        self.active_labels_layer.bind_key("Q", overwrite=True)(decrement_selected_label)
-        self.active_labels_layer.bind_key("E", overwrite=True)(increment_selected_label)
-        self.active_labels_layer.bind_key("A", overwrite=True)(scroll_to_prev(self._viewer))
-        self.active_labels_layer.bind_key("D", overwrite=True)(scroll_to_next(self._viewer))
-        self.active_labels_layer.bind_key("W", overwrite=True)(increase_brush_size)
-        self.active_labels_layer.bind_key("S", overwrite=True)(decrease_brush_size)
+        bind_all(self.active_labels_layer, LABELS, {
+            "extend_mask": extend_mask,
+            "reduce_mask": reduce_mask,
+            "decrement_label": decrement_selected_label,
+            "increment_label": increment_selected_label,
+            "previous_slice": scroll_to_prev(self._viewer),
+            "next_slice": scroll_to_next(self._viewer),
+            "increase_brush": increase_brush_size,
+            "decrease_brush": decrease_brush_size,
+        })
 
     def _move_bbox_to_top(self, e=None):
         if self._active_bbox_layer not in self._viewer.layers:
