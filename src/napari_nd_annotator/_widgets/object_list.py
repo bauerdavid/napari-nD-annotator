@@ -15,6 +15,7 @@ from napari.layers.labels._labels_constants import Mode
 from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
+from ._utils.shortcuts import VIEWER, bind_all, unbind_all
 from .._helper_functions import unwrap_viewer, viewer_qt_viewer
 from .projections import SliceDisplayWidget
 
@@ -313,7 +314,7 @@ if BoundingBoxLayer:
             self.update_items()
             self.itemClicked.connect(self.select_item)
             self.installEventFilter(self)
-            self.viewer.bind_key('d', overwrite=True)(self.toggle_bb_visibility)
+            bind_all(self.viewer, VIEWER, {"toggle_bounding_boxes": self.toggle_bb_visibility})
             # bounding_box_layer.events.set_data.connect(on_data_change)
 
         @property
@@ -478,7 +479,7 @@ if BoundingBoxLayer:
             return super().eventFilter(source, event)
 
         def hideEvent(self, a0: QHideEvent) -> None:
-            self.viewer.bind_key('d')(None)
+            unbind_all(self.viewer, VIEWER, ["toggle_bounding_boxes"])
             super().hideEvent(a0)
 
         def toggle_bb_visibility(self, _=None):
