@@ -60,7 +60,9 @@ class WidgetWithLayerList2(Container, metaclass=PostInitCaller):
         return user_cache_dir() / f"{self.__class__.__module__}.{name}"
 
     def _dump(self, path: Optional[Union[str, Path]] = None) -> None:
-        super()._dump(path or self._dump_path)
+        path = Path(path or self._dump_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        super()._dump(path)
 
     def _load(self, path: Optional[Union[str, Path]] = None, quiet: bool = False) -> None:
         super()._load(path or self._dump_path, quiet=quiet)

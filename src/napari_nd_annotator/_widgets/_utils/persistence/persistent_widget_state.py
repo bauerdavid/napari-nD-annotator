@@ -25,6 +25,7 @@ class PersistentWidgetState:
     def __init__(self):
         config_folder = QStandardPaths.writableLocation(QStandardPaths.ConfigLocation)
         self._config_path = os.path.join(config_folder, "nd_annotator_config.yaml")
+        self._ensure_config_folder()
         self._state: UniqueDict = UniqueDict()
         if os.path.exists(self._config_path):
             try:
@@ -40,6 +41,13 @@ class PersistentWidgetState:
                     self._state = yaml.safe_load(def_file)
             except Exception:
                 print_exc()
+
+    def _ensure_config_folder(self):
+        # the config location may not exist yet (e.g. on a fresh user profile)
+        try:
+            os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
+        except Exception:
+            print_exc()
 
     def store_multiple_state(self, parent_name: str, widget_id_map: dict):
         widget_state = self[parent_name]
@@ -106,6 +114,7 @@ class PersistentWidgetState:
         for k, v in self._state.items():
             state[k] = dict(v)
         try:
+            self._ensure_config_folder()
             with open(self._config_path, "w") as f:
                 yaml.dump(state, f)
         except Exception as e:
