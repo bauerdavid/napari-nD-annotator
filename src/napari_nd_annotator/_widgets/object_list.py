@@ -8,15 +8,16 @@ import numpy as np
 from qtpy.QtCore import QEvent, Qt, QObject
 from qtpy.QtGui import QImage, QPixmap, QHideEvent, QShowEvent
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
-    QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox
+    QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox, QCheckBox
 from napari import Viewer
 from napari.layers import Image, Labels
 from napari.layers.labels._labels_constants import Mode
 from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
+from ._utils.clipping import LayerClipper, displayed_layer_dims
 from ._utils.shortcuts import VIEWER, bind_all, unbind_all
-from .._helper_functions import unwrap_viewer, viewer_qt_viewer
+from .._helper_functions import unwrap_viewer, viewer_qt_viewer, viewer_camera
 from .projections import SliceDisplayWidget
 
 try:
@@ -148,6 +149,8 @@ if BoundingBoxLayer:
                 self.parent.crop_mask_layer.data = self.mask_layer.data[self.bbox_idx]
                 self.parent.crop_mask_layer.translate = self.crop_translate(self.mask_layer)
                 self.parent.crop_mask_layer.refresh()
+            if self.parent.clipper is not None and self.parent.selected_idx == self.parent.indexFromItem(self).row():
+                self.update_clipping()
             self.update_icon()
 
         @property
@@ -200,6 +203,8 @@ if BoundingBoxLayer:
             return image_layer, mask_layer
 
         def unselect(self):
+            self.parent.release_clipper()
+            had_crops = self.parent.crop_image_layer is not None
             if self.parent.crop_image_layer is not None:
                 if self.parent.crop_image_layer in self.viewer.layers:
                     self.viewer.layers.remove(self.parent.crop_image_layer)
@@ -216,13 +221,37 @@ if BoundingBoxLayer:
                 self.parent.projections_widget = None
             # napari stores the mode on hiding a layer and restores it on showing it, but setting
             # `visible = True` on a layer that is already visible resets the mode to pan/zoom
-            if self.mask_layer is not None and not self.mask_layer.visible:
+            if had_crops and self.mask_layer is not None and not self.mask_layer.visible:
                 self.mask_layer.visible = True
-            if self.image_layer is not None and not self.image_layer.visible:
+            if had_crops and self.image_layer is not None and not self.image_layer.visible:
                 self.image_layer.visible = True
 
         def on_select(self):
             self.unselect()
+            if self.parent.use_clipping():
+                self.select_with_clipping()
+            else:
+                self.select_with_crops()
+
+        def update_clipping(self):
+            self.parent.clipper.set_box(self.bounding_box[0], self.bounding_box[1])
+
+        def select_with_clipping(self):
+            # 3D: the original layers are clipped to the bounding box, no cropped copies are created
+            clipper = LayerClipper(self.viewer)
+            self.parent.clipper = clipper
+            clipper.clip([self.image_layer, self.mask_layer], self.bounding_box[0], self.bounding_box[1])
+            self.parent.update_ghosts()
+            center = self.image_layer.data_to_world(self.bounding_box.mean(axis=0))
+            self.viewer.dims.set_point(np.arange(self.image_layer.ndim, dtype=int), center)
+            try:
+                viewer_camera(self.viewer).center = tuple(center[d] for d in displayed_layer_dims(self.viewer, self.image_layer))
+            except (ValueError, TypeError, IndexError):
+                pass
+            self.viewer.layers.selection.select_only(self.mask_layer)
+            self.mask_layer.selected_label = self.idx
+
+        def select_with_crops(self):
             self.parent.crop_image_layer, self.parent.crop_mask_layer = self.create_layers()
             self.parent.crop_image_layer.name = self.parent.crop_image_layer.name
             self.parent.crop_mask_layer.name = self.parent.crop_mask_layer.name
@@ -290,8 +319,13 @@ if BoundingBoxLayer:
 
 
     class ObjectListWidget(QListWidget):
-        def __init__(self, viewer, name_template, bounding_box_layer, image_layer, mask_layer, channels_dim, indices=None):
+        def __init__(self, viewer, name_template, bounding_box_layer, image_layer, mask_layer, channels_dim, indices=None,
+                     show_image_surroundings=True, show_labels_surroundings=False):
             super().__init__()
+            # 3D: the original layers are clipped to the selected object (see `use_clipping`)
+            self.clipper = None
+            self._show_image_surroundings = show_image_surroundings
+            self._show_labels_surroundings = show_labels_surroundings
             self._bounding_box_layer = None
             self._image_layer = None
             self._mask_layer = None
@@ -314,6 +348,7 @@ if BoundingBoxLayer:
             self.update_items()
             self.itemClicked.connect(self.select_item)
             self.installEventFilter(self)
+            self.viewer.dims.events.ndisplay.connect(self._on_ndisplay_changed)
             bind_all(self.viewer, VIEWER, {"toggle_bounding_boxes": self.toggle_bb_visibility})
             # bounding_box_layer.events.set_data.connect(on_data_change)
 
@@ -353,12 +388,17 @@ if BoundingBoxLayer:
 
         @image_layer.setter
         def image_layer(self, new_layer):
+            clipped = self.clipper is not None and new_layer is not self._image_layer
+            if clipped:
+                self.release_clipper()
             self._image_layer = new_layer
             for i in range(self.count()):
                 item = self.item(i)
                 item.image_layer = new_layer
                 item.update_icon()
             self.update_items()
+            if clipped:
+                self._reselect()
 
         @property
         def mask_layer(self):
@@ -366,12 +406,62 @@ if BoundingBoxLayer:
 
         @mask_layer.setter
         def mask_layer(self, new_layer):
+            clipped = self.clipper is not None and new_layer is not self._mask_layer
+            if clipped:
+                self.release_clipper()
             self._mask_layer = new_layer
             for i in range(self.count()):
                 item = self.item(i)
                 item.mask_layer = new_layer
                 item.update_icon()
             self.update_items()
+            if clipped:
+                self._reselect()
+
+        @property
+        def show_image_surroundings(self):
+            return self._show_image_surroundings
+
+        @show_image_surroundings.setter
+        def show_image_surroundings(self, show):
+            self._show_image_surroundings = bool(show)
+            self.update_ghosts()
+
+        @property
+        def show_labels_surroundings(self):
+            return self._show_labels_surroundings
+
+        @show_labels_surroundings.setter
+        def show_labels_surroundings(self, show):
+            self._show_labels_surroundings = bool(show)
+            self.update_ghosts()
+
+        def use_clipping(self):
+            # clipping planes act only in the 3D canvas, in 2D the object is shown on cropped copies of the layers
+            return self.viewer.dims.ndisplay == 3 and self.image_layer is not None and self.image_layer.ndim >= 3
+
+        def update_ghosts(self):
+            if self.clipper is None:
+                return
+            self.clipper.set_ghost(self.image_layer, self._show_image_surroundings)
+            self.clipper.set_ghost(self.mask_layer, self._show_labels_surroundings)
+
+        def release_clipper(self):
+            if self.clipper is not None:
+                clipper, self.clipper = self.clipper, None
+                clipper.close()
+
+        def _reselect(self):
+            item = self.item(self.selected_idx) if self.selected_idx is not None else None
+            if item is not None and self.image_layer is not None and self.mask_layer is not None:
+                item.on_select()
+
+        def _on_ndisplay_changed(self, event=None):
+            # the selected object is shown differently in 2D and 3D
+            try:
+                self._reselect()
+            except RuntimeError:  # the widget was deleted
+                self.viewer.dims.events.ndisplay.disconnect(self._on_ndisplay_changed)
 
         @property
         def indices(self):
@@ -449,6 +539,7 @@ if BoundingBoxLayer:
 
         def eventFilter(self, source: QObject, event: QEvent) -> bool:
             if event.type() == QEvent.Close:
+                self.release_clipper()
                 if self.crop_image_layer is not None:
                     self.viewer.layers.remove(self.crop_image_layer)
                     self.viewer.layers.remove(self.crop_mask_layer)
@@ -601,6 +692,17 @@ if BoundingBoxLayer:
             self.list_widget_container.addWidget(no_data_widget)
             self.list_widget_container.setCurrentIndex(0)
             layout.addWidget(self.list_widget_container)
+            surroundings_tooltip = ("In the 3D view the selected object is shown by clipping the original layer to its"
+                                    " bounding box. Show the rest of the layer with a low opacity as well.")
+            self.show_image_surroundings_checkbox = QCheckBox("Show image surroundings in 3D")
+            self.show_image_surroundings_checkbox.setChecked(True)
+            self.show_image_surroundings_checkbox.setToolTip(surroundings_tooltip)
+            self.show_image_surroundings_checkbox.toggled.connect(self._on_surroundings_toggled)
+            self.show_labels_surroundings_checkbox = QCheckBox("Show labels surroundings in 3D")
+            self.show_labels_surroundings_checkbox.setToolTip(surroundings_tooltip)
+            self.show_labels_surroundings_checkbox.toggled.connect(self._on_surroundings_toggled)
+            layout.addWidget(self.show_image_surroundings_checkbox)
+            layout.addWidget(self.show_labels_surroundings_checkbox)
             buttons_widget = QWidget()
             buttons_layout = QHBoxLayout()
             import_button = QPushButton("Import")
@@ -619,6 +721,11 @@ if BoundingBoxLayer:
             if self.bounding_box.layer is not None:
                 self.create_list_widget()
             self.installEventFilter(self)
+
+        def _on_surroundings_toggled(self, _=None):
+            if self.list_widget is not None:
+                self.list_widget.show_image_surroundings = self.show_image_surroundings_checkbox.isChecked()
+                self.list_widget.show_labels_surroundings = self.show_labels_surroundings_checkbox.isChecked()
 
         def bb_index_change(self, _=None):
             if self.bounding_box.layer is None:
@@ -669,12 +776,16 @@ if BoundingBoxLayer:
                 self.list_widget.channels_dim = self.channels_dim
 
         def create_list_widget(self):
-            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box.layer, self.image_layer, self.labels.layer, self.channels_dim, 1)
+            self.list_widget = ObjectListWidget(self.viewer, self.name_template, self.bounding_box.layer, self.image_layer, self.labels.layer, self.channels_dim, 1,
+                                                 self.show_image_surroundings_checkbox.isChecked(),
+                                                 self.show_labels_surroundings_checkbox.isChecked())
             self.list_widget_container.addWidget(self.list_widget)
             self.list_widget_container.setCurrentIndex(1)
             self.reset_index_after_existing_labels()
 
         def remove_list_widget(self):
+            if self.list_widget is not None:
+                self.list_widget.release_clipper()
             while self.list_widget_container.count() > 1:
                 self.list_widget_container.removeWidget(self.list_widget_container.widget(1))
             self.list_widget_container.setCurrentIndex(0)
