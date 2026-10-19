@@ -96,6 +96,8 @@ The main idea is to create bounding boxes around objects we want to annotate, cr
 1. We don't have to load the whole data into memory
 2. The surrounding objects won't occlude the annotated ones, making it easier to check the annotation.
 
+In the 3D view the selected object is shown by clipping the original image and labels layers to its bounding box (the rest of the image can optionally be shown with a low opacity, see the checkboxes under the object list); in 2D cropped copies of the layers are used.
+
 Bounding boxes can be created from the `Object list` widget. The dimensionality of the bounding box layer will be determined from the image layer. As bounding boxes are created, a small thumbnail will be displayed.
 
 The proposed pipeline goes as follows:
