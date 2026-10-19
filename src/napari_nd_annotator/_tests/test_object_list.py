@@ -58,7 +58,7 @@ def scene(viewer):
 
 def _select_object(viewer, labels, object_list):
     viewer.layers.selection.select_only(labels)
-    assert object_list.count() == 1
+    assert object_list.count() > 0
     object_list.select_item(object_list.item(0))
     _process_events()
     return object_list.crop_image_layer, object_list.crop_mask_layer
@@ -178,3 +178,59 @@ def test_new_bounding_box_labels_continue_after_the_existing_ones(viewer, scene)
     widget = ListWidgetBB(viewer)
     assert widget.list_widget.bounding_box_layer is scene[2].bounding_box_layer
     assert widget.list_widget.next_index() == OBJECT_ID + 1
+
+
+def _add_objects(object_list, extra_labels):
+    """Adds bounding boxes for the given labels next to the first object and updates the list."""
+    bbox_layer = object_list.bounding_box_layer
+    boxes = [np.asarray(box) for box in bbox_layer.data]
+    for i, label in enumerate(extra_labels):
+        corners = np.where(list(itertools.product((False, True), repeat=3)), [8, 30 + 3*i, 35], [7, 20 + 3*i, 30])
+        boxes.append(corners*SCALE + TRANSLATE)
+    bbox_layer.data = boxes
+    bbox_layer.features = {"label": np.array([OBJECT_ID] + list(extra_labels))}
+    object_list.update_items()
+    _process_events()
+    assert [object_list.item(i).idx for i in range(object_list.count())] == [OBJECT_ID] + list(extra_labels)
+
+
+def _delete_box(object_list, index):
+    bbox_layer = object_list.bounding_box_layer
+    bbox_layer.selected_data = {index}
+    bbox_layer.remove_selected()
+    _process_events()
+
+
+def test_deleting_bounding_boxes_updates_the_object_list(viewer, scene):
+    _, _, object_list = scene
+    _add_objects(object_list, [5, 6])
+    _delete_box(object_list, 1)
+    assert [object_list.item(i).idx for i in range(object_list.count())] == [OBJECT_ID, 6]
+    _delete_box(object_list, 0)
+    _delete_box(object_list, 0)
+    assert object_list.count() == 0
+
+
+def test_deleting_the_selected_objects_bounding_box_closes_its_crop(viewer, scene):
+    _, labels, object_list = scene
+    _add_objects(object_list, [5])
+    _select_object(viewer, labels, object_list)
+    assert object_list.crop_mask_layer is not None
+    _delete_box(object_list, 0)
+    assert object_list.crop_image_layer is None and object_list.crop_mask_layer is None
+    assert object_list.selected_idx is None
+    assert not [layer for layer in viewer.layers if layer.name.startswith("Cropped")]
+    assert [object_list.item(i).idx for i in range(object_list.count())] == [5]
+
+
+def test_deleting_another_bounding_box_keeps_the_crop_selected(viewer, scene):
+    _, labels, object_list = scene
+    _add_objects(object_list, [5])
+    object_list.selected_idx = None
+    viewer.layers.selection.select_only(labels)
+    object_list.select_item(object_list.item(1))
+    _process_events()
+    assert object_list.selected_idx == 1
+    _delete_box(object_list, 0)
+    assert object_list.crop_mask_layer is not None
+    assert object_list.selected_idx == 0

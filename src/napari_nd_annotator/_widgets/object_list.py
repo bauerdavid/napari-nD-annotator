@@ -326,8 +326,11 @@ if BoundingBoxLayer:
             if self._bounding_box_layer == new_layer:
                 self.update_items()
                 return
+            if self._bounding_box_layer is not None:
+                self._bounding_box_layer.events.set_data.disconnect(self._on_bounding_boxes_removed)
             self._bounding_box_layer = new_layer
             if new_layer is not None:
+                new_layer.events.set_data.connect(self._on_bounding_boxes_removed)
                 if self.bounding_box_change not in self._bounding_box_layer.mouse_drag_callbacks:
                     self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
                 if self._on_bb_double_click not in self._bounding_box_layer.mouse_double_click_callbacks:
@@ -415,6 +418,24 @@ if BoundingBoxLayer:
                 self.previous_edge_color = self.bounding_box_layer.edge_color[selected_idx].copy()
                 self.bounding_box_layer.edge_color[selected_idx] = (1., 0., 0., 1.)
                 self.bounding_box_layer.data = self.bounding_box_layer.data
+
+        def _on_bounding_boxes_removed(self, event=None):
+            # bounding boxes deleted from the layer (e.g. with its delete button)
+            if self._mouse_down or len(self._bounding_box_layer.data) >= self.count():
+                return
+            selected_item = self.item(self.selected_idx) if self.selected_idx is not None else None
+            self.update_items()
+            if selected_item is None:
+                return
+            try:
+                row = self.row(selected_item)
+            except RuntimeError:  # the item was deleted along with the whole list
+                row = -1
+            if row < 0:
+                selected_item.unselect()
+                self.selected_idx = None
+            else:
+                self.selected_idx = row
 
         def bounding_box_corners(self):
             if self._bounding_box_layer is None or len(self._bounding_box_layer.data) == 0:
