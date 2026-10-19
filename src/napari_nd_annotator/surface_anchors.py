@@ -15,7 +15,7 @@ from typing import Optional
 import numpy as np
 from scipy.ndimage import gaussian_filter, map_coordinates
 
-__all__ = ["AnchorSuggestion", "suggest_surface_anchors"]
+__all__ = ["AnchorSuggestion", "suggest_surface_anchors", "edge_cost_from_image", "suggest_anchors_in_image"]
 
 
 @dataclass
@@ -195,6 +195,51 @@ def suggest_surface_anchors(
     if best is not None:
         return best
     return AnchorSuggestion(reason="no boundary found (%s)" % "; ".join(reasons))
+
+
+def edge_cost_from_image(image, alpha=.01, beta=5., blur_func=None):
+    """Edge cost (phi) of an image like the gradient feature of the minimal surface widget does it.
+
+    The image is normalized to 0..1, optionally blurred by ``blur_func``, the gradient magnitude (central
+    differences, in voxel units) ``f`` gives ``phi = alpha' + (1 - alpha') * exp(-beta * f)`` with
+    ``alpha' = (alpha - exp(-beta)) / (1 - exp(-beta))`` and phi is divided by its maximum. Low values are boundaries.
+    """
+    image = np.asarray(image, dtype=float)
+    value_range = image.max() - image.min()
+    if value_range > 0:
+        image = (image - image.min()) / value_range
+    else:
+        image = np.zeros_like(image)
+    if blur_func is not None:
+        image = np.asarray(blur_func(image), dtype=float)
+    gradient = np.sqrt(sum(g ** 2 for g in np.gradient(image)))
+    alpha = (alpha - np.exp(-beta)) / (1 - np.exp(-beta))
+    phi = alpha + (1 - alpha) * np.exp(-beta * gradient)
+    return phi / phi.max()
+
+
+def suggest_anchors_in_image(image, bbox_min, bbox_max, scale=1., alpha=.01, beta=5., blur_func=None, margin=10,
+                             **kwargs):
+    """:func:`suggest_surface_anchors` for a raw image: phi is computed only on the bounding box plus ``margin``.
+
+    ``bbox_min``/``bbox_max`` are in the data (index) coordinates of ``image``, so are the returned points.
+    The extra keyword arguments are passed on to :func:`suggest_surface_anchors`. As in the minimal surface run, the
+    image of the crop is normalized on its own.
+    """
+    shape = np.asarray(image.shape)
+    bbox_min = np.asarray(bbox_min, dtype=float)
+    bbox_max = np.asarray(bbox_max, dtype=float)
+    crop_lo = np.maximum(np.floor(np.minimum(bbox_min, bbox_max)) - margin, 0).astype(int)
+    crop_hi = np.minimum(np.ceil(np.maximum(bbox_min, bbox_max)) + margin + 1, shape).astype(int)
+    if np.any(crop_lo >= crop_hi):
+        return AnchorSuggestion(reason="bounding box is outside of the image")
+    crop = tuple(slice(a, b) for a, b in zip(crop_lo, crop_hi))
+    phi = edge_cost_from_image(np.asarray(image[crop]), alpha, beta, blur_func)
+    result = suggest_surface_anchors(bbox_min - crop_lo, bbox_max - crop_lo, phi, scale, **kwargs)
+    if result.found:
+        result.p1 = result.p1 + crop_lo
+        result.p2 = result.p2 + crop_lo
+    return result
 
 
 def _pair_score(suggestion):
