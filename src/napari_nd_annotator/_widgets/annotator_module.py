@@ -113,7 +113,9 @@ class AnnotatorWidget(MagicTemplate):
     @debounce
     def _dump(self, path: Optional[Union[str, Path]] = None) -> None:
         data = serialize(self)
-        with open(path or self._dump_path, "w") as save_file:
+        path = Path(path or self._dump_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as save_file:
             json.dump(data, save_file)
 
     def _load(self, path: Optional[Union[str, Path]] = None, quiet: bool = False) -> None:
