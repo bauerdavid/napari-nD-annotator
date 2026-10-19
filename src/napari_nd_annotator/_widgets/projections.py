@@ -174,9 +174,10 @@ class DataProjectionWidget(QLabel):
         order = tuple(filter(lambda x: x not in self.displayed_axes, self.viewer.dims.order))
         order = order + tuple(self.displayed_axes)
         self.viewer.dims.order = order
-        self.viewer.dims.current_step = tuple(self.viewer.dims.current_step[dim] if dim in self.displayed_axes
-                                         else self.slices[dim]+self.image_layer.translate[dim]
-                                         for dim in range(len(self.viewer.dims.current_step)))
+        # the slices are data indices of the layer, the viewer position is in world coordinates
+        point = self.image_layer.data_to_world(self.slices)
+        other_dims = [dim for dim in range(len(self.viewer.dims.current_step)) if dim not in self.displayed_axes]
+        self.viewer.dims.set_point(other_dims, [point[dim] for dim in other_dims])
 
 
 class SliceDisplayWidget(QWidget):
@@ -263,10 +264,6 @@ class SliceDisplayWidget(QWidget):
         self.setSizePolicy(self.grid_widget.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
         self._connect_events()
 
-    @property
-    def offset(self):
-        return self.image_layer.translate
-
     def _connect(self, emitter, callback):
         emitter.connect(callback)
         self._connections.append((emitter, callback))
@@ -348,8 +345,10 @@ class SliceDisplayWidget(QWidget):
                     p.setSlices(i, int(coordinates[i]), update=False)
 
     def on_step_change(self, event=None, layers=None):
+        # the viewer position is in world coordinates, the slices are data indices of the layer
+        point = self.image_layer.world_to_data(self.viewer.dims.point)
         for projection in self.projections:
-            projection.setSlices(*itertools.chain(*((dim, int(event.source.current_step[dim]-self.offset[dim])) for dim in event.source.not_displayed)))
+            projection.setSlices(*itertools.chain(*((dim, int(round(point[dim]))) for dim in self.viewer.dims.not_displayed)))
 
     def update_slider_ranges(self, refresh=True):
         for dim in range(len(self.sliders)):

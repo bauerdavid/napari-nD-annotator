@@ -225,3 +225,30 @@ def test_projections_can_be_reconnected(viewer, selected):
     assert _nothing_happens(viewer, crop_labels, widget)
     widget._connect_events()
     assert not _nothing_happens(viewer, crop_labels, widget)
+
+
+def _viewer_slice(viewer, layer, dim):
+    """Index of the slice of the layer that the viewer position falls in."""
+    return int(round(layer.world_to_data(viewer.dims.point)[dim]))
+
+
+def test_projections_show_the_slice_visible_in_the_viewer(viewer, selected):
+    crop_image, crop_labels, _, widget = selected
+    # the scene is anisotropic and translated, so the viewer position is not the index of the slice
+    for z in (1, 3, 4):
+        viewer.dims.set_point(0, crop_labels.data_to_world((z, 0, 0))[0])
+        _flush(widget)
+        assert _viewer_slice(viewer, crop_labels, 0) == z
+        assert widget.projections[2].slices[0] == z  # the projection of dimensions (1, 2)
+
+
+def test_clicking_a_projection_shows_its_slice_in_the_viewer(viewer, selected):
+    crop_image, crop_labels, _, widget = selected
+    viewer.cursor.position = crop_labels.data_to_world((2, 7, 9))
+    _flush(widget)
+    projection = widget.projections[0]  # dimensions (0, 1) at the slice of dimension 2
+    projection.on_click(None)
+    _process_events()
+    assert sorted(viewer.dims.displayed) == [0, 1]
+    assert projection.slices[2] == 9
+    assert _viewer_slice(viewer, crop_labels, 2) == _viewer_slice(viewer, crop_image, 2) == 9
