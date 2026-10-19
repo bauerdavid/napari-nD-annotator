@@ -282,6 +282,53 @@ def test_random_ellipsoid_evaluation(noise):
     assert np.median(stats["length_ratio"]) > .9
 
 
+def _rotation_z(angle):
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+
+
+@pytest.mark.parametrize("scale", [(1., 1., 1.), (2., 1., 1.)])
+def test_fan_finds_diagonal_diameter(scale):
+    # elongated object rotated by 45 degrees: the box axes are not its long axis
+    shape = (70, 80, 80)
+    scale = np.asarray(scale)
+    ellipsoid = Ellipsoid(np.array([30, 40, 40]) * scale, np.array([10., 10., 26.]) * scale.min(),
+                          _rotation_z(np.pi / 4))
+    image = render([ellipsoid], shape, scale, noise=.05)
+    bbox = bbox_of(ellipsoid.mask(shape, scale))
+    phi = edge_cost(image)
+    axis_result = suggest_surface_anchors(*bbox, phi, scale)
+    fan_result = suggest_surface_anchors(*bbox, phi, scale, method="fan")
+    assert fan_result.found, fan_result.reason
+    full_length = 2 * ellipsoid.semi_axes.max()
+    assert fan_result.distance > .93 * full_length
+    assert fan_result.distance > axis_result.distance
+    errors = surface_error(ellipsoid, [fan_result.p1, fan_result.p2], scale)
+    assert np.all(errors < 2.5), errors
+    for p in (fan_result.p1, fan_result.p2):
+        assert np.all(p >= bbox[0]) and np.all(p <= bbox[1])
+    assert fan_result.p1[fan_result.axis] < fan_result.p2[fan_result.axis]
+
+
+def test_fan_without_object_and_invalid_input():
+    assert not suggest_surface_anchors([5, 5, 5], [25, 25, 25], np.ones((30, 30, 30)), method="fan").found
+    with pytest.raises(ValueError):
+        suggest_surface_anchors([5, 5, 5], [25, 25, 25], np.ones((30, 30, 30)), method="nope")
+    with pytest.raises(ValueError):
+        suggest_surface_anchors([5, 5], [25, 25], np.ones((30, 30)), method="fan")
+
+
+def test_fan_evaluation():
+    stats = evaluate(n_cases=50, noise=.1, method="fan")
+    print(summarize("fan", stats))
+    assert stats["missing"] <= 2
+    assert np.median(stats["errors"]) < 1.5
+    assert (stats["errors"] < 3).mean() > .9
+    # the farthest pair is close to the full diameter also for rotated objects
+    assert np.median(stats["length_ratio"]) > .93
+    assert stats["length_ratio"].min() > .8
+
+
 def cells3d_evaluation(min_volume=500, **kwargs):
     """Anchor error on the nuclei of scikit-image ``cells3d``, or None if the data is not cached (never downloads).
 
@@ -335,10 +382,10 @@ def cells3d_evaluation(min_volume=500, **kwargs):
 
 
 if __name__ == "__main__":
-    for noise in (.05, .1, .2):
-        print(summarize("ellipsoids, noise %.2f" % noise, evaluate(noise=noise)))
-    nuclei_stats = cells3d_evaluation()
-    if nuclei_stats is None:
-        print("cells3d is not cached locally, skipped")
-    else:
-        print(summarize("cells3d nuclei", nuclei_stats))
+    for method in ("axis", "fan"):
+        print(summarize("ellipsoids, noise 0.10, " + method, evaluate(noise=.1, method=method)))
+        nuclei_stats = cells3d_evaluation(method=method)
+        if nuclei_stats is None:
+            print("cells3d is not cached locally, skipped")
+        else:
+            print(summarize("cells3d nuclei, " + method, nuclei_stats))

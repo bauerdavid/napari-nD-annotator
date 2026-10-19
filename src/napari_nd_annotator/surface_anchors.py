@@ -8,6 +8,7 @@ centre along the longest axis in both directions and take the first strong bound
 Everything here is plain numpy/scipy and independent of napari and Qt. Coordinates are data (index) coordinates, in the
 axis order of ``phi``; ``scale`` (voxel size per axis) is only used to measure distances.
 """
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -66,6 +67,10 @@ def suggest_surface_anchors(
         min_zscore=4.,
         wall_tolerance=2.,
         axis_strategy="fallback",
+        method="axis",
+        n_rays=256,
+        max_radius_jump=1.3,
+        min_relative_strength=.8,
 ):
     """Propose two anchor points on the surface of the object inside a bounding box.
 
@@ -102,10 +107,27 @@ def suggest_surface_anchors(
         longest axes if there is no valid pair on the longest, ``"best"`` tries all axes and returns the pair with
         the highest ``confidence * distance`` (the distance matters: the sphere built from the points should be as large as
         the object)
+    :param method: ``"axis"`` (default) casts rays along the box axes only, see above. ``"fan"`` (3D only) casts
+        ``n_rays`` rays from the box centre in near uniformly distributed directions (angles measured in physical
+        space), takes the first strong minimum on each as above, drops isolated far points (see
+        ``max_radius_jump``) and returns the FARTHEST pair of the resulting surface points: a diameter of the object
+        that does not have to follow the box axes. Snapping is not applied, the minimum on each ray is already
+        located with sub-voxel precision. ``axis_strategy`` is ignored; ``axis`` of the result is the box axis the
+        two points are the most aligned with.
+    :param n_rays: number of rays of the ``"fan"`` method
+    :param max_radius_jump: ``"fan"`` only: a ray whose boundary is farther from the centre than this factor times
+        the median distance of its nearest neighbouring rays is considered a leak (neighbouring object, spurious
+        far edge) and ignored. The factor has to leave room for the tips of elongated objects.
+    :param min_relative_strength: ``"fan"`` only: rays whose boundary depth (``drop``) is below this fraction of the
+        median over all rays are ignored
     :return: :class:`AnchorSuggestion`; check ``.found`` (or truthiness) before using the points
     """
     if axis_strategy not in ("longest", "fallback", "best"):
         raise ValueError("axis_strategy must be 'longest', 'fallback' or 'best'")
+    if method not in ("axis", "fan"):
+        raise ValueError("method must be 'axis' or 'fan'")
+    if method == "fan" and phi.ndim != 3:
+        raise ValueError("the fan method needs a 3D phi")
     ndim = phi.ndim
     bbox_min = np.asarray(bbox_min, dtype=float).reshape(-1)
     bbox_max = np.asarray(bbox_max, dtype=float).reshape(-1)
@@ -146,6 +168,12 @@ def suggest_surface_anchors(
     spread = max(1.4826 * float(np.median(np.abs(top - np.median(top)))), 1e-3 * reference, 1e-12)
 
     centre = (bbox_min + bbox_max) / 2
+    if method == "fan":
+        return _suggest_fan(
+            centre, bbox_min, bbox_max, lo_idx, hi_idx, crop_lo, scale, ray_phi, snap_phi, reference, median, spread,
+            first_min_fraction, min_drop, min_zscore, wall_tolerance, n_rays, max_radius_jump,
+            min_relative_strength
+        )
     extents = (bbox_max - bbox_min) * scale
     axes = [int(a) for a in np.argsort(-extents, kind="stable")]
     if axis_strategy == "longest":
@@ -218,6 +246,96 @@ def _suggest_along_axis(axis, centre, bbox_min, bbox_max, lo_idx, hi_idx, crop_l
         phi_ratio=phi_ratio,
         drop=tuple(drops),
         zscore=tuple(zscores),
+    )
+
+
+def fibonacci_directions(n):
+    """``n`` near uniformly distributed unit vectors on the sphere, shape ``(n, 3)``."""
+    i = np.arange(n) + .5
+    z = 1 - 2 * i / n
+    azimuth = np.pi * (1 + 5 ** .5) * i
+    r = np.sqrt(1 - z ** 2)
+    return np.stack([z, r * np.sin(azimuth), r * np.cos(azimuth)], axis=1)
+
+
+def _suggest_fan(centre, bbox_min, bbox_max, lo_idx, hi_idx, crop_lo, scale, ray_phi, snap_phi, reference, median,
+                 spread, first_min_fraction, min_drop, min_zscore, wall_tolerance, n_rays, max_radius_jump,
+                 min_relative_strength):
+    smallest = scale.min()
+    directions = fibonacci_directions(n_rays)
+    # distance (physical) at which each ray leaves the box, extended by the wall tolerance
+    half_extent = (bbox_max - bbox_min) / 2 * scale + wall_tolerance * smallest
+    with np.errstate(divide="ignore"):
+        t_max = np.min(half_extent / np.abs(directions), axis=1)
+    n_steps = int(np.floor(t_max / smallest).max())
+    steps = np.arange(n_steps + 1) * smallest
+    # sample positions (index space) of all rays at once: shape (n_rays, n_steps + 1, 3)
+    positions = centre + steps[None, :, None] * (directions / scale)[:, None, :]
+    profiles = map_coordinates(
+        ray_phi, (positions - crop_lo).reshape(-1, 3).T, order=1, mode="nearest"
+    ).reshape(n_rays, n_steps + 1)
+    radii = np.full(n_rays, np.nan)
+    drops = np.zeros(n_rays)
+    zscores = np.zeros(n_rays)
+    for i in range(n_rays):
+        length = int(t_max[i] // smallest) + 1
+        if length < 3:
+            continue
+        profile = profiles[i, :length]
+        step = _first_strong_minimum(profile, reference, first_min_fraction)
+        if step is None:
+            continue
+        depth = reference - profile[int(round(step))]
+        drops[i] = depth / reference
+        zscores[i] = depth / spread
+        if drops[i] >= min_drop and zscores[i] >= min_zscore:
+            radii[i] = step * smallest
+    valid = np.isfinite(radii)
+    if valid.sum() >= 2:
+        # the farthest pair favours false far boundaries (extreme value of noise): rays whose boundary is much
+        # weaker than the typical one of this object are not trusted
+        valid &= drops >= min_relative_strength * np.median(drops[valid])
+    if valid.sum() < 2:
+        return AnchorSuggestion(reason="no boundary found along the rays")
+    # leaks: boundaries much farther away than those of the neighbouring directions
+    n_neighbours = min(8, n_rays - 1)
+    neighbours = np.argsort(-directions @ directions.T, axis=1)[:, 1:n_neighbours + 1]
+    neighbour_radii = np.where(valid[neighbours], radii[neighbours], np.nan)
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        neighbour_median = np.nanmedian(neighbour_radii, axis=1)
+    keep = valid & ~(radii > max_radius_jump * neighbour_median)
+    if keep.sum() < 2:
+        return AnchorSuggestion(reason="no consistent boundary found along the rays")
+    indices = np.flatnonzero(keep)
+    points_physical = directions[indices] * radii[indices, None]
+    # the farthest pair; a pair of points is at most 2 * the largest radius apart
+    distances = np.sqrt(((points_physical[:, None, :] - points_physical[None, :, :]) ** 2).sum(-1))
+    a, b = np.unravel_index(np.argmax(distances), distances.shape)
+    picked = indices[[a, b]]
+    low, high = lo_idx.astype(float), hi_idx.astype(float)
+    points = [np.clip(centre + directions[i] / scale * radii[i], low, high) for i in picked]
+    direction = (points[1] - points[0]) * scale
+    axis = int(np.argmax(np.abs(direction)))
+    if points[0][axis] > points[1][axis]:
+        points.reverse()
+        picked = picked[::-1]
+    p1, p2 = points
+    if np.all(p1 == p2):
+        return AnchorSuggestion(axis=axis, reason="both anchors collapsed to the same point")
+    phi_ratio = tuple(
+        float(map_coordinates(snap_phi, (p - crop_lo)[:, None], order=1, mode="nearest")[0] / median)
+        for p in points
+    )
+    return AnchorSuggestion(
+        p1=p1,
+        p2=p2,
+        axis=axis,
+        distance=float(np.sqrt((((p1 - p2) * scale) ** 2).sum())),
+        confidence=float(np.clip(min(drops[picked]), 0, 1)),
+        phi_ratio=phi_ratio,
+        drop=tuple(float(d) for d in drops[picked]),
+        zscore=tuple(float(z) for z in zscores[picked]),
     )
 
 
