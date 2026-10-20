@@ -1135,16 +1135,21 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
         self._ensure_3d_image()
 
+    # widgets that hold a layer: layers are not serializable
+    _NOT_SERIALIZED = ("image_layer_combobox", "labels_layer_combobox", "distance_map_combobox",
+                       "second_distance_map_combobox", "start_points_combobox")
+
     def __magicclass_serialize__(self):
-        d = serialize(self)
-        if "image_layer_combobox" in d:
-            del d["image_layer_combobox"]
-        if "labels_layer_combobox" in d:
-            del d["labels_layer_combobox"]
-        for key in ("distance_map_combobox", "second_distance_map_combobox", "start_points_combobox"):
-            if key in d:
-                del d[key]
-        return d
+        def remove_layer_widgets(d):
+            # the widgets in collapsible containers (e.g. "Shortest Paths") are nested
+            for key in list(d):
+                if key in self._NOT_SERIALIZED:
+                    del d[key]
+                elif isinstance(d[key], dict):
+                    remove_layer_widgets(d[key])
+            return d
+
+        return remove_layer_widgets(serialize(self))
 
     @property
     def viewer(self):

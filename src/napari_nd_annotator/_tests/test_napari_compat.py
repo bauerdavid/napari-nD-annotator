@@ -243,3 +243,10 @@ def test_slice_annotation_fits_and_restores_camera(viewer, annotator):
     worker.finish_slice_annotation()
     assert worker.slice_labels_layer is None
     assert camera.zoom == pytest.approx(zoom_before)
+
+
+def test_toolbox_state_is_json_serializable(annotator):
+    # the widget state is persisted as json: the layers some of the widgets hold must not be part of it
+    import json
+    from magicclass.serialize import serialize
+    json.dumps(serialize(annotator))
