@@ -128,3 +128,20 @@ def test_button_is_connected_and_follows_the_image_dimension(viewer, scene):
     flat = viewer.add_image(np.zeros((20, 20)), name="flat")
     ms.image_layer = flat
     assert not ms.suggest_anchors_button.enabled
+
+
+@pytest.mark.parametrize("mode", ["Axis", "Fan (farthest pair)"])
+def test_suggestion_mode_can_be_selected(viewer, scene, monkeypatch, mode):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = scene
+    assert ms.suggestion_mode_combobox.value == "Axis"
+    used = []
+    original = msw.suggest_anchors_in_image
+    monkeypatch.setattr(msw, "suggest_anchors_in_image", lambda *a, **k: used.append(k["method"]) or original(*a, **k))
+    ms.suggestion_mode_combobox.value = mode
+    _select(viewer, object_list)
+    ms._suggest_anchors()
+    assert used == [msw.SUGGESTION_MODES[mode]]
+    points = np.asarray(ms.points_layer.data)
+    assert points.shape == (2, 3)
+    assert np.all(_distance_from_ball_surface(points) < 2.5)

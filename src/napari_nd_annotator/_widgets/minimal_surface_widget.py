@@ -68,6 +68,8 @@ FEATURE_KEYS = [GRADIENT, CUSTOM]
 #     CUSTOM: INTENSITY_BASED
 # }
 
+SUGGESTION_MODES = {"Axis": "axis", "Fan (farthest pair)": "fan"}
+
 CAD_BLURRING = "Edge preserving" #"Curvature Anisotropic Diffusion"
 GAUSSIAN_BLURRING = "Gaussian"
 
@@ -809,6 +811,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
                 self._slice_layer.mouse_drag_callbacks.append(callback)
             return callback
 
+    suggestion_mode_combobox = field(widget_type="ComboBox", label="Suggestion mode").with_options(
+        choices=list(SUGGESTION_MODES),
+        tooltip="Axis: the anchors are on the boundary along the longest axis of the bounding box."
+                " Fan: casts rays in all directions and takes the farthest pair of boundary points,"
+                " also for objects that are tilted in the box (can be less robust next to touching objects)."
+    )
     suggest_anchors_button = field(widget_type=PushButton, name="Suggest anchors").with_options(
         tooltip="Propose the two anchor points from the bounding box selected in the object list."
                 " Move them to adjust, then run."
@@ -844,7 +852,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
             show_info("The suggestion uses the gradient feature, not the custom one")
         result = suggest_anchors_in_image(
             image_layer.data, bbox_min, bbox_max, scale=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
-            blur_func=self._blur_image if self.is_blurring_enabled else None
+            blur_func=self._blur_image if self.is_blurring_enabled else None,
+            method=SUGGESTION_MODES[self.suggestion_mode_combobox.value]
         )
         if not result.found:
             warnings.warn("No anchor suggestion for object %d: %s" % (label, result.reason))
@@ -1567,6 +1576,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.ClippingWidget.enabled = is_enabled
         self.call_button.enabled = is_enabled
         self.suggest_anchors_button.enabled = is_enabled
+        self.suggestion_mode_combobox.enabled = is_enabled
 
     @image_layer_combobox.connect
     def _set_slice_widget_image(self, _=None):
