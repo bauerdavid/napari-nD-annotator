@@ -170,3 +170,27 @@ def test_suggestion_uses_the_blurring_option(viewer, scene, monkeypatch, blur):
         blurred = seen[0](np.eye(8)[None].repeat(8, 0))
         assert blurred.shape == (8, 8, 8) and 0 < blurred.max() < 1
     assert np.all(_distance_from_ball_surface(np.asarray(ms.points_layer.data)) < 2.5)
+
+
+def test_fan_parameters_are_shown_for_the_fan_mode_and_used(viewer, scene, monkeypatch):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = scene
+    parameter_widgets = (ms.fan_rays_spinbox, ms.fan_max_radius_jump_spinbox, ms.fan_min_relative_strength_spinbox)
+    assert all(w.native.isHidden() for w in parameter_widgets)
+    ms.suggestion_mode_combobox.value = "Fan (farthest pair)"
+    assert not any(w.native.isHidden() for w in parameter_widgets)
+    ms.fan_rays_spinbox.value = 128
+    ms.fan_max_radius_jump_spinbox.value = 1.4
+    ms.fan_min_relative_strength_spinbox.value = .6
+    seen = []
+    original = msw.suggest_anchors_in_image
+    monkeypatch.setattr(msw, "suggest_anchors_in_image", lambda *a, **k: seen.append(k) or original(*a, **k))
+    _select(viewer, object_list)
+    ms._suggest_anchors()
+    assert (seen[0]["method"], seen[0]["n_rays"], seen[0]["max_radius_jump"], seen[0]["min_relative_strength"]) ==         ("fan", 128, 1.4, .6)
+    assert np.all(_distance_from_ball_surface(np.asarray(ms.points_layer.data)) < 2.5)
+    # the axis mode does not get them
+    ms.suggestion_mode_combobox.value = "Axis"
+    assert all(w.native.isHidden() for w in parameter_widgets)
+    ms._suggest_anchors()
+    assert seen[1]["method"] == "axis" and "n_rays" not in seen[1]

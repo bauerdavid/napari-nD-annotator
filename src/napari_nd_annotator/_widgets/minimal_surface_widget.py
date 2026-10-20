@@ -817,6 +817,21 @@ class _MinimalSurfaceWidget(MagicTemplate):
                 " Fan: casts rays in all directions and takes the farthest pair of boundary points,"
                 " also for objects that are tilted in the box (can be less robust next to touching objects)."
     )
+    fan_rays_spinbox = field(int, label="Fan: rays").with_options(
+        min=16, max=2000, step=16, value=256,
+        tooltip="Number of directions the fan casts rays in from the center of the bounding box"
+    )
+    fan_max_radius_jump_spinbox = field(float, label="Fan: max radius jump").with_options(
+        min=1., max=5., step=.1, value=1.3,
+        tooltip="A ray whose boundary is farther from the center than this factor times that of its neighboring"
+                " rays is ignored (leak into a neighbor or a noisy far edge). Lower: stricter, but too low"
+                " cuts off the tips of elongated objects"
+    )
+    fan_min_relative_strength_spinbox = field(float, label="Fan: min relative strength").with_options(
+        min=0., max=2., step=.1, value=.8,
+        tooltip="Rays with a boundary weaker than this fraction of the typical one are ignored."
+                " Higher: only the clearest boundaries count"
+    )
     suggest_anchors_button = field(widget_type=PushButton, name="Suggest anchors").with_options(
         tooltip="Propose the two anchor points from the bounding box selected in the object list."
                 " Move them to adjust, then run."
@@ -853,7 +868,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         result = suggest_anchors_in_image(
             image_layer.data, bbox_min, bbox_max, resample=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
             blur_func=self._blur_image if self.is_blurring_enabled else None,
-            method=SUGGESTION_MODES[self.suggestion_mode_combobox.value]
+            **self._suggestion_options()
         )
         if not result.found:
             warnings.warn("No anchor suggestion for object %d: %s" % (label, result.reason))
@@ -870,6 +885,24 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if result.confidence < .2:
             message += ", low: check the points"
         show_info(message)
+
+    def _suggestion_options(self):
+        method = SUGGESTION_MODES[self.suggestion_mode_combobox.value]
+        options = {"method": method}
+        if method == "fan":
+            options.update(
+                n_rays=self.fan_rays_spinbox.value,
+                max_radius_jump=self.fan_max_radius_jump_spinbox.value,
+                min_relative_strength=self.fan_min_relative_strength_spinbox.value,
+            )
+        return options
+
+    @suggestion_mode_combobox.connect
+    def _on_suggestion_mode_changed(self, mode):
+        is_fan = SUGGESTION_MODES[mode] == "fan"
+        for widget in (self.fan_rays_spinbox, self.fan_max_radius_jump_spinbox,
+                       self.fan_min_relative_strength_spinbox):
+            widget.visible = is_fan
 
     def _remove_last_suggestion(self):
         """Replace the previous suggestion, but only if the user has not touched it."""
@@ -1209,6 +1242,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             container.collapsed = True
             self._collapsible_group.addItem(container)
         self._on_feature_changed(self.used_feature)
+        self._on_suggestion_mode_changed(self.suggestion_mode_combobox.value)
         self.try_blurring_button.native.setCheckable(True)
         self._on_blur_checked(self.blur_image_checkbox.value)
 
@@ -1579,6 +1613,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.call_button.enabled = is_enabled
         self.suggest_anchors_button.enabled = is_enabled
         self.suggestion_mode_combobox.enabled = is_enabled
+        for widget in (self.fan_rays_spinbox, self.fan_max_radius_jump_spinbox,
+                       self.fan_min_relative_strength_spinbox):
+            widget.enabled = is_enabled
 
     @image_layer_combobox.connect
     def _set_slice_widget_image(self, _=None):
