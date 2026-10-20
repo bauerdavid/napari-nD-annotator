@@ -145,3 +145,28 @@ def test_suggestion_mode_can_be_selected(viewer, scene, monkeypatch, mode):
     points = np.asarray(ms.points_layer.data)
     assert points.shape == (2, 3)
     assert np.all(_distance_from_ball_surface(points) < 2.5)
+
+
+@pytest.mark.parametrize("blur", [False, True])
+def test_suggestion_uses_the_blurring_option(viewer, scene, monkeypatch, blur):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = scene
+    ms.blur_image_checkbox.value = blur
+    ms.blurring_type_combobox.value = msw.GAUSSIAN_BLURRING
+    ms.blur_sigma_slider.value = 2.
+    seen = []
+    original = msw.suggest_anchors_in_image
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["blur_func"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(msw, "suggest_anchors_in_image", spy)
+    _select(viewer, object_list)
+    ms._suggest_anchors()
+    assert (seen[0] is not None) == blur
+    if blur:
+        # the widget's own blur, the one a run applies
+        blurred = seen[0](np.eye(8)[None].repeat(8, 0))
+        assert blurred.shape == (8, 8, 8) and 0 < blurred.max() < 1
+    assert np.all(_distance_from_ball_surface(np.asarray(ms.points_layer.data)) < 2.5)

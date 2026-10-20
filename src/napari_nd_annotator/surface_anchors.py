@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from scipy.ndimage import gaussian_filter, map_coordinates
+from scipy.ndimage import gaussian_filter, map_coordinates, zoom
 
 __all__ = ["AnchorSuggestion", "suggest_surface_anchors", "edge_cost_from_image", "suggest_anchors_in_image"]
 
@@ -219,12 +219,17 @@ def edge_cost_from_image(image, alpha=.01, beta=5., blur_func=None):
 
 
 def suggest_anchors_in_image(image, bbox_min, bbox_max, scale=1., alpha=.01, beta=5., blur_func=None, margin=10,
-                             **kwargs):
+                             resample=None, **kwargs):
     """:func:`suggest_surface_anchors` for a raw image: phi is computed only on the bounding box plus ``margin``.
 
     ``bbox_min``/``bbox_max`` are in the data (index) coordinates of ``image``, so are the returned points.
     The extra keyword arguments are passed on to :func:`suggest_surface_anchors`. As in the minimal surface run, the
-    image of the crop is normalized on its own.
+    image of the crop is normalized on its own. ``blur_func`` is applied to the normalized crop before the gradient
+    is taken, so the anchors are found on the same blurred image the surface is computed on.
+
+    ``resample`` (one factor per axis, e.g. ``(z_scale, 1, 1)``) resamples the crop with a cubic spline first, as the
+    minimal surface run does for anisotropic images; the blur and the edge cost then act on isotropic voxels and
+    ``scale`` is ignored. Use either ``scale`` or ``resample``.
     """
     shape = np.asarray(image.shape)
     bbox_min = np.asarray(bbox_min, dtype=float)
@@ -233,12 +238,20 @@ def suggest_anchors_in_image(image, bbox_min, bbox_max, scale=1., alpha=.01, bet
     crop_hi = np.minimum(np.ceil(np.maximum(bbox_min, bbox_max)) + margin + 1, shape).astype(int)
     if np.any(crop_lo >= crop_hi):
         return AnchorSuggestion(reason="bounding box is outside of the image")
-    crop = tuple(slice(a, b) for a, b in zip(crop_lo, crop_hi))
-    phi = edge_cost_from_image(np.asarray(image[crop]), alpha, beta, blur_func)
-    result = suggest_surface_anchors(bbox_min - crop_lo, bbox_max - crop_lo, phi, scale, **kwargs)
+    crop = np.asarray(image[tuple(slice(a, b) for a, b in zip(crop_lo, crop_hi))])
+    # crop index -> index of the (resampled) crop that the edge cost is computed on
+    factor = np.ones(len(shape))
+    if resample is not None and not np.allclose(resample, 1):
+        crop = zoom(crop.astype(float), resample)
+        # zoom maps the first and last voxel centres onto each other
+        factor = (np.asarray(crop.shape) - 1) / np.maximum(crop_hi - crop_lo - 1, 1)
+        scale = 1.
+    phi = edge_cost_from_image(crop, alpha, beta, blur_func)
+    result = suggest_surface_anchors((bbox_min - crop_lo) * factor, (bbox_max - crop_lo) * factor, phi, scale,
+                                     **kwargs)
     if result.found:
-        result.p1 = result.p1 + crop_lo
-        result.p2 = result.p2 + crop_lo
+        result.p1 = result.p1 / factor + crop_lo
+        result.p2 = result.p2 / factor + crop_lo
     return result
 
 

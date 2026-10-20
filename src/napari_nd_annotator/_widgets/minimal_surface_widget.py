@@ -851,7 +851,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if self.used_feature != "Gradient":
             show_info("The suggestion uses the gradient feature, not the custom one")
         result = suggest_anchors_in_image(
-            image_layer.data, bbox_min, bbox_max, scale=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
+            image_layer.data, bbox_min, bbox_max, resample=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
             blur_func=self._blur_image if self.is_blurring_enabled else None,
             method=SUGGESTION_MODES[self.suggestion_mode_combobox.value]
         )
@@ -864,7 +864,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
             added.append(self.points_layer.world_to_data(image_layer.data_to_world(point)))
             self.points_layer.add(added[-1])
         self._last_suggestion = added
-        message = "Suggested anchors for object %d (confidence %.2f)" % (label, result.confidence)
+        message = "Suggested anchors for object %d (confidence %.2f%s)" % (
+            label, result.confidence, ", blurred" if self.is_blurring_enabled else ", not blurred"
+        )
         if result.confidence < .2:
             message += ", low: check the points"
         show_info(message)

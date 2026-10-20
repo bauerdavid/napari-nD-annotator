@@ -240,6 +240,17 @@ def test_suggest_anchors_in_image(scale):
     assert clipped.found
 
 
+def test_suggest_anchors_in_image_resampled():
+    # anisotropic image (z voxels twice as large): resampling it first, like the minimal surface run
+    shape = (30, 90, 100)
+    scale = np.array([2., 1., 1.])
+    ellipsoid = Ellipsoid(np.array([15, 60, 50]) * scale, np.array([10., 10., 22.]))
+    image = render([ellipsoid], shape, scale, noise=.05) * 1000
+    bbox = bbox_of(ellipsoid.mask(shape, scale))
+    result = suggest_anchors_in_image(image, *bbox, resample=(2., 1., 1.))
+    check_suggestion(result, ellipsoid, bbox, scale, 2)
+
+
 def test_suggest_anchors_in_image_with_blur():
     from scipy.ndimage import gaussian_filter as blur
     shape = (50, 60, 70)
