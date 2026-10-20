@@ -225,7 +225,10 @@ class MinimalContourWidget(MagicTemplate):
         self._labels_layer: Labels = None
         self.apply_contrast_limits = True
         self._prev_img_layer = self.image_layer
-        self._orig_image = self.image_layer.data if self.image_layer else None
+        # copy of the image layer's data, taken when the minimal contour tool first needs it (see _apply_blurring)
+        self._orig_image = None
+        # whether _apply_blurring wrote a blurred slice into self._prev_img_layer
+        self._image_modified = False
         self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
         self.remove_last_anchor = False
         self.last_added_with_shift = None
@@ -345,6 +348,15 @@ class MinimalContourWidget(MagicTemplate):
         return self.blur_image_checkbox.value
 
     @property
+    def is_mc_enabled(self):
+        """Whether the minimal contour tool is on for the active labels layer; the image is only processed then."""
+        labels_layer = self.labels_layer
+        if labels_layer is None:
+            return False
+        overlay = labels_layer._overlays.get("minimal_contour")
+        return overlay is not None and overlay.enabled
+
+    @property
     def is_contour_smoothing_enabled(self):
         return self.smooth_contour_checkbox.value
 
@@ -411,7 +423,13 @@ class MinimalContourWidget(MagicTemplate):
         image_layer = self.image_layer
         if image_layer is None or self.viewer is None:
             return
+        if not self.is_mc_enabled:
+            self._restore_unblurred()
+            return
+        if self._orig_image is None:
+            self._orig_image = image_layer.data.copy()
         image_layer.data = self._orig_image.copy()
+        self._image_modified = False
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             if self.is_blurring_enabled and self.blur_sigma > 0.:
@@ -435,8 +453,20 @@ class MinimalContourWidget(MagicTemplate):
                         image_layer.data[slice_ + (i,)] = self._blur_image(orig_image[..., i]).astype(self._orig_image.dtype)
                 else:
                     image_layer.data[slice_] = self._blur_image(self._orig_image[slice_]).astype(self._orig_image.dtype)
+                self._image_modified = True
                 image_layer.events.data()
                 image_layer.refresh()
+
+    def _restore_unblurred(self):
+        """Undo the blurred slice _apply_blurring left in the image layer, e.g. when the minimal contour tool is turned off."""
+        image_layer = self._prev_img_layer
+        if not self._image_modified or image_layer is None:
+            return
+        # _apply_blurring copies _orig_image before writing into the layer, so the layer may share it
+        image_layer.data = self._orig_image
+        self._image_modified = False
+        image_layer.events.data()
+        image_layer.refresh()
 
     # tooltip = "Reduce the selected label by one pixel around the borders\n"
     # "using erosion"
@@ -528,7 +558,9 @@ class MinimalContourWidget(MagicTemplate):
                 # img = im_layer._data_view.astype(float)
                 im_layer._set_view_slice()
                 slice_indices = layer_slice_indices(im_layer)
-                img = self._orig_image[slice_indices].astype(float)
+                # the layer holds the original data until the minimal contour tool is first used
+                orig_image = self._orig_image if self._orig_image is not None else im_layer.data
+                img = orig_image[slice_indices].astype(float)
             if all(s > DEMO_SIZE for s in (img.shape[:2] if im_layer.rgb else img.shape)):
                 img = img[(img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2, (img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2]
             if self.is_blurring_enabled:
@@ -640,9 +672,9 @@ class MinimalContourWidget(MagicTemplate):
     def _store_orig_image(self, *_):
         image_layer: Image = self.image_layer
         if image_layer != self._prev_img_layer:
-            if self._prev_img_layer is not None:
-                self._prev_img_layer.data = self._orig_image
-            self._orig_image = image_layer.data.copy() if image_layer is not None else None
+            self._restore_unblurred()
+            # copied by _apply_blurring when the minimal contour tool first needs it
+            self._orig_image = None
         self._prev_img_layer = image_layer
         qt_viewer = viewer_qt_viewer(self.viewer)
         if image_layer in qt_viewer.controls.widgets:
@@ -664,6 +696,11 @@ class MinimalContourWidget(MagicTemplate):
             # self.feature_editor.features = None #TODO check
             return
         if self.viewer is None:
+            return
+        if not self.is_mc_enabled:
+            # nothing to compute while the tool is off (e.g. only painting); enabling it calls this again
+            VispyMinimalContourOverlay.set_calculator_feature(None)
+            self._restore_unblurred()
             return
         if self.viewer.dims.ndisplay == 3:
             # self.anchor_points.editable = False
@@ -852,6 +889,7 @@ class MinimalContourWidget(MagicTemplate):
             bind_all(self._labels_layer, LABELS, {"straight_lines": self._on_ctrl_pressed})
             self._labels_layer._overlays.update({"minimal_contour": MinimalContourOverlay()})
             self._labels_layer._overlays["minimal_contour"].visible=True
+            self._labels_layer._overlays["minimal_contour"].events.enabled.connect(self._on_mc_enabled_change)
             labels_control: QtLabelsControls = viewer_qt_viewer(self.viewer).controls.widgets[self._labels_layer]
             mc_btn = QtModeRadioButton(self._labels_layer, "minimal contour", Mode.PAN_ZOOM)
             action_manager.bind_button(
@@ -948,3 +986,10 @@ class MinimalContourWidget(MagicTemplate):
     def _disable_mc_mode(self, state):
         if state and self.labels_layer is not None:
             self.labels_layer._overlays["minimal_contour"].enabled = False
+
+    def _on_mc_enabled_change(self, *_):
+        """Prepare the image features when the tool is turned on (by any means), drop them when it is turned off.
+
+        _set_image looks at the active labels layer, so a change on another layer only refreshes the current state.
+        """
+        self._set_image("_on_mc_enabled_change")
