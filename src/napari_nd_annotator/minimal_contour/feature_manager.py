@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import time
 import atexit
 import warnings
 import traceback
@@ -14,7 +15,49 @@ from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, 
 from napari import Viewer, layers
 from typing import Union, Optional
 import glob
+import re
 TEMP_SUFFIX = "_nd_annotator"
+# folders are named <tmpprefix><random>_<pid>_nd_annotator, so the owning process can be told apart from others
+TEMP_FOLDER_PATTERN = re.compile(r"_(\d+)%s$" % re.escape(TEMP_SUFFIX))
+# folders without a pid in their name come from older versions: only removed once they are this old
+LEGACY_TEMP_SECONDS = 24 * 60 * 60
+
+
+def pid_alive(pid: int) -> bool:
+    """Whether a process with this id is running. Errs on the side of "alive" when it cannot tell."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        # os.kill must not be used here: on Windows any signal other than CTRL_*_EVENT terminates the process
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        process_query_limited_information = 0x1000
+        error_access_denied = 5
+        still_active = 259
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == error_access_denied
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)  # signal 0 only checks that the process exists
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, but belongs to another user
+    except OSError:
+        return True
+    return True
 
 
 class FeatureManager:
@@ -24,7 +67,7 @@ class FeatureManager:
         self.memmaps: list[Optional[Union[np.ndarray, np.memmap]]] = [None, None]
         self.slices_calculated = dict()
         self.clean_tmp()
-        self.temp_folder = tempfile.mkdtemp(suffix=TEMP_SUFFIX)
+        self.temp_folder = tempfile.mkdtemp(suffix="_%d%s" % (os.getpid(), TEMP_SUFFIX))
         # map layers to file prefix
         self.prefix_map = dict()
         self.viewer: Viewer = viewer
@@ -91,6 +134,8 @@ class FeatureManager:
             self.slices_calculated[layer] = dict()
         if dims_displayed not in self.slices_calculated[layer]:
             self.slices_calculated[layer][dims_displayed] = np.zeros([layer.data.shape[i] for i in self.viewer.dims.not_displayed], bool)
+        # another instance's clean_tmp() may have removed the folder since it was created
+        os.makedirs(self.temp_folder, exist_ok=True)
         path_v = self.generate_filename(filename, dims_displayed, "_v")
         path_h = self.generate_filename(filename, dims_displayed, "_h")
         if layer.rgb:
@@ -128,9 +173,20 @@ class FeatureManager:
             shutil.rmtree(self.temp_folder)
 
     def clean_tmp(self):
+        # only remove leftovers of processes that no longer run: other napari/pytest processes keep their folders
         temp_dir = tempfile.gettempdir()
         temp_folders = glob.glob(os.path.join(temp_dir, "%s*%s" % (tempfile.gettempprefix(), TEMP_SUFFIX)))
         for fold in temp_folders:
+            match = TEMP_FOLDER_PATTERN.search(os.path.basename(fold))
+            if match is not None:
+                if pid_alive(int(match.group(1))):
+                    continue
+            else:
+                try:
+                    if time.time() - os.path.getmtime(fold) < LEGACY_TEMP_SECONDS:
+                        continue
+                except OSError:
+                    continue
             try:
                 shutil.rmtree(fold)
             except PermissionError:
