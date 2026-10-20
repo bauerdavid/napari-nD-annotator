@@ -172,6 +172,23 @@ def test_tool_state_follows_the_active_labels_layer(viewer, scene, feature_calls
     assert VispyMinimalContourOverlay._features_shape == SHAPE[1:]
 
 
+@pytest.mark.parametrize("mc_on", [False, True])
+def test_blur_preview_follows_the_sigma_slider(viewer, scene, mc_on):
+    # the preview used Image._set_view_slice(), which raises NotImplementedError on newer napari
+    mc = scene.mc
+    viewer.dims.set_point(0, 2)
+    if mc_on:
+        mc._enable_mc_mode()
+    _process_events()
+    mc.blur_image_checkbox.value = True
+    previews = []
+    for sigma in (0.5, 2.5):
+        mc.blur_sigma_slider.value = sigma
+        previews.append(np.asarray(mc.demo_image_widget.value).copy())
+    assert previews[0].shape[-1] == 3
+    assert not np.array_equal(*previews)
+
+
 def test_enabled_callback_is_connected_once(viewer, scene, feature_calls):
     # re-selecting the layer must not connect the callback twice: the features would be prepared twice
     viewer.layers.selection.events.active(value=scene.labels)

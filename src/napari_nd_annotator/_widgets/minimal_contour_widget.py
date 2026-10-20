@@ -556,7 +556,6 @@ class MinimalContourWidget(MagicTemplate):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 # img = im_layer._data_view.astype(float)
-                im_layer._set_view_slice()
                 slice_indices = layer_slice_indices(im_layer)
                 # the layer holds the original data until the minimal contour tool is first used
                 orig_image = self._orig_image if self._orig_image is not None else im_layer.data
