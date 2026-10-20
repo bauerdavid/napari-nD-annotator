@@ -40,6 +40,8 @@ from napari.layers._source import layer_source
 from ._utils import ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
 from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer
+from ..surface_anchors import suggest_anchors_in_image
+from .object_list import selected_object
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 
@@ -65,6 +67,8 @@ FEATURE_KEYS = [GRADIENT, CUSTOM]
 #     LOW_INTENSITY: INTENSITY_BASED,
 #     CUSTOM: INTENSITY_BASED
 # }
+
+SUGGESTION_MODES = {"Axis": "axis", "Fan (farthest pair)": "fan"}
 
 CAD_BLURRING = "Edge preserving" #"Curvature Anisotropic Diffusion"
 GAUSSIAN_BLURRING = "Gaussian"
@@ -807,7 +811,112 @@ class _MinimalSurfaceWidget(MagicTemplate):
                 self._slice_layer.mouse_drag_callbacks.append(callback)
             return callback
 
+    suggestion_mode_combobox = field(widget_type="ComboBox", label="Suggestion mode").with_options(
+        choices=list(SUGGESTION_MODES),
+        tooltip="Axis: the anchors are on the boundary along the longest axis of the bounding box."
+                " Fan: casts rays in all directions and takes the farthest pair of boundary points,"
+                " also for objects that are tilted in the box (can be less robust next to touching objects)."
+    )
+    fan_rays_spinbox = field(int, label="Fan: rays").with_options(
+        min=16, max=2000, step=16, value=256,
+        tooltip="Number of directions the fan casts rays in from the center of the bounding box"
+    )
+    fan_max_radius_jump_spinbox = field(float, label="Fan: max radius jump").with_options(
+        min=1., max=5., step=.1, value=1.3,
+        tooltip="A ray whose boundary is farther from the center than this factor times that of its neighboring"
+                " rays is ignored (leak into a neighbor or a noisy far edge). Lower: stricter, but too low"
+                " cuts off the tips of elongated objects"
+    )
+    fan_min_relative_strength_spinbox = field(float, label="Fan: min relative strength").with_options(
+        min=0., max=2., step=.1, value=.8,
+        tooltip="Rays with a boundary weaker than this fraction of the typical one are ignored."
+                " Higher: only the clearest boundaries count"
+    )
+    suggest_anchors_button = field(widget_type=PushButton, name="Suggest anchors").with_options(
+        tooltip="Propose the two anchor points from the bounding box selected in the object list."
+                " Move them to adjust, then run."
+    )
     call_button = field(widget_type=PushButton, name="Run")
+
+    def _suggest_anchors(self):
+        if self.call_button.text != "Run":
+            warnings.warn("Wait until the estimation finishes before suggesting anchors")
+            return
+        image_layer = self.image_layer
+        if image_layer is None or image_layer.ndim != 3 or image_layer.rgb:
+            warnings.warn("Suggesting anchors needs a 3D image layer")
+            return
+        selected = selected_object(self._viewer)
+        if selected is None:
+            warnings.warn("Select an object in the object list first")
+            return
+        label, bbox_min, bbox_max, list_image_layer = selected
+        if list_image_layer.ndim != 3:
+            warnings.warn("Suggesting anchors needs a 3D object list image")
+            return
+        if list_image_layer is not image_layer:
+            # e.g. a cropped copy of the object list's image: the bounding box is converted through world coordinates
+            corners = np.stack([
+                image_layer.world_to_data(list_image_layer.data_to_world(corner)) for corner in (bbox_min, bbox_max)
+            ])
+            bbox_min, bbox_max = corners.min(0), corners.max(0)
+        if len(self.points_layer.data) % 2 == 1:
+            warnings.warn("Finish the current pair of anchors before suggesting new ones")
+            return
+        if self.used_feature != "Gradient":
+            show_info("The suggestion uses the gradient feature, not the custom one")
+        result = suggest_anchors_in_image(
+            image_layer.data, bbox_min, bbox_max, resample=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
+            blur_func=self._blur_image if self.is_blurring_enabled else None,
+            **self._suggestion_options()
+        )
+        if not result.found:
+            warnings.warn("No anchor suggestion for object %d: %s" % (label, result.reason))
+            return
+        self._remove_last_suggestion()
+        added = []
+        for point in (result.p1, result.p2):
+            added.append(self.points_layer.world_to_data(image_layer.data_to_world(point)))
+            self.points_layer.add(added[-1])
+        self._last_suggestion = added
+        message = "Suggested anchors for object %d (confidence %.2f%s)" % (
+            label, result.confidence, ", blurred" if self.is_blurring_enabled else ", not blurred"
+        )
+        if result.confidence < .2:
+            message += ", low: check the points"
+        show_info(message)
+
+    def _suggestion_options(self):
+        method = SUGGESTION_MODES[self.suggestion_mode_combobox.value]
+        options = {"method": method}
+        if method == "fan":
+            options.update(
+                n_rays=self.fan_rays_spinbox.value,
+                max_radius_jump=self.fan_max_radius_jump_spinbox.value,
+                min_relative_strength=self.fan_min_relative_strength_spinbox.value,
+            )
+        return options
+
+    @suggestion_mode_combobox.connect
+    def _on_suggestion_mode_changed(self, mode):
+        is_fan = SUGGESTION_MODES[mode] == "fan"
+        for widget in (self.fan_rays_spinbox, self.fan_max_radius_jump_spinbox,
+                       self.fan_min_relative_strength_spinbox):
+            widget.visible = is_fan
+
+    def _remove_last_suggestion(self):
+        """Replace the previous suggestion, but only if the user has not touched it."""
+        previous, self._last_suggestion = self._last_suggestion, None
+        if previous is None:
+            return
+        data = np.asarray(self.points_layer.data)
+        if len(data) < 2 or not (np.allclose(data[-2], previous[0]) and np.allclose(data[-1], previous[1])):
+            return
+        self.points_layer.selected_data = {len(data) - 2, len(data) - 1}
+        self.points_layer.remove_selected()
+        # keeps the pair coloring in sync with the layer
+        self._color_pairs_callback.prev_len = len(self.points_layer.data)
+        self._color_pairs_callback.prev_data = np.asarray(self.points_layer.data).copy()
 
     def _start_estimation(self):
         if self.image_layer not in self._viewer.layers:
@@ -1103,6 +1212,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.blurring_progress_widget = ProgressWidget(message="blurring...")
         self.estimation_progress_widget = ProgressWidget(message="Annotating...")
         self.points_layer = None
+        self._last_suggestion = None
+        self._color_pairs_callback = None
         self._estimation_running = False
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignTop)
@@ -1121,6 +1232,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def __post_init__(self):
         self.call_button.clicked.connect(self._start_estimation)
+        self.suggest_anchors_button.clicked.connect(self._suggest_anchors)
         self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
                                     + self.native.children()[1].verticalScrollBar().sizeHint().width()
                                     + 2 * self.native.children()[1].widget().layout().getContentsMargins()[2])
@@ -1130,6 +1242,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             container.collapsed = True
             self._collapsible_group.addItem(container)
         self._on_feature_changed(self.used_feature)
+        self._on_suggestion_mode_changed(self.suggestion_mode_combobox.value)
         self.try_blurring_button.native.setCheckable(True)
         self._on_blur_checked(self.blur_image_checkbox.value)
 
@@ -1199,7 +1312,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._viewer = unwrap_viewer(viewer)
         self.minimal_contour_widget = minimal_contour_widget
         self.points_layer = self.viewer.add_points(ndim=3, size=2, name="3D Anchors [DO NOT REMOVE]")
-        self.points_layer.events.data.connect(ColorPairsCallback())
+        self._color_pairs_callback = ColorPairsCallback()
+        self.points_layer.events.data.connect(self._color_pairs_callback)
         self.points_layer.mouse_drag_callbacks.append(self._drag_points_callback)
         self.viewer.layers.events.inserted.connect(keep_layer_on_top(self.points_layer))
         self.viewer.layers.events.moved.connect(keep_layer_on_top(self.points_layer))
@@ -1497,6 +1611,11 @@ class _MinimalSurfaceWidget(MagicTemplate):
             container.enabled = is_enabled
         self.ClippingWidget.enabled = is_enabled
         self.call_button.enabled = is_enabled
+        self.suggest_anchors_button.enabled = is_enabled
+        self.suggestion_mode_combobox.enabled = is_enabled
+        for widget in (self.fan_rays_spinbox, self.fan_max_radius_jump_spinbox,
+                       self.fan_min_relative_strength_spinbox):
+            widget.enabled = is_enabled
 
     @image_layer_combobox.connect
     def _set_slice_widget_image(self, _=None):

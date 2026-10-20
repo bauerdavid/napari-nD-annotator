@@ -27,10 +27,36 @@ except ImportError:
 
 import itertools
 import csv
+import weakref
 
 import PIL.Image as PilImage
 
 import time
+
+
+_OBJECT_LISTS = weakref.WeakSet()
+
+
+def selected_object(viewer):
+    """The object selected in the object list of ``viewer`` as ``(label, bbox_min, bbox_max, image_layer)``, or None.
+
+    The bounding box corners are inclusive and in data (index) coordinates of ``image_layer``, the image layer
+    of the object list. Lets other widgets work on the selected object without a reference to the object list.
+    """
+    viewer = unwrap_viewer(viewer)
+    for object_list in list(_OBJECT_LISTS):
+        try:
+            if object_list.viewer is not viewer or object_list.selected_idx is None:
+                continue
+            item = object_list.item(object_list.selected_idx)
+            image_layer = object_list.image_layer
+        except RuntimeError:  # the widget was deleted
+            continue
+        if item is None or image_layer is None:
+            continue
+        bounding_box = np.asarray(item.bounding_box)
+        return item.idx, bounding_box[0].copy(), bounding_box[1].copy(), image_layer
+    return None
 
 
 def slice_len(slice_, count=None):
@@ -334,6 +360,7 @@ if BoundingBoxLayer:
             self.projections_widget = None
             self._mouse_down = False
             self.selected_idx = None
+            _OBJECT_LISTS.add(self)
             self.previous_edge_color = None
             self._indices = None
             self.indices = indices

@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 from scipy.ndimage import gaussian_filter, gaussian_gradient_magnitude
 
-from napari_nd_annotator.surface_anchors import suggest_surface_anchors
+from napari_nd_annotator.surface_anchors import (
+    edge_cost_from_image, suggest_anchors_in_image, suggest_surface_anchors
+)
 
 ALPHA = .01
 BETA = 5.
@@ -204,6 +206,59 @@ def test_fallback_to_other_axis():
     result = suggest_surface_anchors(*bbox, phi)
     assert result.found and result.axis in (0, 1)
     assert np.all(surface_error(ellipsoid, [result.p1, result.p2], (1, 1, 1)) < 2.5)
+
+
+def test_edge_cost_from_image_matches_widget_formula():
+    image = np.random.default_rng(0).normal(size=(12, 14, 16))
+    phi = edge_cost_from_image(image, alpha=.05, beta=3.)
+    assert phi.shape == image.shape and phi.max() == 1 and phi.min() > 0
+    # an image without any contrast has no edges
+    assert np.all(edge_cost_from_image(np.full((8, 8, 8), 7.)) == 1)
+    # a step edge is low
+    step = np.zeros((20, 20, 20))
+    step[:, :, 10:] = 1
+    phi = edge_cost_from_image(step)
+    assert phi[10, 10, 9:11].max() < phi[10, 10, 3]
+
+
+@pytest.mark.parametrize("scale", [(1., 1., 1.), (2., 1., 1.)])
+def test_suggest_anchors_in_image(scale):
+    # the crop is offset in the image: the points must come back in the coordinates of the whole image
+    shape = (60, 90, 100)
+    scale = np.asarray(scale)
+    ellipsoid = Ellipsoid(np.array([30, 60, 50]) * scale, np.array([10., 10., 22.]) * scale.min())
+    image = render([ellipsoid], shape, scale, noise=.05) * 1000
+    bbox = bbox_of(ellipsoid.mask(shape, scale))
+    result = suggest_anchors_in_image(image, *bbox, scale=scale)
+    check_suggestion(result, ellipsoid, bbox, scale, 2)
+    result = suggest_anchors_in_image(image, *bbox, scale=scale, method="fan")
+    assert result.found
+    assert np.all(surface_error(ellipsoid, [result.p1, result.p2], scale) < 2.5)
+    # box (partly) outside the image
+    assert not suggest_anchors_in_image(image, [200, 200, 200], [210, 210, 210]).found
+    clipped = suggest_anchors_in_image(image, bbox[0] - 5, bbox[1] + 5, scale=scale)
+    assert clipped.found
+
+
+def test_suggest_anchors_in_image_resampled():
+    # anisotropic image (z voxels twice as large): resampling it first, like the minimal surface run
+    shape = (30, 90, 100)
+    scale = np.array([2., 1., 1.])
+    ellipsoid = Ellipsoid(np.array([15, 60, 50]) * scale, np.array([10., 10., 22.]))
+    image = render([ellipsoid], shape, scale, noise=.05) * 1000
+    bbox = bbox_of(ellipsoid.mask(shape, scale))
+    result = suggest_anchors_in_image(image, *bbox, resample=(2., 1., 1.))
+    check_suggestion(result, ellipsoid, bbox, scale, 2)
+
+
+def test_suggest_anchors_in_image_with_blur():
+    from scipy.ndimage import gaussian_filter as blur
+    shape = (50, 60, 70)
+    ellipsoid = Ellipsoid((25, 30, 35), (9, 9, 20))
+    image = render([ellipsoid], shape, (1, 1, 1), noise=.3)
+    bbox = bbox_of(ellipsoid.mask(shape, (1, 1, 1)))
+    result = suggest_anchors_in_image(image, *bbox, blur_func=lambda x: blur(x, 1.5))
+    check_suggestion(result, ellipsoid, bbox, (1, 1, 1), 2, tolerance=3)
 
 
 def random_ellipsoid_case(rng, noise):
