@@ -151,6 +151,29 @@ def test_turning_the_tool_off_leaves_nothing_behind(viewer, scene, feature_calls
     assert VispyMinimalContourOverlay._features_shape == SHAPE[:2]
 
 
+@pytest.mark.parametrize("leave", ["delete labels", "select image"])
+def test_blurred_slice_is_restored_when_the_labels_layer_is_left(viewer, scene, leave):
+    mc = scene.mc
+    mc.blur_image_checkbox.value = True
+    viewer.dims.set_point(0, 2)
+    _enable_with_button(viewer, scene.labels)
+    assert not np.array_equal(scene.image.data[2], scene.data[2])
+
+    if leave == "delete labels":
+        viewer.layers.remove(scene.labels)
+    else:
+        viewer.layers.selection.active = scene.image
+    _process_events()
+    assert mc.labels_layer is None
+    np.testing.assert_array_equal(scene.image.data, scene.data)
+
+    if leave == "select image":
+        # back on the labels layer, whose tool is still on, the blurred slice is shown again
+        viewer.layers.selection.active = scene.labels
+        _process_events()
+        assert not np.array_equal(scene.image.data[2], scene.data[2])
+
+
 def test_tool_state_follows_the_active_labels_layer(viewer, scene, feature_calls):
     other = viewer.add_labels(np.zeros(SHAPE, dtype=np.uint8), name="other",
                               metadata={"source_image_layer": scene.image})

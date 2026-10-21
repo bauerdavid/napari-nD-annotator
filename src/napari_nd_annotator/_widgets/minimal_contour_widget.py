@@ -868,6 +868,9 @@ class MinimalContourWidget(MagicTemplate):
         active_layer = self.viewer.layers.selection.active
         self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
         self._on_label_change()
+        if not self.is_mc_enabled:
+            # e.g. the labels layer was deleted or another layer was selected: the blurred slice must not stay
+            self._restore_unblurred()
         if not self._labels_layer:
             self._show_no_labels_layer_selected_txt()
             return
