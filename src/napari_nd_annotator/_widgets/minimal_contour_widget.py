@@ -33,10 +33,10 @@ from ._utils import ScriptExecuteWidget, ProgressWidget
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from ._utils.callbacks import reduce_mask, extend_mask
 from ._utils.shortcuts import LABELS, VIEWER, bind_all
-from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
-    layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
+from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay, \
+    layer_slice_indices, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
     viewer_main_window
-from ..minimal_contour import FeatureManager
+from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -235,7 +235,12 @@ class MinimalContourWidget(MagicTemplate):
         self.prev_labels_layer = self.labels_layer
         self.feature_inverted = False
         self.prev_timer_id = None
-        self.feature_manager = None
+        # gradients of the displayed plane, computed when needed (see _get_gradients)
+        self._plane_features = PlaneFeatureCache()
+        # per image layer id: bumped when the layer's data changes, so that its cached planes are never reused
+        self._data_versions = {}
+        # image layers whose data event is already connected
+        self._data_watch = weakref.WeakSet()
         self.event_filter = EventFilter(self)
 
         # Ctrl+Z handling
@@ -680,13 +685,8 @@ class MinimalContourWidget(MagicTemplate):
             self.feature_editor.variables["image"] = image
             self.feature_editor.Run()
         else:
-            grad_x, grad_y = self.feature_manager.get_features(image_layer)
+            grad_x, grad_y = to_float64_pair(self._get_gradients(image_layer))
             if grad_x is not None:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    order = layer_get_order(image_layer)
-                    grad_x = grad_x.transpose(order[:2])
-                    grad_y = grad_y.transpose(order[:2])
                 if self.is_blurring_enabled:
                     grad_x = self._blur_image(grad_x)
                     grad_y = self._blur_image(grad_y)
@@ -702,6 +702,45 @@ class MinimalContourWidget(MagicTemplate):
         # self.from_e_points_layer.translate = image_layer.translate
         # self.to_s_points_layer.translate = image_layer.translate
         # self.output.translate = image_layer.translate
+
+    def _get_gradients(self, image_layer: Image):
+        """The x and y derivative of the plane displayed for ``image_layer`` (float32, read-only), or (None, None).
+
+        The plane is taken as displayed (``_data_view``, so x and y follow the display order) and its gradients are
+        cached per (layer, displayed dims, slice indices), so only the planes that are visited are processed.
+        """
+        if layer_ndisplay(image_layer) == 3 or image_layer not in self.viewer.layers:
+            return None, None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dims_displayed = tuple(layer_dims_displayed(image_layer))
+            dims_not_displayed = tuple(layer_dims_not_displayed(image_layer))
+            slice_indices = layer_slice_indices(image_layer)
+        idx = tuple(slice_indices[i] for i in dims_not_displayed)
+        shape = image_layer.data.shape
+        if any(i < 0 or i >= shape[dim] for dim, i in zip(dims_not_displayed, idx)):
+            return None, None
+        layer_id = id(image_layer)
+        if image_layer not in self._data_watch:
+            self._data_watch.add(image_layer)
+            image_layer.events.data.connect(lambda *_: self._on_image_data_change(layer_id))
+        key = (layer_id, dims_displayed, idx, self._data_versions.get(layer_id, 0))
+
+        def plane():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return image_layer._data_view
+        return self._plane_features.get(key, plane, image_layer.rgb)
+
+    def _on_image_data_change(self, layer_id):
+        self._data_versions[layer_id] = self._data_versions.get(layer_id, 0) + 1
+        self._plane_features.invalidate(layer_id)
+
+    def _on_layer_removed(self, layer):
+        layer_id = id(layer)
+        self._plane_features.invalidate(layer_id)
+        self._data_versions.pop(layer_id, None)
+        self._data_watch.discard(layer)
 
     @delay_function(delay=.5)
     def _delayed_set_image(self, *args):
@@ -890,7 +929,7 @@ class MinimalContourWidget(MagicTemplate):
 
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")
         self.viewer.dims.events.order.connect(self._set_image, position="last")
-        self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
+        self.viewer.layers.events.removed.connect(lambda e: self._on_layer_removed(e.value))
         # key and wheel events go to the focused widget (usually the canvas), not to the main window
         viewer_main_window(self.viewer).installEventFilter(self.event_filter)
         viewer_qt_viewer(self.viewer).canvas.native.installEventFilter(self.event_filter)
@@ -899,7 +938,6 @@ class MinimalContourWidget(MagicTemplate):
     def _initialize(self, viewer: napari.Viewer):
         viewer = self._viewer = unwrap_viewer(viewer)
         self._initialize_helper_layers()
-        self.feature_manager = FeatureManager(viewer)
         self._selected_layer_tracker = SelectedLayerTracker(self.viewer)
         self._set_viewer_callbacks()
         self._store_orig_image()
