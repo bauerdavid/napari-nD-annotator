@@ -1,7 +1,8 @@
 # Runs the plugin's smoke tests (src/napari_nd_annotator/_tests/test_napari_compat.py), the shortcut-registry
-# tests (test_shortcuts.py: help dialog, key bindings and README must agree) and the interpolation widget test
-# (test_interpolation_widget.py) against several
-# napari versions, so that a napari release that breaks the plugin shows up here and not in a bug report.
+# tests (test_shortcuts.py: help dialog, key bindings and README must agree), the interpolation widget test
+# (test_interpolation_widget.py) and the minimal contour gating tests (test_mc_gating.py: no image work unless
+# the tool is on) against several napari versions,
+# so that a napari release that breaks the plugin shows up here and not in a bug report.
 # The viewer is created but never shown; it needs OpenGL, which Mesa provides in software under xvfb.
 # Every widget in napari.yaml is also opened with add_plugin_dock_widget, i.e. the way the Plugins menu
 # opens it, with the viewer wrapped in napari's PublicOnlyProxy.
@@ -93,4 +94,4 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           # run the installed package (not the checkout) so that the wheel contents are tested too
-          xvfb-run -a -s "-screen 0 1280x1024x24" python -m pytest -v -rs --pyargs napari_nd_annotator._tests.test_napari_compat napari_nd_annotator._tests.test_shortcuts napari_nd_annotator._tests.test_interpolation_widget
+          xvfb-run -a -s "-screen 0 1280x1024x24" python -m pytest -v -rs --pyargs napari_nd_annotator._tests.test_napari_compat napari_nd_annotator._tests.test_shortcuts napari_nd_annotator._tests.test_interpolation_widget napari_nd_annotator._tests.test_mc_gating
