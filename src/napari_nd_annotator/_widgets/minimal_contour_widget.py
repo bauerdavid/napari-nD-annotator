@@ -36,6 +36,7 @@ from ._utils.shortcuts import LABELS, VIEWER, bind_all
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay, \
     layer_slice_indices, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
     viewer_main_window
+from ..minimal_contour._legacy_tmp import clean_legacy_tmp
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
@@ -938,6 +939,8 @@ class MinimalContourWidget(MagicTemplate):
     def _initialize(self, viewer: napari.Viewer):
         viewer = self._viewer = unwrap_viewer(viewer)
         self._initialize_helper_layers()
+        # feature files of older versions that were left behind (this version writes none)
+        clean_legacy_tmp()
         self._selected_layer_tracker = SelectedLayerTracker(self.viewer)
         self._set_viewer_callbacks()
         self._store_orig_image()

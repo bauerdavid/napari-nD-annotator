@@ -9,8 +9,9 @@ and dims.order changes behave. See tools/README.md.
                                          [--start-with-labels] [--json out.json] [--label TEXT]
     python tools/bench_minimal_contour.py --compare before.json after.json
 
-Every probe that is specific to the memmap based FeatureManager (temp folder, done mask, ...) is
-optional: it is reported as null when the plugin under test does not have it any more.
+Every probe that is specific to the memmap based FeatureManager (done mask, ...) is optional: it is
+reported as null when the plugin under test does not have it any more. The temp folder is looked up
+by its name (<tmp>/*_<pid>_nd_annotator) when there is no FeatureManager; none found means 0 files.
 """
 import argparse
 import json
@@ -205,11 +206,18 @@ def run(args):
 
     def temp_folder():
         folder = getattr(feature_manager(), "temp_folder", None)
+        if folder is None:
+            import glob
+            import tempfile
+            found = glob.glob(os.path.join(tempfile.gettempdir(), "*_%d_nd_annotator" % os.getpid()))
+            folder = found[0] if found else None
         return folder if folder and os.path.isdir(folder) else None
 
     def temp_stats():
         folder = temp_folder()
         if folder is None:
+            if feature_manager() is None:  # versions without feature files: nothing is written
+                return {"files": 0, "apparent_mb": 0.0, "allocated_mb": 0.0, "x_image": 0.0}
             return None
         files = [os.path.join(folder, f) for f in os.listdir(folder)]
         apparent = sum(os.path.getsize(f) for f in files)
