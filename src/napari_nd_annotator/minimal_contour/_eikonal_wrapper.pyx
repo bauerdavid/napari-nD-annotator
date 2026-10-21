@@ -50,6 +50,7 @@ cdef extern from "Eikonal.h":
         void InitEnvironmentRandersGrad(SWorkImg[double]&, SWorkImg[double]&) nogil
         int SetNextStartStop() nogil
         void SetBoundaries(int, int, int, int) nogil
+        void SetSpeedModulation(SWorkImg[double]*) nogil
         void SetParAll() nogil
         void DistanceCalculator() nogil
         int GetReady() nogil
@@ -66,7 +67,7 @@ cdef class MinimalContourCalculator:
     cdef int method
     cdef vector[int] method_pair
     cdef vector[int] progresses
-    cdef SWorkImg[double] ered, egreen, eblue, egradx, egrady
+    cdef SWorkImg[double] ered, egreen, eblue, egradx, egrady, espeedmod
     method_initialized = [False,]*4
     def __cinit__(self, np.ndarray[np.float_t, ndim=3] image, int n_points):
         self.set_image(image, np.empty((0, 0)), np.empty((0, 0)))
@@ -122,6 +123,35 @@ cdef class MinimalContourCalculator:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
+    cpdef set_speed_modulation(self, modulation):
+        """Multiply the front speed by a per-pixel factor in (0, 1] (lower means more expensive).
+
+        `modulation` has the shape (height, width) of the current image; None switches it off.
+        """
+        cdef int i
+        if modulation is None:
+            for i in range(self.eikonals.size()):
+                self.eikonals[i].SetSpeedModulation(NULL)
+            return
+        cdef np.ndarray[np.float_t, ndim=2] mod = np.clip(np.asarray(modulation, dtype=np.float64), 1e-3, 1.)
+        cdef int h = mod.shape[0]
+        cdef int w = mod.shape[1]
+        if w != self.ered.GetWidth() or h != self.ered.GetHeight():
+            raise ValueError("speed modulation shape %s does not match the image shape %s"
+                             % ((h, w), (self.ered.GetHeight(), self.ered.GetWidth())))
+        if self.espeedmod.GetWidth() != w or self.espeedmod.GetHeight() != h:
+            self.espeedmod.Set(w, h)
+        cdef int x, y
+        cdef double* m_ptr
+        for y in prange(h, nogil=True):
+            m_ptr = self.espeedmod[y]
+            for x in range(w):
+                m_ptr[x] = mod[y, x]
+        for i in range(self.eikonals.size()):
+            self.eikonals[i].SetSpeedModulation(&self.espeedmod)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
     cpdef set_image(self, np.ndarray[np.float_t, ndim=3] image, np.ndarray[np.float_t, ndim=2] gradx, np.ndarray[np.float_t, ndim=2] grady):
         if image is None:
             return
@@ -130,6 +160,8 @@ cdef class MinimalContourCalculator:
             return
         cdef int w = image.shape[1]
         cdef int h = image.shape[0]
+        # a speed modulation belongs to the previous image: it has to be set again for this one
+        self.set_speed_modulation(None)
         cdef np.ndarray[np.float_t, ndim=1] img_max = image.max(axis=(1, 2))
         if self.ered.GetWidth() != w or self.ered.GetHeight() != h:
             self.ered.Set(w, h)
