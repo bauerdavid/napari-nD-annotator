@@ -1,4 +1,5 @@
 import colorsys
+import os
 import time
 import warnings
 import weakref
@@ -37,6 +38,7 @@ from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_sl
     layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
     viewer_main_window
 from ..minimal_contour import FeatureManager
+from ..minimal_contour.intensity_prior import MAX_STRENGTH as MAX_PRIOR_STRENGTH
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -91,6 +93,8 @@ FEATURES = {
 }
 
 DEMO_SIZE = 200
+# set this environment variable (to anything but "" or "0") to show the experimental intensity prior controls
+INTENSITY_PRIOR_ENV = "ND_ANNOTATOR_INTENSITY_PRIOR"
 
 
 class ColorBox(FreeWidget):
@@ -196,6 +200,13 @@ class MinimalContourWidget(MagicTemplate):
                                                     "with the selected image feature (with a lower number the contour will be\n"
                                                     "closer to the Euclidean shortest path")
     local_intensity_correction_checkbox = field(bool, location=ImageFeaturesWidget).with_options(visible=False)
+    # experimental, only shown when the INTENSITY_PRIOR_ENV environment variable is set
+    intensity_prior_checkbox = field(bool, label="Intensity prior", location=ImageFeaturesWidget).with_options(
+        visible=False, tooltip="[Experimental] When checked, the contour prefers pixels with the intensity\n"
+                               "of the boundary traced so far (anchor points and accepted contour)")
+    intensity_prior_strength_slider = field(float, label="Prior strength", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(
+        min=0., max=MAX_PRIOR_STRENGTH, value=0.8, visible=False,
+        tooltip="How much pixels with a different intensity are avoided")
 
 
     blur_image_checkbox = field(bool, label="Blur image", location=BlurWidget).with_options(tooltip="When checked, the image will be blurred\n"
@@ -268,6 +279,13 @@ class MinimalContourWidget(MagicTemplate):
             self._initialize(self._viewer)
         VispyMinimalContourOverlay.mc_calculator.set_param(self.param)
         self.local_intensity_correction_checkbox.changed.connect(VispyMinimalContourOverlay.mc_calculator.set_use_local_maximum)
+        if os.environ.get(INTENSITY_PRIOR_ENV, "") not in ("", "0"):
+            self.intensity_prior_checkbox.visible = True
+            self.intensity_prior_strength_slider.visible = True
+        VispyMinimalContourOverlay.set_intensity_prior_strength(self.intensity_prior_strength_slider.value)
+        VispyMinimalContourOverlay.set_use_intensity_prior(self.intensity_prior_checkbox.value)
+        self.intensity_prior_checkbox.changed.connect(VispyMinimalContourOverlay.set_use_intensity_prior)
+        self.intensity_prior_strength_slider.changed.connect(VispyMinimalContourOverlay.set_intensity_prior_strength)
 
         if self.labels_layer is not None:
             dtype_lims = get_dtype_limits(get_dtype(self.labels_layer))
@@ -310,6 +328,10 @@ class MinimalContourWidget(MagicTemplate):
             del d["labels_layer_combobox"]
         if "source_image_container" in d:
             del d["source_image_container"]
+        # the experimental intensity prior always starts switched off
+        for container in (d, d.get("Image Features", {})):
+            for key in ("intensity_prior_checkbox", "intensity_prior_strength_slider"):
+                container.pop(key, None)
         return d
 
     @property
@@ -638,6 +660,7 @@ class MinimalContourWidget(MagicTemplate):
             self._img = None
             self.feature_editor.variables["image"] = None
             VispyMinimalContourOverlay.set_calculator_feature(None)
+            VispyMinimalContourOverlay.set_prior_image(None)
             # self.feature_editor.features = None #TODO check
             return
         if self.viewer is None:
@@ -645,6 +668,7 @@ class MinimalContourWidget(MagicTemplate):
         if not self.is_mc_enabled:
             # nothing to compute while the tool is off (e.g. only painting); enabling it calls this again
             VispyMinimalContourOverlay.set_calculator_feature(None)
+            VispyMinimalContourOverlay.set_prior_image(None)
             return
         if image_layer.multiscale:
             # without features the overlay ignores every mouse event, so the tool stays inactive
@@ -652,6 +676,7 @@ class MinimalContourWidget(MagicTemplate):
                 self._warned_multiscale.add(image_layer)
                 warnings.warn("Minimal contour does not support multiscale images (layer '%s')" % image_layer.name)
             VispyMinimalContourOverlay.set_calculator_feature(None)
+            VispyMinimalContourOverlay.set_prior_image(None)
             return
         if self.viewer.dims.ndisplay == 3:
             # self.anchor_points.editable = False
@@ -676,6 +701,7 @@ class MinimalContourWidget(MagicTemplate):
         # image layer first, so the effective sigma was sqrt(2) * sigma.
         if self.is_blurring_enabled:
             image = self._blur_image(image).astype(float)
+        VispyMinimalContourOverlay.set_prior_image(image)
         if self.used_feature == CUSTOM:
             self.feature_editor.variables["image"] = image
             self.feature_editor.Run()
