@@ -54,7 +54,13 @@ def scene(viewer, feature_calls):
     labels = viewer.add_labels(np.zeros(SHAPE, dtype=np.uint16), name="labels", metadata={"source_image_layer": image})
     viewer.layers.selection.active = labels
     _process_events()
-    return SimpleNamespace(mc=annotator.ToolsWidget.minimal_contour_widget, data=data, image=image, labels=labels)
+    return SimpleNamespace(mc=annotator.ToolsWidget.minimal_contour_widget, data=data, values=data.copy(),
+                           image=image, labels=labels)
+
+
+def _assert_image_untouched(scene):
+    assert scene.image.data is scene.data
+    np.testing.assert_array_equal(scene.data, scene.values)
 
 
 def _temp_files(mc):
@@ -65,7 +71,6 @@ def _temp_files(mc):
 def _assert_idle(scene, feature_calls):
     assert feature_calls == []
     assert scene.image.data is scene.data
-    assert scene.mc._orig_image is None
     assert _temp_files(scene.mc) == []
     assert VispyMinimalContourOverlay._features_shape is None
 
@@ -126,38 +131,39 @@ def test_turning_the_tool_off_leaves_nothing_behind(viewer, scene, feature_calls
     mc.blur_image_checkbox.value = True
     viewer.dims.set_point(0, 2)
     _enable_with_button(viewer, scene.labels)
-    # the blurred slice is shown in the image layer while the tool is on
-    assert not np.array_equal(scene.image.data[2], scene.data[2])
+    assert VispyMinimalContourOverlay._features_shape == SHAPE[1:]
+    _assert_image_untouched(scene)
 
     scene.labels.mode = Mode.PAINT
     _process_events()
     assert not scene.labels._overlays["minimal_contour"].enabled
     assert VispyMinimalContourOverlay._features_shape is None
-    np.testing.assert_array_equal(scene.image.data, scene.data)
+    _assert_image_untouched(scene)
 
     n_calls = len(feature_calls)
     _scroll(viewer, mc, [4, 5])
     assert len(feature_calls) == n_calls
-    np.testing.assert_array_equal(scene.image.data, scene.data)
+    _assert_image_untouched(scene)
 
     # on again, on another slice and with a transposed display order
     mc._enable_mc_mode()
     _process_events()
     assert len(feature_calls) > n_calls
     assert VispyMinimalContourOverlay._features_shape == SHAPE[1:]
-    assert not np.array_equal(scene.image.data[5], scene.data[5])
     viewer.dims.order = (2, 0, 1)
     _process_events()
     assert VispyMinimalContourOverlay._features_shape == SHAPE[:2]
+    _assert_image_untouched(scene)
 
 
 @pytest.mark.parametrize("leave", ["delete labels", "select image"])
-def test_blurred_slice_is_restored_when_the_labels_layer_is_left(viewer, scene, leave):
+def test_image_is_untouched_when_the_labels_layer_is_left(viewer, scene, leave):
+    # the blur is applied to the plane given to the calculator only, never to the image layer
     mc = scene.mc
     mc.blur_image_checkbox.value = True
     viewer.dims.set_point(0, 2)
     _enable_with_button(viewer, scene.labels)
-    assert not np.array_equal(scene.image.data[2], scene.data[2])
+    _assert_image_untouched(scene)
 
     if leave == "delete labels":
         viewer.layers.remove(scene.labels)
@@ -165,13 +171,14 @@ def test_blurred_slice_is_restored_when_the_labels_layer_is_left(viewer, scene, 
         viewer.layers.selection.active = scene.image
     _process_events()
     assert mc.labels_layer is None
-    np.testing.assert_array_equal(scene.image.data, scene.data)
+    _assert_image_untouched(scene)
 
     if leave == "select image":
-        # back on the labels layer, whose tool is still on, the blurred slice is shown again
+        # back on the labels layer, whose tool is still on
         viewer.layers.selection.active = scene.labels
         _process_events()
-        assert not np.array_equal(scene.image.data[2], scene.data[2])
+        assert VispyMinimalContourOverlay._features_shape == SHAPE[1:]
+        _assert_image_untouched(scene)
 
 
 def test_tool_state_follows_the_active_labels_layer(viewer, scene, feature_calls):

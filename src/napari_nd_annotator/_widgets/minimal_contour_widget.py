@@ -2,6 +2,7 @@ import colorsys
 import os
 import time
 import warnings
+import weakref
 from functools import wraps
 import numpy as np
 
@@ -235,11 +236,8 @@ class MinimalContourWidget(MagicTemplate):
         self._viewer: napari.Viewer = unwrap_viewer(viewer)
         self._labels_layer: Labels = None
         self.apply_contrast_limits = True
-        self._prev_img_layer = self.image_layer
-        # copy of the image layer's data, taken when the minimal contour tool first needs it (see _apply_blurring)
-        self._orig_image = None
-        # whether _apply_blurring wrote a blurred slice into self._prev_img_layer
-        self._image_modified = False
+        # multiscale image layers that were already reported as unsupported
+        self._warned_multiscale = weakref.WeakSet()
         self.point_triangle = np.zeros((3, 2), dtype=np.float64) - 1  # start point, current position, end point
         self.remove_last_anchor = False
         self.last_added_with_shift = None
@@ -320,7 +318,6 @@ class MinimalContourWidget(MagicTemplate):
         self.selected_label_spinbox.native.setAlignment(Qt.AlignCenter)
         self.blur_sigma_slider.native.children()[0].sliderPressed.connect(self._show_demo_image)
         self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._hide_demo_image)
-        self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._apply_blurring)
         self.blur_sigma_slider.native.children()[0].sliderReleased.connect(self._set_image)
         self._on_label_change()
         self._on_selected_label_change()
@@ -441,55 +438,6 @@ class MinimalContourWidget(MagicTemplate):
         if labels_layer and self.autoincrease_label_id:
             labels_layer.selected_label += 1
 
-    def _apply_blurring(self):
-        image_layer = self.image_layer
-        if image_layer is None or self.viewer is None:
-            return
-        if not self.is_mc_enabled:
-            self._restore_unblurred()
-            return
-        if self._orig_image is None:
-            self._orig_image = image_layer.data.copy()
-        image_layer.data = self._orig_image.copy()
-        self._image_modified = False
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            if self.is_blurring_enabled and self.blur_sigma > 0.:
-                if image_layer.data.ndim-(1 if image_layer.rgb else 0)>=3:
-                    slice_ = tuple(
-                        slice(None) if i in layer_dims_displayed(self.image_layer) else self.viewer.dims.current_step[i]
-                        for i in range(self.viewer.dims.ndim)
-                    )
-                else:
-                    slice_ = (slice(None), slice(None))
-                try:
-                    orig_image = self._orig_image[slice_]
-                except IndexError:
-                    warnings.warn("Current slice is out of bounds, skipping blurring")
-                    return
-                if image_layer.rgb:
-                    max_vals = orig_image.max((0, 1))
-                    for i in range(3):
-                        if max_vals[i] == 0:
-                            continue
-                        image_layer.data[slice_ + (i,)] = self._blur_image(orig_image[..., i]).astype(self._orig_image.dtype)
-                else:
-                    image_layer.data[slice_] = self._blur_image(self._orig_image[slice_]).astype(self._orig_image.dtype)
-                self._image_modified = True
-                image_layer.events.data()
-                image_layer.refresh()
-
-    def _restore_unblurred(self):
-        """Undo the blurred slice _apply_blurring left in the image layer, e.g. when the minimal contour tool is turned off."""
-        image_layer = self._prev_img_layer
-        if not self._image_modified or image_layer is None:
-            return
-        # _apply_blurring copies _orig_image before writing into the layer, so the layer may share it
-        image_layer.data = self._orig_image
-        self._image_modified = False
-        image_layer.events.data()
-        image_layer.refresh()
-
     # tooltip = "Reduce the selected label by one pixel around the borders\n"
     # "using erosion"
     @set_design(location=LabelOptionsWidget.LabelManipulationWidget)
@@ -554,7 +502,6 @@ class MinimalContourWidget(MagicTemplate):
     def _set_use_smoothing(self, _, update_image=True):
         if self.viewer is None:
             return
-        self._apply_blurring()
         if update_image:
             self._set_image("_set_use_smoothing")
 
@@ -579,9 +526,9 @@ class MinimalContourWidget(MagicTemplate):
                 warnings.simplefilter("ignore")
                 # img = im_layer._data_view.astype(float)
                 slice_indices = layer_slice_indices(im_layer)
-                # the layer holds the original data until the minimal contour tool is first used
-                orig_image = self._orig_image if self._orig_image is not None else im_layer.data
-                img = orig_image[slice_indices].astype(float)
+                data = im_layer.data[0] if im_layer.multiscale else im_layer.data
+                # np.asarray: the layer data may be lazy (e.g. dask)
+                img = np.asarray(data[slice_indices]).astype(float)
             if all(s > DEMO_SIZE for s in (img.shape[:2] if im_layer.rgb else img.shape)):
                 img = img[(img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2, (img.shape[0]-DEMO_SIZE)//2:(img.shape[0]+DEMO_SIZE)//2]
             if self.is_blurring_enabled:
@@ -691,12 +638,11 @@ class MinimalContourWidget(MagicTemplate):
         )
 
     def _store_orig_image(self, *_):
+        """Make releasing the source image's contrast limit slider recompute the features.
+
+        The image layer's data is never copied or modified: blurring is applied to the plane given to the calculator.
+        """
         image_layer: Image = self.image_layer
-        if image_layer != self._prev_img_layer:
-            self._restore_unblurred()
-            # copied by _apply_blurring when the minimal contour tool first needs it
-            self._orig_image = None
-        self._prev_img_layer = image_layer
         qt_viewer = viewer_qt_viewer(self.viewer)
         if image_layer in qt_viewer.controls.widgets:
             controls = qt_viewer.controls.widgets[image_layer]
@@ -723,12 +669,18 @@ class MinimalContourWidget(MagicTemplate):
             # nothing to compute while the tool is off (e.g. only painting); enabling it calls this again
             VispyMinimalContourOverlay.set_calculator_feature(None)
             VispyMinimalContourOverlay.set_prior_image(None)
-            self._restore_unblurred()
+            return
+        if image_layer.multiscale:
+            # without features the overlay ignores every mouse event, so the tool stays inactive
+            if image_layer not in self._warned_multiscale:
+                self._warned_multiscale.add(image_layer)
+                warnings.warn("Minimal contour does not support multiscale images (layer '%s')" % image_layer.name)
+            VispyMinimalContourOverlay.set_calculator_feature(None)
+            VispyMinimalContourOverlay.set_prior_image(None)
             return
         if self.viewer.dims.ndisplay == 3:
             # self.anchor_points.editable = False
             return
-        self._apply_blurring()
         if not image_layer.visible:
             image_layer.set_view_slice()
         image_layer._slice_dims(self.viewer.dims)
@@ -745,6 +697,8 @@ class MinimalContourWidget(MagicTemplate):
         if self.feature_inverted:
             image = 1 - image
         self._img = image
+        # The plane is blurred once, with the slider's sigma. Before, the plane was also blurred inside the
+        # image layer first, so the effective sigma was sqrt(2) * sigma.
         if self.is_blurring_enabled:
             image = self._blur_image(image).astype(float)
         VispyMinimalContourOverlay.set_prior_image(image)
@@ -893,9 +847,6 @@ class MinimalContourWidget(MagicTemplate):
         active_layer = self.viewer.layers.selection.active
         self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
         self._on_label_change()
-        if not self.is_mc_enabled:
-            # e.g. the labels layer was deleted or another layer was selected: the blurred slice must not stay
-            self._restore_unblurred()
         if not self._labels_layer:
             self._show_no_labels_layer_selected_txt()
             return
@@ -978,7 +929,6 @@ class MinimalContourWidget(MagicTemplate):
         self._selected_layer_tracker = SelectedLayerTracker(self.viewer)
         self._set_viewer_callbacks()
         self._store_orig_image()
-        self._apply_blurring()
         self._update_label_tooltip()
         self._set_image()
         action_manager.register_action("napari-nD-annotator:activate_labels_mc_mode", self._enable_mc_mode,
