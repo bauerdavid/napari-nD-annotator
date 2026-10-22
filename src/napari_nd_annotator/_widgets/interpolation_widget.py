@@ -657,7 +657,28 @@ class InterpolationWidget(MagicTemplate):
             self._labels_update_tmp = (event.data, event.offset)
             return
         self._recompute_pending = False
-        self._execute_interpolation(layer_slice_indices(self._active_labels_layer)[self.dimension])
+        idx = layer_slice_indices(self._active_labels_layer)[self.dimension]
+        self._drop_interpolation_of_annotated_slice(idx)
+        self._execute_interpolation(idx)
+
+    def _drop_interpolation_of_annotated_slice(self, idx):
+        """Forget the interpolated contours of a slice that now holds the selected label.
+
+        Painting does this in _on_mouse_drag, but a mask created otherwise (e.g. closing a minimal contour polygon)
+        would leave the interpolated contour displayed on its own slice until the slice is changed.
+        """
+        layer = self._active_labels_layer
+        if layer is None or idx is None or not 0 <= idx < layer.data.shape[self.dimension]:
+            return
+        slice_indices = list(layer_slice_indices(layer))
+        slice_indices[self.dimension] = idx
+        if not np.any(layer.data[tuple(slice_indices)] == layer.selected_label):
+            return
+        with self.contour_mutex:
+            if self._stored_contours is not None and idx < len(self._stored_contours):
+                self._stored_contours[idx] = []
+            if "interpolation" in layer._overlays and idx == self.current_slice:
+                layer._overlays["interpolation"].contour = ContourList()
 
     def _recompute_after_drag(self):
         if not self._recompute_pending:
