@@ -3,7 +3,9 @@
 Painting and scrolling with the other labels tools must not copy the image, compute image features or
 write feature files: on large volumes that work froze napari on every slice change.
 """
+import glob
 import os
+import tempfile
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,7 +14,7 @@ from napari.layers.labels._labels_constants import Mode
 
 from napari_nd_annotator._helper_functions import viewer_qt_viewer
 from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
-from napari_nd_annotator.minimal_contour.feature_manager import FeatureManager
+from napari_nd_annotator.minimal_contour.plane_features import PlaneFeatureCache
 
 SHAPE = (6, 40, 50)
 
@@ -33,14 +35,14 @@ def viewer():
 
 @pytest.fixture
 def feature_calls(monkeypatch):
-    """The layers FeatureManager.get_features was asked for."""
+    """The ids of the layers whose plane features were asked for."""
     calls = []
-    get_features = FeatureManager.get_features
+    get = PlaneFeatureCache.get
 
-    def spy(self, layer, *args, **kwargs):
-        calls.append(layer)
-        return get_features(self, layer, *args, **kwargs)
-    monkeypatch.setattr(FeatureManager, "get_features", spy)
+    def spy(self, key, *args, **kwargs):
+        calls.append(key[0])
+        return get(self, key, *args, **kwargs)
+    monkeypatch.setattr(PlaneFeatureCache, "get", spy)
     return calls
 
 
@@ -63,15 +65,16 @@ def _assert_image_untouched(scene):
     np.testing.assert_array_equal(scene.data, scene.values)
 
 
-def _temp_files(mc):
-    folder = mc.feature_manager.temp_folder
-    return os.listdir(folder) if os.path.exists(folder) else []
+def _temp_folders():
+    """The feature folders of this process (the memmap based features of older versions used to make them)."""
+    pattern = os.path.join(tempfile.gettempdir(), "*_%d_nd_annotator" % os.getpid())
+    return glob.glob(pattern)
 
 
 def _assert_idle(scene, feature_calls):
     assert feature_calls == []
     assert scene.image.data is scene.data
-    assert _temp_files(scene.mc) == []
+    assert _temp_folders() == []
     assert VispyMinimalContourOverlay._features_shape is None
 
 
@@ -121,9 +124,9 @@ def test_turning_the_tool_on_prepares_the_features(viewer, scene, feature_calls,
         scene.mc._enable_mc_mode()
         _process_events()
     assert scene.labels._overlays["minimal_contour"].enabled
-    assert scene.image in feature_calls
+    assert id(scene.image) in feature_calls
     assert VispyMinimalContourOverlay._features_shape == SHAPE[1:]
-    assert _temp_files(scene.mc) != []
+    assert _temp_folders() == []
 
 
 def test_turning_the_tool_off_leaves_nothing_behind(viewer, scene, feature_calls):
@@ -225,4 +228,4 @@ def test_enabled_callback_is_connected_once(viewer, scene, feature_calls):
     _process_events()
     scene.mc._enable_mc_mode()
     _process_events()
-    assert feature_calls == [scene.image]
+    assert feature_calls == [id(scene.image)]

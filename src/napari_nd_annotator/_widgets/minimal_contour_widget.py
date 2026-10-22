@@ -2,6 +2,7 @@ import colorsys
 import time
 import warnings
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 import numpy as np
 
@@ -33,21 +34,32 @@ from ._utils import ScriptExecuteWidget, ProgressWidget
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from ._utils.callbacks import reduce_mask, extend_mask
 from ._utils.shortcuts import LABELS, VIEWER, bind_all
-from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_slice_indices, \
-    layer_get_order, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
+from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay, \
+    layer_slice_indices, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
     viewer_main_window
-from ..minimal_contour import FeatureManager
+from ..minimal_contour._legacy_tmp import clean_legacy_tmp
+from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
-def delay_function(function=None, delay=0.2):
+class _FeatureBridge(QObject):
+    """Delivers a worker thread's result to the GUI thread (queued connection)."""
+    ready = Signal(int, object)
+
+
+def delay_function(function=None, delay=0.2, leading=True):
+    """Rate-limit a function; with ``leading=False`` it only runs ``delay`` seconds after the last call."""
 
     def decorator(fn):
         _store: dict = {"timer": None, "last_call": 0.0, "args": (), "kwargs": {}}
 
         def call_it():
-            _store["last_call"] = time.time()
-            return fn(*_store["args"], **_store["kwargs"])
+            try:
+                return fn(*_store["args"], **_store["kwargs"])
+            finally:
+                # stamped when fn is done: if fn takes longer than the delay, stamping at its start would make the
+                # next event (e.g. the next step of a dragged slider) look idle and run fn again right away
+                _store["last_call"] = time.time()
 
         @wraps(fn)
         def delayed(*args, **kwargs):
@@ -55,7 +67,7 @@ def delay_function(function=None, delay=0.2):
             _store["kwargs"] = kwargs
 
             now = time.time()
-            if not _store["last_call"] or (now - _store["last_call"]) > delay:
+            if leading and (not _store["last_call"] or (now - _store["last_call"]) > delay):
                 return call_it()
             if _store["timer"] is None:
                 # QTimer fires on the GUI thread. A threading.Timer would run fn
@@ -235,7 +247,17 @@ class MinimalContourWidget(MagicTemplate):
         self.prev_labels_layer = self.labels_layer
         self.feature_inverted = False
         self.prev_timer_id = None
-        self.feature_manager = None
+        # gradients of the displayed plane, computed when needed (see _get_gradients)
+        self._plane_features = PlaneFeatureCache()
+        # features are computed in a worker thread while scrolling; only the newest request is applied
+        self._feature_generation = 0
+        self._feature_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mc-features")
+        self._feature_bridge = _FeatureBridge()
+        self._feature_bridge.ready.connect(self._apply_features)
+        # per image layer id: bumped when the layer's data changes, so that its cached planes are never reused
+        self._data_versions = {}
+        # image layers whose data event is already connected
+        self._data_watch = weakref.WeakSet()
         self.event_filter = EventFilter(self)
 
         # Ctrl+Z handling
@@ -606,10 +628,10 @@ class MinimalContourWidget(MagicTemplate):
             diff *= min(max(1, labels_layer.brush_size//10), 5)
             labels_layer.brush_size = max(1, labels_layer.brush_size + diff)
 
-    def _blur_image(self, img):
+    def _blur_image(self, img, sigma=None):
         return gaussian(
             img,
-            sigma=self.blur_sigma,
+            sigma=self.blur_sigma if sigma is None else sigma,
             preserve_range=True,
             channel_axis=-1 if img.ndim == 3 else None,
             truncate=2.
@@ -633,6 +655,15 @@ class MinimalContourWidget(MagicTemplate):
                     break
 
     def _set_image(self, event=None):
+        self._update_features()
+
+    def _update_features(self, background=False):
+        """Recompute the features of the displayed plane.
+
+        With ``background`` the numpy work runs in a worker thread and only handing the result to the calculator is
+        done in the GUI thread, so the viewer stays responsive (used while scrolling through slices).
+        """
+        self._feature_generation += 1  # drops the result of any computation still running
         image_layer: Image = self.image_layer
         if image_layer is None:
             self._img = None
@@ -662,50 +693,145 @@ class MinimalContourWidget(MagicTemplate):
         self.autoincrease_label_id = (image_layer.ndim == 2)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            image = image_layer._data_view.astype(float)
-        if image.ndim == 2:
-            image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
-        elif image.shape[-1] == 4:
-            image = image[..., :3]
-        min_, max_ = image_layer.contrast_limits if self.apply_contrast_limits else (image.min(), image.max())
-        image = np.clip((image - min_) / (max_ - min_), 0, 1)
-        if self.feature_inverted:
-            image = 1 - image
-        self._img = image
-        # The plane is blurred once, with the slider's sigma. Before, the plane was also blurred inside the
-        # image layer first, so the effective sigma was sqrt(2) * sigma.
-        if self.is_blurring_enabled:
-            image = self._blur_image(image).astype(float)
+            plane = image_layer._data_view
         if self.used_feature == CUSTOM:
+            image = plane.astype(float)
+            if image.ndim == 2:
+                image = np.concatenate([image[..., np.newaxis]] * 3, axis=2)
+            elif image.shape[-1] == 4:
+                image = image[..., :3]
+            min_, max_ = image_layer.contrast_limits if self.apply_contrast_limits else (image.min(), image.max())
+            image = np.clip((image - min_) / (max_ - min_), 0, 1)
+            if self.feature_inverted:
+                image = 1 - image
+            self._img = image
+            # The plane is blurred once, with the slider's sigma. Before, the plane was also blurred inside the
+            # image layer first, so the effective sigma was sqrt(2) * sigma.
+            if self.is_blurring_enabled:
+                image = self._blur_image(image).astype(float)
             self.feature_editor.variables["image"] = image
             self.feature_editor.Run()
-        else:
-            grad_x, grad_y = self.feature_manager.get_features(image_layer)
-            if grad_x is not None:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    order = layer_get_order(image_layer)
-                    grad_x = grad_x.transpose(order[:2])
-                    grad_y = grad_y.transpose(order[:2])
-                if self.is_blurring_enabled:
-                    grad_x = self._blur_image(grad_x)
-                    grad_y = self._blur_image(grad_y)
-                if self.used_feature == SYM_GRADIENT:
-                    grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
-                    grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
-                    min_, max_ = grad_magnitude.min(), grad_magnitude.max()
-                    grad_magnitude = (grad_magnitude - min_) / (max_ - min_)
-                    VispyMinimalContourOverlay.set_calculator_feature(grad_magnitude)
-                else:
-                    VispyMinimalContourOverlay.set_calculator_feature(image, grad_x, grad_y)
+            return
+        request = self._gradient_request(image_layer)
+        if request is None:
+            return
+        job = dict(
+            plane=plane,
+            gradients=request,
+            limits=tuple(image_layer.contrast_limits) if self.apply_contrast_limits else None,
+            inverted=self.feature_inverted,
+            sigma=self.blur_sigma if self.is_blurring_enabled else None,
+            feature=self.used_feature,
+        )
+        self._feature_generation += 1
+        generation = self._feature_generation
+        if not background:
+            self._apply_features(generation, self._compute_features(job))
+            return
+
+        def work():
+            if generation != self._feature_generation:  # a newer plane was requested meanwhile
+                return
+            try:
+                result = self._compute_features(job)
+            except Exception as e:
+                warnings.warn("Computing the minimal contour features failed: %r" % e)
+                return
+            self._feature_bridge.ready.emit(generation, result)
+        self._feature_executor.submit(work)
+
+    def _compute_features(self, job):
+        """Features, x gradient and y gradient (the latter two may be None) of a plane. Thread safe."""
+        plane = job["plane"]
+        sigma = job["sigma"]
+        image = np.asarray(plane)
+        if image.ndim == 3 and image.shape[-1] == 4:
+            image = image[..., :3]
+        image = image.astype(float)
+        # a gray plane stays 2D here: its 3 equal channels would only triple the cost of the steps below
+        min_, max_ = job["limits"] if job["limits"] is not None else (image.min(), image.max())
+        image = np.clip((image - min_) / (max_ - min_), 0, 1)
+        if job["inverted"]:
+            image = 1 - image
+        if sigma is not None:
+            image = self._blur_image(image, sigma).astype(float)
+        key, _, rgb = job["gradients"]
+        grad_x, grad_y = to_float64_pair(self._plane_features.get(key, lambda: plane, rgb))
+        if sigma is not None:
+            grad_x = self._blur_image(grad_x, sigma)
+            grad_y = self._blur_image(grad_y, sigma)
+        if job["feature"] == SYM_GRADIENT:
+            grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
+            grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
+            min_, max_ = grad_magnitude.min(), grad_magnitude.max()
+            return (grad_magnitude - min_) / (max_ - min_), None, None
+        if image.ndim == 2:
+            image = np.repeat(image[..., np.newaxis], 3, axis=2)
+        return image, grad_x, grad_y
+
+    def _apply_features(self, generation, result):
+        """Hand features to the calculator (GUI thread), unless a newer plane was requested or the tool was left."""
+        if generation != self._feature_generation or not self.is_mc_enabled or self.image_layer is None:
+            return
+        self._img = result[0] if result[1] is not None else None
+        VispyMinimalContourOverlay.set_calculator_feature(*result)
+
         # self.anchor_points.translate = image_layer.translate
         # self.from_e_points_layer.translate = image_layer.translate
         # self.to_s_points_layer.translate = image_layer.translate
         # self.output.translate = image_layer.translate
 
-    @delay_function(delay=.5)
+    def _get_gradients(self, image_layer: Image):
+        request = self._gradient_request(image_layer)
+        if request is None:
+            return None, None
+        key, plane_provider, rgb = request
+        return self._plane_features.get(key, plane_provider, rgb)
+
+    def _gradient_request(self, image_layer: Image):
+        """(cache key, plane provider, rgb) for the gradients of the displayed plane, or None if there are none.
+
+        The x and y derivative of the plane displayed for ``image_layer`` (float32, read-only), or (None, None).
+
+        The plane is taken as displayed (``_data_view``, so x and y follow the display order) and its gradients are
+        cached per (layer, displayed dims, slice indices), so only the planes that are visited are processed.
+        """
+        if layer_ndisplay(image_layer) == 3 or image_layer not in self.viewer.layers:
+            return None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dims_displayed = tuple(layer_dims_displayed(image_layer))
+            dims_not_displayed = tuple(layer_dims_not_displayed(image_layer))
+            slice_indices = layer_slice_indices(image_layer)
+        idx = tuple(slice_indices[i] for i in dims_not_displayed)
+        shape = image_layer.data.shape
+        if any(i < 0 or i >= shape[dim] for dim, i in zip(dims_not_displayed, idx)):
+            return None
+        layer_id = id(image_layer)
+        if image_layer not in self._data_watch:
+            self._data_watch.add(image_layer)
+            image_layer.events.data.connect(lambda *_: self._on_image_data_change(layer_id))
+        key = (layer_id, dims_displayed, idx, self._data_versions.get(layer_id, 0))
+
+        def plane():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return image_layer._data_view
+        return key, plane, image_layer.rgb
+
+    def _on_image_data_change(self, layer_id):
+        self._data_versions[layer_id] = self._data_versions.get(layer_id, 0) + 1
+        self._plane_features.invalidate(layer_id)
+
+    def _on_layer_removed(self, layer):
+        layer_id = id(layer)
+        self._plane_features.invalidate(layer_id)
+        self._data_versions.pop(layer_id, None)
+        self._data_watch.discard(layer)
+
+    @delay_function(delay=.5, leading=False)
     def _delayed_set_image(self, *args):
-        self._set_image(args)
+        self._update_features(background=True)
 
     def _set_features(self, var_dict: dict):
         if "exception" in var_dict:
@@ -890,7 +1016,7 @@ class MinimalContourWidget(MagicTemplate):
 
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")
         self.viewer.dims.events.order.connect(self._set_image, position="last")
-        self.viewer.layers.events.removed.connect(lambda e: self.feature_manager.remove_features(e.value))
+        self.viewer.layers.events.removed.connect(lambda e: self._on_layer_removed(e.value))
         # key and wheel events go to the focused widget (usually the canvas), not to the main window
         viewer_main_window(self.viewer).installEventFilter(self.event_filter)
         viewer_qt_viewer(self.viewer).canvas.native.installEventFilter(self.event_filter)
@@ -899,7 +1025,8 @@ class MinimalContourWidget(MagicTemplate):
     def _initialize(self, viewer: napari.Viewer):
         viewer = self._viewer = unwrap_viewer(viewer)
         self._initialize_helper_layers()
-        self.feature_manager = FeatureManager(viewer)
+        # feature files of older versions that were left behind (this version writes none)
+        clean_legacy_tmp()
         self._selected_layer_tracker = SelectedLayerTracker(self.viewer)
         self._set_viewer_callbacks()
         self._store_orig_image()
