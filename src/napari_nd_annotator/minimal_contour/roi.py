@@ -13,8 +13,9 @@ import numpy as np
 # an object's box gets 20 % of its size + 32 pixels on every side
 MARGIN_FRACTION = 0.2
 MARGIN_PIXELS = 32
-# without a selected object, only planes with more pixels than this are windowed (2048 x 2048 is 4 M pixels)
-LARGE_PLANE_PIXELS = 4 * 1024 * 1024
+# without a selected object, only planes with more pixels than this are windowed. Measured per settled slice: a
+# 1536 x 1536 plane takes 94 ms whole and 45 ms windowed, 1024 x 1024 gains nothing (the window is the plane)
+LARGE_PLANE_PIXELS = 2 * 1024 * 1024
 # the anchor driven window is at least this many pixels along both axes
 WINDOW_SIZE = 1024
 # a ROI covering more than this share of the plane is not worth it: the whole plane is used
