@@ -154,6 +154,27 @@ def test_minimal_contour_tool_is_carried_over(viewer, scene):
     assert crop_labels._overlays["minimal_contour"].enabled
 
 
+def test_minimal_contour_roi_is_not_used_on_the_cropped_copies(viewer, scene):
+    from napari_nd_annotator import AnnotatorWidget
+    from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import         VispyMinimalContourOverlay
+    from napari_nd_annotator._widgets.object_list import selected_object
+    image, labels, object_list = scene
+    annotator = AnnotatorWidget(viewer, persist=False)
+    viewer.window.add_dock_widget(annotator, name="Annotator")
+    crop_image, crop_labels = _select_object(viewer, labels, object_list)
+    selected = selected_object(viewer)
+    assert selected[3] is image and selected[3] is not crop_image  # the object belongs to the original image
+
+    mc_widget = annotator.ToolsWidget.minimal_contour_widget
+    viewer_qt_viewer(viewer).controls.widgets[crop_labels].mc_button.click()
+    _process_events()
+    mc_widget._set_image()
+    # the contour runs on the small crop itself: it is given as a whole
+    assert VispyMinimalContourOverlay._features_shape == crop_image.data.shape[1:]
+    assert VispyMinimalContourOverlay._plane_shape is None
+    assert VispyMinimalContourOverlay._roi_origin == (0, 0)
+
+
 def test_new_bounding_boxes_get_consecutive_labels(viewer, scene):
     _, _, object_list = scene
     bbox_layer = object_list.bounding_box_layer

@@ -36,9 +36,11 @@ from ._utils.callbacks import reduce_mask, extend_mask
 from ._utils.shortcuts import LABELS, VIEWER, bind_all
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay, \
     layer_slice_indices, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
-    viewer_main_window
+    viewer_main_window, viewer_camera
+from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
+from .object_list import selected_object
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -254,6 +256,15 @@ class MinimalContourWidget(MagicTemplate):
         self._feature_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mc-features")
         self._feature_bridge = _FeatureBridge()
         self._feature_bridge.ready.connect(self._apply_features)
+        # the part of the plane that is handed to the calculator is moved when the search area leaves it
+        self._roi_hint = None
+        request_roi = weakref.WeakMethod(self._on_roi_request)
+
+        def roi_requester(search_box):
+            method = request_roi()
+            if method is not None:
+                method(search_box)
+        VispyMinimalContourOverlay.roi_requester = roi_requester
         # per image layer id: bumped when the layer's data changes, so that its cached planes are never reused
         self._data_versions = {}
         # image layers whose data event is already connected
@@ -718,6 +729,7 @@ class MinimalContourWidget(MagicTemplate):
         job = dict(
             plane=plane,
             gradients=request,
+            roi=self._choose_roi(image_layer, plane.shape[:2]),
             limits=tuple(image_layer.contrast_limits) if self.apply_contrast_limits else None,
             inverted=self.feature_inverted,
             sigma=self.blur_sigma if self.is_blurring_enabled else None,
@@ -741,45 +753,134 @@ class MinimalContourWidget(MagicTemplate):
         self._feature_executor.submit(work)
 
     def _compute_features(self, job):
-        """Features, x gradient and y gradient (the latter two may be None) of a plane. Thread safe."""
+        """Features, x gradient, y gradient (the latter two may be None) and the ROI of a plane. Thread safe.
+
+        Without a ROI the ROI item is None. With one, everything is computed on the ROI plus the pixels around it that
+        gradients and blur need, and cropped back to the ROI: inside it the result equals the whole plane's, except for
+        the statistics the features are normalised with when no contrast limits are used, or for the symmetric
+        gradient (its magnitude is scaled to 0..1): those are the ROI's own, which is what makes the cost independent
+        of the plane size. The ROI item is (Box, shape of the whole plane).
+        """
         plane = job["plane"]
         sigma = job["sigma"]
+        roi = job["roi"]
+        key, _, rgb = job["gradients"]
         image = np.asarray(plane)
+        plane_shape = image.shape[:2]
+        inner = None
+        if roi is not None:
+            window = mc_roi.padded(roi, plane_shape, mc_roi.feature_padding(rgb, sigma))
+            inner = (slice(roi.y0 - window.y0, roi.y1 - window.y0), slice(roi.x0 - window.x0, roi.x1 - window.x0))
+            image = image[window.slices]
+            plane = plane[window.slices]
+            key = key + (tuple(window),)
         if image.ndim == 3 and image.shape[-1] == 4:
             image = image[..., :3]
         image = image.astype(float)
         # a gray plane stays 2D here: its 3 equal channels would only triple the cost of the steps below
-        min_, max_ = job["limits"] if job["limits"] is not None else (image.min(), image.max())
+        if job["limits"] is not None:
+            min_, max_ = job["limits"]
+        else:
+            reference = image if inner is None else image[inner]
+            min_, max_ = reference.min(), reference.max()
         image = np.clip((image - min_) / (max_ - min_), 0, 1)
         if job["inverted"]:
             image = 1 - image
         if sigma is not None:
             image = self._blur_image(image, sigma).astype(float)
-        key, _, rgb = job["gradients"]
         grad_x, grad_y = to_float64_pair(self._plane_features.get(key, lambda: plane, rgb))
         if sigma is not None:
             grad_x = self._blur_image(grad_x, sigma)
             grad_y = self._blur_image(grad_y, sigma)
+        if inner is not None:
+            image, grad_x, grad_y = (np.ascontiguousarray(a[inner]) for a in (image, grad_x, grad_y))
+            roi = (roi, tuple(plane_shape))
         if job["feature"] == SYM_GRADIENT:
             grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
             grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
             min_, max_ = grad_magnitude.min(), grad_magnitude.max()
-            return (grad_magnitude - min_) / (max_ - min_), None, None
+            return (grad_magnitude - min_) / (max_ - min_), None, None, roi
         if image.ndim == 2:
             image = np.repeat(image[..., np.newaxis], 3, axis=2)
-        return image, grad_x, grad_y
+        return image, grad_x, grad_y, roi
 
     def _apply_features(self, generation, result):
         """Hand features to the calculator (GUI thread), unless a newer plane was requested or the tool was left."""
         if generation != self._feature_generation or not self.is_mc_enabled or self.image_layer is None:
             return
-        self._img = result[0] if result[1] is not None else None
-        VispyMinimalContourOverlay.set_calculator_feature(*result)
+        features, grad_x, grad_y, roi = result
+        self._img = features if grad_x is not None else None
+        if roi is None:
+            VispyMinimalContourOverlay.set_calculator_feature(features, grad_x, grad_y)
+        else:
+            box, plane_shape = roi
+            VispyMinimalContourOverlay.set_calculator_feature(
+                features, grad_x, grad_y, roi_origin=box.origin, plane_shape=plane_shape)
 
         # self.anchor_points.translate = image_layer.translate
         # self.from_e_points_layer.translate = image_layer.translate
         # self.to_s_points_layer.translate = image_layer.translate
         # self.output.translate = image_layer.translate
+
+    def _choose_roi(self, image_layer: Image, plane_shape):
+        """The part (a Box) of the displayed plane to give the calculator, or None for the whole plane.
+
+        Sources, in this order: the bounding box of the object selected in the object list (only while the contour
+        runs on that very image: a cropped copy is small already), and, for planes with more than
+        ``LARGE_PLANE_PIXELS`` pixels, a window around the anchors. ``_roi_hint`` is a search area that has to be
+        inside the result (set while the overlay asks for a new window). Nothing is windowed for the custom
+        features, whose script is given the whole plane.
+        """
+        if self.used_feature == CUSTOM or len(plane_shape) != 2:
+            return None
+        hint = self._roi_hint
+        try:
+            dims_displayed = tuple(layer_dims_displayed(image_layer))
+            selected = selected_object(self.viewer)
+            if selected is not None and selected[3] is image_layer:
+                box = mc_roi.object_box(selected[1], selected[2], dims_displayed, plane_shape)
+                if box is not None and hint is not None:
+                    box = mc_roi.union(box, mc_roi.expand(hint, plane_shape))
+                return mc_roi.use_roi(box, plane_shape)
+            if plane_shape[0] * plane_shape[1] <= mc_roi.LARGE_PLANE_PIXELS:
+                return None
+            if hint is not None:
+                points = [(hint.y0, hint.x0), (hint.y1 - 1, hint.x1 - 1)]
+            else:
+                points = self._window_center(image_layer, dims_displayed, plane_shape)
+            return mc_roi.use_roi(mc_roi.window_around(points, plane_shape), plane_shape)
+        except Exception as e:  # the ROI is only an optimisation: without one the whole plane is used
+            warnings.warn("Could not derive the minimal contour ROI, using the whole plane: %r" % e)
+            return None
+
+    def _window_center(self, image_layer: Image, dims_displayed, plane_shape):
+        """Where to put the window of a big plane (rows, columns): at the anchors, else at the middle of the view."""
+        overlay = self.labels_layer._overlays.get("minimal_contour") if self.labels_layer is not None else None
+        anchors = None
+        if overlay is not None and len(overlay.anchor_points):
+            anchors = np.asarray(overlay.anchor_points, dtype=float)
+        if anchors is not None and anchors.ndim == 2 and anchors.shape[1] > max(dims_displayed):
+            return anchors[:, list(dims_displayed)]
+        try:
+            world = list(self.viewer.dims.point)
+            center = viewer_camera(self.viewer).center
+            world[dims_displayed[0]], world[dims_displayed[1]] = center[-2], center[-1]
+            data = np.asarray(image_layer.world_to_data(world))[list(dims_displayed)]
+            if np.all(np.isfinite(data)):
+                return [data]
+        except Exception:
+            pass
+        return [(plane_shape[0] // 2, plane_shape[1] // 2)]
+
+    def _on_roi_request(self, search_box):
+        """The overlay needs to search ``search_box``, which is outside of the part of the plane the calculator has."""
+        if not self.is_mc_enabled:
+            return
+        self._roi_hint = search_box
+        try:
+            self._update_features(background=False)
+        finally:
+            self._roi_hint = None
 
     def _get_gradients(self, image_layer: Image):
         request = self._gradient_request(image_layer)

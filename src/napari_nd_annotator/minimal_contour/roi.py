@@ -55,9 +55,14 @@ def clip(box: Box, plane_shape: Sequence[int]) -> Box:
     return Box(y0, min(max(int(box.y1), y0), height), x0, min(max(int(box.x1), x0), width))
 
 
-def expand(box: Box, plane_shape: Sequence[int], fraction: float = MARGIN_FRACTION,
-           pixels: int = MARGIN_PIXELS) -> Box:
-    """``box`` grown on every side by ``fraction`` of its size along that axis plus ``pixels``, clipped to the plane."""
+def expand(box: Box, plane_shape: Sequence[int], fraction: Optional[float] = None,
+           pixels: Optional[int] = None) -> Box:
+    """``box`` grown on every side by ``fraction`` of its size along that axis plus ``pixels``, clipped to the plane.
+
+    The defaults are MARGIN_FRACTION and MARGIN_PIXELS, looked up when called.
+    """
+    fraction = MARGIN_FRACTION if fraction is None else fraction
+    pixels = MARGIN_PIXELS if pixels is None else pixels
     margin_y = int(math.ceil(fraction * (box.y1 - box.y0))) + pixels
     margin_x = int(math.ceil(fraction * (box.x1 - box.x0))) + pixels
     return clip(Box(box.y0 - margin_y, box.y1 + margin_y, box.x0 - margin_x, box.x1 + margin_x), plane_shape)
@@ -88,13 +93,14 @@ def object_box(bbox_min, bbox_max, dims_displayed: Sequence[int], plane_shape: S
     return expand(box, plane_shape)
 
 
-def window_around(points, plane_shape: Sequence[int], size: int = WINDOW_SIZE) -> Box:
+def window_around(points, plane_shape: Sequence[int], size: Optional[int] = None) -> Box:
     """A window of at least ``size`` x ``size`` pixels (as far as the plane allows) around ``points`` (rows, columns).
 
     It is centred on the bounding box of the points and always contains that box with the usual margin, so a
     contour drawn between the points can be searched without leaving the window. Near the edge of the plane the
-    window is moved inwards, not shrunk.
+    window is moved inwards, not shrunk. ``size`` defaults to WINDOW_SIZE.
     """
+    size = WINDOW_SIZE if size is None else size
     points = np.atleast_2d(np.asarray(points, dtype=float))[:, :2]
     height, width = plane_shape[:2]
     low = np.floor(points.min(axis=0)).astype(int)
@@ -110,12 +116,13 @@ def window_around(points, plane_shape: Sequence[int], size: int = WINDOW_SIZE) -
     return union(Box(*limits), needed)
 
 
-def covers(box: Box, search_box: Box, plane_shape: Sequence[int], pad: int = COVER_PAD) -> bool:
+def covers(box: Box, search_box: Box, plane_shape: Sequence[int], pad: Optional[int] = None) -> bool:
     """Whether the calculator image ``box`` lets a search in ``search_box`` give the same result as the full plane.
 
     The search window must be ``pad`` pixels inside the ROI on every side, except on sides where the ROI ends at
     the edge of the plane (the plane's own edge behaves the same with or without a ROI).
     """
+    pad = COVER_PAD if pad is None else pad
     height, width = plane_shape[:2]
     return (
         (box.y0 <= 0 or box.y0 <= search_box.y0 - pad)
@@ -125,10 +132,11 @@ def covers(box: Box, search_box: Box, plane_shape: Sequence[int], pad: int = COV
     )
 
 
-def use_roi(box: Optional[Box], plane_shape: Sequence[int], max_fraction: float = MAX_AREA_FRACTION) -> Optional[Box]:
+def use_roi(box: Optional[Box], plane_shape: Sequence[int], max_fraction: Optional[float] = None) -> Optional[Box]:
     """``box`` if working on it is worth it (it is clearly smaller than the plane), else None (use the whole plane)."""
     if box is None:
         return None
+    max_fraction = MAX_AREA_FRACTION if max_fraction is None else max_fraction
     box = clip(box, plane_shape)
     height, width = plane_shape[:2]
     if box.area == 0 or box.area > max_fraction * height * width:
