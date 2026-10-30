@@ -68,13 +68,45 @@ def _traced_left_side():
 
 # IntensityPrior
 
-def test_prior_needs_an_accepted_segment(cell_image):
+def test_prior_needs_an_image_and_an_anchor(cell_image):
     prior = IntensityPrior()
     assert prior.reference([_on_circle(0)]) is None
     prior.set_image(cell_image)
-    assert prior.reference([_on_circle(0)]) is None
-    assert prior.speed_modulation([_on_circle(0)]) is None
-    assert prior.reference([_on_circle(0), _on_circle(30)]) is not None
+    assert prior.reference(np.empty((0, 2))) is None
+    assert prior.speed_modulation(np.empty((0, 2))) is None
+
+
+def test_prior_works_from_a_single_anchor(cell_image):
+    prior = IntensityPrior(strength=0.8)
+    assert prior.min_anchors == 1
+    prior.set_image(cell_image)
+    mu, sigma = prior.reference([_on_circle(0)])
+    # the one sample is the reference, the tolerance is the lower limit
+    assert sigma == prior.min_sigma
+    assert np.isclose(mu, prior.samples([_on_circle(0)])[0])
+    modulation = prior.speed_modulation([_on_circle(0)])
+    # away from the nucleus, every radius crosses the reference intensity within a few pixels of the cell boundary
+    for degrees in (100, 140, 180, 220, 260):
+        direction = np.array([np.sin(np.deg2rad(degrees)), np.cos(np.deg2rad(degrees))])
+        across = np.round(CENTER + np.outer(RADIUS + np.arange(-3, 4), direction)).astype(int)
+        assert modulation[across[:, 0], across[:, 1]].max() > 0.9
+    assert modulation[80, 80] < 0.4 and modulation[5, 5] < 0.4
+
+
+@pytest.mark.parametrize("min_anchors, active_from", [(1, 1), (2, 2), (3, 3)])
+def test_min_anchors(cell_image, min_anchors, active_from):
+    prior = IntensityPrior(min_anchors=min_anchors)
+    prior.set_image(cell_image)
+    anchors = np.array([_on_circle(d) for d in (0, 30, 60)])
+    for n in range(1, 4):
+        assert (prior.reference(anchors[:n]) is not None) == (n >= active_from)
+
+
+def test_min_anchors_is_at_least_one():
+    prior = IntensityPrior(min_anchors=0)
+    assert prior.min_anchors == 1
+    prior.min_anchors = 2.0
+    assert prior.min_anchors == 2
 
 
 def test_prior_modulation_range(cell_image):
@@ -212,6 +244,7 @@ def restore_prior_state():
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
     yield
     VispyMinimalContourOverlay.set_use_intensity_prior(False)
+    VispyMinimalContourOverlay.set_intensity_prior_min_anchors(1)
 
 
 def _shown(widget):
@@ -223,6 +256,7 @@ def test_controls_are_hidden_by_default(viewer, monkeypatch, restore_prior_state
     mc = _scene(viewer, monkeypatch).mc
     assert not _shown(mc.intensity_prior_checkbox)
     assert not _shown(mc.intensity_prior_strength_slider)
+    assert not _shown(mc.intensity_prior_min_anchors_spinbox)
     assert _shown(mc.used_feature_combobox)
 
 
@@ -236,11 +270,13 @@ def test_environment_variable_shows_controls_that_are_not_persisted(viewer, monk
     mc = _scene(viewer, monkeypatch, env="1").mc
     assert _shown(mc.intensity_prior_checkbox)
     assert _shown(mc.intensity_prior_strength_slider)
+    assert _shown(mc.intensity_prior_min_anchors_spinbox)
     mc.intensity_prior_checkbox.value = True
+    mc.intensity_prior_min_anchors_spinbox.value = 3
     state = mc.__magicclass_serialize__()
-    assert "intensity_prior_checkbox" not in state
-    assert "intensity_prior_checkbox" not in state["Image Features"]
-    assert "intensity_prior_strength_slider" not in state["Image Features"]
+    for key in ("intensity_prior_checkbox", "intensity_prior_strength_slider", "intensity_prior_min_anchors_spinbox"):
+        assert key not in state
+        assert key not in state["Image Features"]
 
 
 def test_overlay_sets_the_modulation_from_accepted_anchors(viewer, monkeypatch, restore_prior_state):
@@ -278,16 +314,77 @@ def test_overlay_sets_the_modulation_from_accepted_anchors(viewer, monkeypatch, 
     scene.mc.intensity_prior_checkbox.value = True
     assert calls[-1] is not None and calls[-1].shape == scene.image.data.shape
 
-    overlay.anchor_points = [[10., 10.], [30., 30.]]  # one accepted anchor: no reference yet
+    overlay.anchor_points = [[10., 10.], [30., 30.]]  # one accepted anchor: enough by default
+    overlay.stored_contour = []
     vispy_overlay.update_speed_modulation()
-    assert calls[-1] is None
+    assert calls[-1] is not None
 
+    scene.mc.intensity_prior_min_anchors_spinbox.value = 2  # recomputes: one anchor is not enough any more
+    assert calls[-1] is None
     overlay.anchor_points = [[10., 10.], [10., 40.], [30., 30.]]
     vispy_overlay.update_speed_modulation()
     assert calls[-1] is not None
+    scene.mc.intensity_prior_min_anchors_spinbox.value = 3
+    assert calls[-1] is None
+    scene.mc.intensity_prior_min_anchors_spinbox.value = 1
+    assert calls[-1] is not None
+
+    overlay.anchor_points = []  # no anchor at all
+    vispy_overlay.update_speed_modulation()
+    assert calls[-1] is None
+    overlay.anchor_points = [[10., 10.], [10., 40.], [30., 30.]]
+    vispy_overlay.update_speed_modulation()
     vispy_overlay.clear(None)
     assert calls[-1] is None
 
     overlay.anchor_points = [[10., 10.], [10., 40.], [30., 30.]]
     scene.mc.intensity_prior_checkbox.value = False
     assert calls[-1] is None
+
+
+def test_overlay_samples_the_roi_window_in_window_coordinates(viewer, monkeypatch, restore_prior_state):
+    """With a ROI the prior's image is the window; anchors (plane coordinates) are shifted into it."""
+    from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
+    scene = _scene(viewer, monkeypatch, env="1")
+    scene.qt_viewer.controls.widgets[scene.labels].mc_button.click()
+    _process_events()
+    overlay = scene.labels._overlays["minimal_contour"]
+    visual_map = getattr(scene.qt_viewer.canvas, "_layer_overlay_to_visual", None)
+    if visual_map is None:
+        pytest.skip("this napari version keeps overlay visuals elsewhere")
+    vispy_overlay = visual_map[scene.labels][overlay]
+
+    # a plane of the scene's shape: dark left of column 45, bright from it; the calculator has columns 30..70
+    plane_shape = scene.image.data.shape
+    plane = np.where(np.arange(plane_shape[1]) < 45, 0.2, 0.8)[None].repeat(plane_shape[0], 0)
+    window = (slice(0, plane_shape[0]), slice(30, plane_shape[1]))
+    VispyMinimalContourOverlay.set_prior_image(plane[window])
+    VispyMinimalContourOverlay.set_calculator_feature(np.repeat(plane[window][..., None], 3, axis=2),
+                                                      roi_origin=(0, 30), plane_shape=plane_shape)
+
+    calls = []
+    calculator = VispyMinimalContourOverlay.mc_calculator
+
+    class CalculatorSpy:
+        def set_speed_modulation(self, modulation):
+            calls.append(modulation)
+            calculator.set_speed_modulation(modulation)
+
+        def __getattr__(self, name):
+            return getattr(calculator, name)
+
+    monkeypatch.setattr(VispyMinimalContourOverlay, "mc_calculator", CalculatorSpy())
+    scene.mc.intensity_prior_checkbox.value = True
+    # an anchor on the dark part, at plane column 31 (window column 1), and the cursor; one outside the window
+    overlay.anchor_points = [[30., 10.], [30., 31.], [40., 60.]]
+    vispy_overlay.update_speed_modulation()
+    modulation = calls[-1]
+    assert modulation is not None and modulation.shape == plane[window].shape
+    # the dark columns keep their speed: the anchor was sampled at the right place (unshifted it would be bright)
+    assert modulation[30, 1] > 0.95
+    assert modulation[30, 30] < 0.3
+    # the anchor outside the window is not sampled: with it alone there is no reference
+    overlay.anchor_points = [[30., 10.], [40., 60.]]
+    vispy_overlay.update_speed_modulation()
+    assert calls[-1] is None
+    VispyMinimalContourOverlay.set_calculator_feature(None)

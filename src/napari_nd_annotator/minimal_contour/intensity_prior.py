@@ -34,10 +34,15 @@ class IntensityPrior:
         off the edge would otherwise sample the inside or outside of the object.
     smoothing : float
         Sigma of the Gaussian applied to the image before sampling and before computing the similarity.
+    min_anchors : int
+        Number of accepted anchor points needed before the prior is used (at least 1). With a single anchor the
+        reference is that one sample and the tolerance is ``min_sigma``; from the second anchor on the accepted
+        contour adds samples and the tolerance is estimated from them.
     """
 
-    def __init__(self, strength=0.8, min_sigma=0.05, recent_length=100, snap_radius=2, smoothing=1.):
+    def __init__(self, strength=0.8, min_sigma=0.05, recent_length=100, snap_radius=2, smoothing=1., min_anchors=1):
         self.strength = strength
+        self.min_anchors = min_anchors
         self.min_sigma = min_sigma
         self.recent_length = recent_length
         self.snap_radius = snap_radius
@@ -54,6 +59,15 @@ class IntensityPrior:
     @strength.setter
     def strength(self, value):
         self._strength = float(np.clip(value, 0., MAX_STRENGTH))
+
+    @property
+    def min_anchors(self):
+        return self._min_anchors
+
+    @min_anchors.setter
+    def min_anchors(self, value):
+        # without an anchor there is nothing to sample
+        self._min_anchors = max(int(value), 1)
 
     @property
     def shape(self):
@@ -116,8 +130,8 @@ class IntensityPrior:
         return np.asarray(sampled, dtype=float)
 
     def reference(self, anchors, contour=None):
-        """(mu, sigma) of the boundary intensity, or None while there is not enough traced boundary."""
-        if self._raw_image is None or len(anchors) < 2:
+        """(mu, sigma) of the boundary intensity, or None while fewer than ``min_anchors`` anchors are accepted."""
+        if self._raw_image is None or len(anchors) < self.min_anchors:
             return None
         sampled = self.samples(anchors, contour)
         mu = float(np.median(sampled))

@@ -221,6 +221,11 @@ class MinimalContourWidget(MagicTemplate):
     intensity_prior_strength_slider = field(float, label="Prior strength", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(
         min=0., max=MAX_PRIOR_STRENGTH, value=0.8, visible=False,
         tooltip="How much pixels with a different intensity are avoided")
+    intensity_prior_min_anchors_spinbox = field(int, label="Prior from anchor", location=ImageFeaturesWidget).with_options(
+        min=1, max=10, value=1, visible=False,
+        tooltip="Number of placed anchor points after which the prior is used.\n"
+                "With 1 the intensity at the first anchor is the reference;\n"
+                "more anchors give a more reliable reference.")
 
 
     blur_image_checkbox = field(bool, label="Blur image", location=BlurWidget).with_options(tooltip="When checked, the image will be blurred\n"
@@ -315,10 +320,13 @@ class MinimalContourWidget(MagicTemplate):
         if os.environ.get(INTENSITY_PRIOR_ENV, "") not in ("", "0"):
             self.intensity_prior_checkbox.visible = True
             self.intensity_prior_strength_slider.visible = True
+            self.intensity_prior_min_anchors_spinbox.visible = True
         VispyMinimalContourOverlay.set_intensity_prior_strength(self.intensity_prior_strength_slider.value)
+        VispyMinimalContourOverlay.set_intensity_prior_min_anchors(self.intensity_prior_min_anchors_spinbox.value)
         VispyMinimalContourOverlay.set_use_intensity_prior(self.intensity_prior_checkbox.value)
         self.intensity_prior_checkbox.changed.connect(VispyMinimalContourOverlay.set_use_intensity_prior)
         self.intensity_prior_strength_slider.changed.connect(VispyMinimalContourOverlay.set_intensity_prior_strength)
+        self.intensity_prior_min_anchors_spinbox.changed.connect(VispyMinimalContourOverlay.set_intensity_prior_min_anchors)
 
         if self.labels_layer is not None:
             dtype_lims = get_dtype_limits(get_dtype(self.labels_layer))
@@ -363,7 +371,7 @@ class MinimalContourWidget(MagicTemplate):
             del d["source_image_container"]
         # the experimental intensity prior always starts switched off
         for container in (d, d.get("Image Features", {})):
-            for key in ("intensity_prior_checkbox", "intensity_prior_strength_slider"):
+            for key in ("intensity_prior_checkbox", "intensity_prior_strength_slider", "intensity_prior_min_anchors_spinbox"):
                 container.pop(key, None)
         return d
 

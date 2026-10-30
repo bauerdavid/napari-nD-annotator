@@ -201,6 +201,11 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         VispyMinimalContourOverlay._update_prior_overlay()
 
     @staticmethod
+    def set_intensity_prior_min_anchors(min_anchors):
+        VispyMinimalContourOverlay.intensity_prior.min_anchors = min_anchors
+        VispyMinimalContourOverlay._update_prior_overlay()
+
+    @staticmethod
     def _update_prior_overlay():
         ref = VispyMinimalContourOverlay._prior_overlay_ref
         overlay = ref() if ref is not None else None
