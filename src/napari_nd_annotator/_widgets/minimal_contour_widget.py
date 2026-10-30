@@ -1,4 +1,5 @@
 import colorsys
+import os
 import time
 import warnings
 import weakref
@@ -39,6 +40,8 @@ from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_di
     viewer_main_window, viewer_camera
 from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
+from ..minimal_contour.intensity_prior import MAX_SLOWDOWN as MAX_PRIOR_SLOWDOWN, SIMILAR, SIMILAR_OR_BRIGHTER, \
+    SIMILAR_OR_DARKER
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from .object_list import selected_object
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
@@ -105,6 +108,18 @@ FEATURES = {
 }
 
 DEMO_SIZE = 200
+# set this environment variable (to anything but "" or "0") to show the experimental intensity prior controls
+INTENSITY_PRIOR_ENV = "ND_ANNOTATOR_INTENSITY_PRIOR"
+# how many times slower the pixels least like the anchors' intensity get (see minimal_contour/intensity_prior.py)
+PRIOR_SLOWDOWN_CHOICES = [("×%g" % s, s) for s in (3., 10., 30., 100., 300., MAX_PRIOR_SLOWDOWN)]
+DEFAULT_PRIOR_SLOWDOWN = 100.
+DEFAULT_PRIOR_FEATURE_WEIGHT = 0.25
+PRIOR_MATCH_CHOICES = [("Similar", SIMILAR), ("Similar or brighter", SIMILAR_OR_BRIGHTER),
+                       ("Similar or darker", SIMILAR_OR_DARKER)]
+# the widgets of the experimental intensity prior: hidden without INTENSITY_PRIOR_ENV and never persisted
+INTENSITY_PRIOR_FIELDS = ("intensity_prior_checkbox", "intensity_prior_match_combobox",
+                          "intensity_prior_slowdown_combobox", "intensity_prior_feature_weight_slider",
+                          "intensity_prior_min_anchors_spinbox")
 
 
 class ColorBox(FreeWidget):
@@ -210,6 +225,29 @@ class MinimalContourWidget(MagicTemplate):
                                                     "with the selected image feature (with a lower number the contour will be\n"
                                                     "closer to the Euclidean shortest path")
     local_intensity_correction_checkbox = field(bool, location=ImageFeaturesWidget).with_options(visible=False)
+    # experimental, only shown when the INTENSITY_PRIOR_ENV environment variable is set
+    intensity_prior_checkbox = field(bool, label="Follow anchor intensity", location=ImageFeaturesWidget).with_options(
+        visible=False, tooltip="[Experimental] When checked, the contour follows pixels whose intensity is similar\n"
+                               "to the intensity at the anchor points (and along the accepted contour)")
+    intensity_prior_match_combobox = field(widget_type=ComboBox, label="Match", location=ImageFeaturesWidget, options={
+        "choices": PRIOR_MATCH_CHOICES, "value": SIMILAR, "visible": False,
+        "tooltip": "Which intensities count as matching the anchors:\n"
+                   "Similar: close to it, darker or brighter\n"
+                   "Similar or brighter: also anything brighter (e.g. along a membrane stain)\n"
+                   "Similar or darker: also anything darker"})
+    intensity_prior_slowdown_combobox = field(widget_type=ComboBox, label="Intensity strength", location=ImageFeaturesWidget, options={
+        "choices": PRIOR_SLOWDOWN_CHOICES, "value": DEFAULT_PRIOR_SLOWDOWN, "visible": False,
+        "tooltip": "How many times slower the contour moves on pixels whose intensity\n"
+                   "differs most from the anchors' intensity"})
+    intensity_prior_feature_weight_slider = field(float, label="Feature weight", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(
+        min=0., max=1., value=DEFAULT_PRIOR_FEATURE_WEIGHT, visible=False,
+        tooltip="How much the selected image feature still counts while following the intensity.\n"
+                "0: intensity only; small values keep the contour tidy on noisy images")
+    intensity_prior_min_anchors_spinbox = field(int, label="Prior from anchor", location=ImageFeaturesWidget).with_options(
+        min=1, max=10, value=1, visible=False,
+        tooltip="Number of placed anchor points after which the prior is used.\n"
+                "With 1 the intensity at the first anchor is the reference;\n"
+                "more anchors give a more reliable reference.")
 
 
     blur_image_checkbox = field(bool, label="Blur image", location=BlurWidget).with_options(tooltip="When checked, the image will be blurred\n"
@@ -301,6 +339,18 @@ class MinimalContourWidget(MagicTemplate):
             self._initialize(self._viewer)
         VispyMinimalContourOverlay.mc_calculator.set_param(self.param)
         self.local_intensity_correction_checkbox.changed.connect(VispyMinimalContourOverlay.mc_calculator.set_use_local_maximum)
+        if os.environ.get(INTENSITY_PRIOR_ENV, "") not in ("", "0"):
+            for name in INTENSITY_PRIOR_FIELDS:
+                getattr(self, name).visible = True
+        for widget, setter in [
+            (self.intensity_prior_match_combobox, VispyMinimalContourOverlay.set_intensity_prior_match),
+            (self.intensity_prior_slowdown_combobox, VispyMinimalContourOverlay.set_intensity_prior_max_slowdown),
+            (self.intensity_prior_feature_weight_slider, VispyMinimalContourOverlay.set_intensity_prior_feature_weight),
+            (self.intensity_prior_min_anchors_spinbox, VispyMinimalContourOverlay.set_intensity_prior_min_anchors),
+            (self.intensity_prior_checkbox, VispyMinimalContourOverlay.set_use_intensity_prior),
+        ]:
+            setter(widget.value)
+            widget.changed.connect(setter)
 
         if self.labels_layer is not None:
             dtype_lims = get_dtype_limits(get_dtype(self.labels_layer))
@@ -343,6 +393,10 @@ class MinimalContourWidget(MagicTemplate):
             del d["labels_layer_combobox"]
         if "source_image_container" in d:
             del d["source_image_container"]
+        # the experimental intensity prior always starts switched off
+        for container in (d, d.get("Image Features", {})):
+            for key in INTENSITY_PRIOR_FIELDS:
+                container.pop(key, None)
         return d
 
     @property
@@ -680,6 +734,7 @@ class MinimalContourWidget(MagicTemplate):
             self._img = None
             self.feature_editor.variables["image"] = None
             VispyMinimalContourOverlay.set_calculator_feature(None)
+            VispyMinimalContourOverlay.set_prior_image(None)
             # self.feature_editor.features = None #TODO check
             return
         if self.viewer is None:
@@ -687,6 +742,7 @@ class MinimalContourWidget(MagicTemplate):
         if not self.is_mc_enabled:
             # nothing to compute while the tool is off (e.g. only painting); enabling it calls this again
             VispyMinimalContourOverlay.set_calculator_feature(None)
+            VispyMinimalContourOverlay.set_prior_image(None)
             return
         if image_layer.multiscale:
             # without features the overlay ignores every mouse event, so the tool stays inactive
@@ -694,6 +750,7 @@ class MinimalContourWidget(MagicTemplate):
                 self._warned_multiscale.add(image_layer)
                 warnings.warn("Minimal contour does not support multiscale images (layer '%s')" % image_layer.name)
             VispyMinimalContourOverlay.set_calculator_feature(None)
+            VispyMinimalContourOverlay.set_prior_image(None)
             return
         if self.viewer.dims.ndisplay == 3:
             # self.anchor_points.editable = False
@@ -720,6 +777,7 @@ class MinimalContourWidget(MagicTemplate):
             # image layer first, so the effective sigma was sqrt(2) * sigma.
             if self.is_blurring_enabled:
                 image = self._blur_image(image).astype(float)
+            VispyMinimalContourOverlay.set_prior_image(1 - image if self.feature_inverted else image)
             self.feature_editor.variables["image"] = image
             self.feature_editor.Run()
             return
@@ -753,13 +811,14 @@ class MinimalContourWidget(MagicTemplate):
         self._feature_executor.submit(work)
 
     def _compute_features(self, job):
-        """Features, x gradient, y gradient (the latter two may be None) and the ROI of a plane. Thread safe.
+        """Features, x gradient, y gradient (the latter two may be None), the ROI and the intensity image of a plane.
 
         Without a ROI the ROI item is None. With one, everything is computed on the ROI plus the pixels around it that
         gradients and blur need, and cropped back to the ROI: inside it the result equals the whole plane's, except for
         the statistics the features are normalised with when no contrast limits are used, or for the symmetric
         gradient (its magnitude is scaled to 0..1): those are the ROI's own, which is what makes the cost independent
-        of the plane size. The ROI item is (Box, shape of the whole plane).
+        of the plane size. The ROI item is (Box, shape of the whole plane). The intensity image (normalised and blurred
+        like the features, same window, but not inverted) is what the intensity prior samples. Thread safe.
         """
         plane = job["plane"]
         sigma = job["sigma"]
@@ -795,21 +854,25 @@ class MinimalContourWidget(MagicTemplate):
         if inner is not None:
             image, grad_x, grad_y = (np.ascontiguousarray(a[inner]) for a in (image, grad_x, grad_y))
             roi = (roi, tuple(plane_shape))
+        # the prior compares intensities as they are displayed, also for the inverted (low intensity) feature
+        intensity = 1 - image if job["inverted"] else image
         if job["feature"] == SYM_GRADIENT:
             grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
             grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
             min_, max_ = grad_magnitude.min(), grad_magnitude.max()
-            return (grad_magnitude - min_) / (max_ - min_), None, None, roi
+            return (grad_magnitude - min_) / (max_ - min_), None, None, roi, intensity
         if image.ndim == 2:
             image = np.repeat(image[..., np.newaxis], 3, axis=2)
-        return image, grad_x, grad_y, roi
+        return image, grad_x, grad_y, roi, intensity
 
     def _apply_features(self, generation, result):
         """Hand features to the calculator (GUI thread), unless a newer plane was requested or the tool was left."""
         if generation != self._feature_generation or not self.is_mc_enabled or self.image_layer is None:
             return
-        features, grad_x, grad_y, roi = result
+        features, grad_x, grad_y, roi, intensity = result
         self._img = features if grad_x is not None else None
+        # before the calculator gets the features: that recomputes the prior's speed modulation
+        VispyMinimalContourOverlay.set_prior_image(intensity)
         if roi is None:
             VispyMinimalContourOverlay.set_calculator_feature(features, grad_x, grad_y)
         else:
