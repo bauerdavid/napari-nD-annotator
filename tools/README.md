@@ -51,7 +51,7 @@ $env:ND_ANNOTATOR_SRC = "C:\path\to\worktree\src"; python tools\bench_minimal_co
 |---|---|
 | plugin start | creating and docking the widget; RSS delta |
 | activation | selecting the labels layer + enabling MC mode, both with the GUI blocked. Versions that do their heavy work only when MC mode is enabled therefore stay comparable with current `main` |
-| time to first usable contour | activation + one `calculator.run` |
+| time to first usable contour | activation + one contour estimate (`VispyMinimalContourOverlay._estimate`, so it also works when the calculator only has a ROI window of the plane) |
 | jump to far slice after activation | `dims.set_point(0, Z-1)` directly after activation: how long the GUI is blocked while features of the target slice are not ready |
 | background features | wall time, process CPU seconds and average cores until the memmap feature extractor is done (`n/a` while a `FeatureManager` exists and its feature extractor is not available) |
 | temp files | apparent/allocated size of the feature temp folder (`*_<pid>_nd_annotator`) and the ratio to the image size; 0 for versions that write no feature files |

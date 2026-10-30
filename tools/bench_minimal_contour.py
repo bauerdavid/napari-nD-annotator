@@ -266,12 +266,14 @@ def run(args):
     try:
         from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import \
             VispyMinimalContourOverlay
-        calc = VispyMinimalContourOverlay.mc_calculator
         s = min(Y, X)
-        lo, hi, p0, p1a, p1b = (int(f * s) for f in (0.39, 0.59, 0.44, 0.49, 0.51))
+        p0, p1a, p1b = (int(f * s) for f in (0.44, 0.49, 0.51))
+        # what the mouse move callback does: points in plane coordinates; the overlay maps them into the part of
+        # the plane the calculator has (calling the calculator directly would be out of bounds for a ROI window)
+        overlay = VispyMinimalContourOverlay.__new__(VispyMinimalContourOverlay)
+        overlay.point_triangle = np.array([[p0, p0], [p1a, p1b], [p0, p0]], dtype=float)
         t = time.perf_counter()
-        calc.set_boundaries(lo, lo, hi, hi)
-        calc.run(np.array([[p0, p0], [p1a, p1b], [p0, p0]], dtype=float), True, True, True)
+        overlay._estimate()
         first_run = time.perf_counter() - t
     except Exception as e:  # noqa: BLE001 - report instead of aborting the whole benchmark
         print("first contour run failed: %r" % e)
@@ -386,7 +388,7 @@ ROWS = [
     ("activation_s", "activation total", "s"),
     ("activation_rss_delta_mb", "  RSS delta after activation", "MB"),
     ("activation_peak_delta_mb", "  peak RSS delta so far", "MB"),
-    ("first_run_s", "first calculator.run", "s"),
+    ("first_run_s", "first contour estimate", "s"),
     ("first_contour_s", "time to first usable contour", "s"),
     ("cold_jump_s", "jump to far slice after activation", "s"),
     ("background_features.wall_s", "background features: wall", "s"),
