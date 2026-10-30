@@ -67,19 +67,19 @@ public:
 	    mEndY = endY;
 	    GetMaxAuxGrad();
 	}
-	// Per-pixel factor (0, 1] the front speed is multiplied by (not owned); null switches it off
-	void SetSpeedModulation(SWorkImg<double> *p) {
-		m_pSpeedMod = p;
+	// Per-pixel isotropic speed (> 0) that replaces the metric of the method (not owned); null switches it off
+	void SetSpeedMap(SWorkImg<double> *p) {
+		m_pSpeedMap = p;
 	}
     virtual void CalcImageQuant() = 0;
 protected:
-	// The speed modulation if it matches the current image size, otherwise null
-	SWorkImg<double> *GetSpeedModulation() {
-		if (m_pSpeedMod && m_pSpeedMod->xs == m_spacex && m_pSpeedMod->ys == m_spacey)
-			return m_pSpeedMod;
+	// The speed map if it matches the current image size, otherwise null
+	SWorkImg<double> *GetSpeedMap() {
+		if (m_pSpeedMap && m_pSpeedMap->xs == m_spacex && m_pSpeedMap->ys == m_spacey)
+			return m_pSpeedMap;
 		return 0;
 	}
-	SWorkImg<double> *m_pSpeedMod = 0;
+	SWorkImg<double> *m_pSpeedMap = 0;
 
 	void InitEnvironment(int spacex, int spacey);
 	void UpdateDistanceMap(double maxv);
@@ -188,9 +188,6 @@ protected:
 		SWorkImg<double> &tangy = *(m_pTang[1]);
         double grad_magnitude = sqrt(tangx[y][x]*tangx[y][x]+tangy[y][x]*tangy[y][x]);
         double exp_mul = (1.0-exp(-grad_magnitude*m_expfac/m_maxauxgrad))/grad_magnitude;
-		// The speed modulation scales the whole metric, so strictly the drift would have to be divided by it too.
-		// It is left unscaled on purpose: the scaled drift dominates the small distance differences near the
-		// start point and the path tracing can then circle there until it hits its step limit.
 
 		dir.x += tangx[y][x]*exp_mul; dir.y += tangy[y][x]*exp_mul;
 	}
@@ -360,10 +357,10 @@ struct SControl
 		m_Splitter.SetBoundaries(startX,startY,endX, endY);
 		m_Inhomog.SetBoundaries(startX,startY,endX, endY);
 	}
-	void SetSpeedModulation(SWorkImg<double> *p) {
-		m_Randers.SetSpeedModulation(p);
-		m_Splitter.SetSpeedModulation(p);
-		m_Inhomog.SetSpeedModulation(p);
+	void SetSpeedMap(SWorkImg<double> *p) {
+		m_Randers.SetSpeedMap(p);
+		m_Splitter.SetSpeedMap(p);
+		m_Inhomog.SetSpeedMap(p);
 	}
 	// Prepare all data terms from color image (for sequential use)
 	void InitEnvironmentAllMethods(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {

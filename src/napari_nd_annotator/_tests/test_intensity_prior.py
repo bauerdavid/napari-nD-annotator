@@ -1,16 +1,18 @@
 """The experimental intensity prior of the minimal contour.
 
-It slows the minimal path down on pixels whose intensity differs from the already traced boundary.
+While it is on, the contour follows pixels whose intensity is similar to the intensity at the anchor points:
+the speed of the path is the intensity similarity times the selected feature's speed to a small power.
 """
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from scipy.ndimage import gaussian_filter
+from skimage import measure
 from skimage.filters import sobel_h, sobel_v
 
 from napari_nd_annotator.minimal_contour._eikonal_wrapper import MinimalContourCalculator
-from napari_nd_annotator.minimal_contour.intensity_prior import IntensityPrior
+from napari_nd_annotator.minimal_contour.intensity_prior import IntensityPrior, feature_speed
 
 H = W = 160
 CENTER = np.array([80., 80.])
@@ -37,6 +39,22 @@ def cell_image():
     return (img - img.min()) / (img.max() - img.min())
 
 
+@pytest.fixture(scope="module")
+def blob_image():
+    """A blob with a soft falloff and a sharper bright core: the steepest edge is the core's, not any level of the blob.
+
+    Returns the image and the line of 35% of its maximum (rows, columns) after the prior's smoothing.
+    """
+    yy, xx = np.mgrid[:H, :W]
+    r2 = ((yy - 80) / 45.) ** 2 + ((xx - 80) / 60.) ** 2
+    img = np.exp(-r2 * 1.5) + 0.8 * (np.hypot(yy - 80, xx - 95) < 20)
+    img = gaussian_filter(img, 1.5) + np.random.default_rng(4).normal(0, 0.02, img.shape)
+    img = (img - img.min()) / (img.max() - img.min())
+    smooth = gaussian_filter(img, 1.)
+    level_line = max(measure.find_contours(smooth, 0.35 * smooth.max()), key=len)
+    return img, level_line
+
+
 def _symmetric_gradient_calculator(img):
     calc = MinimalContourCalculator(None, 2)
     grad = np.hypot(sobel_v(img), sobel_h(img))
@@ -59,11 +77,10 @@ def _path(calc, anchors):
     return calc.run(np.asarray(anchors, dtype=float), True, False, True)[0]
 
 
-def _traced_left_side():
-    """Anchors and accepted contour of a boundary part away from the nucleus."""
-    anchors = np.array([_on_circle(250), _on_circle(290)])
-    contour = np.array([_on_circle(d) for d in np.linspace(250, 290, 60)])
-    return anchors, contour
+def _distance_to_line(path, line):
+    """Mean distance of the path's points from the nearest point of a densely sampled line."""
+    d = np.hypot(*(path[:, None, :] - line[None, :, :]).transpose(2, 0, 1))
+    return d.min(axis=1).mean()
 
 
 # IntensityPrior
@@ -73,26 +90,50 @@ def test_prior_needs_an_image_and_an_anchor(cell_image):
     assert prior.reference([_on_circle(0)]) is None
     prior.set_image(cell_image)
     assert prior.reference(np.empty((0, 2))) is None
-    assert prior.speed_modulation(np.empty((0, 2))) is None
+    assert prior.intensity_speed(np.empty((0, 2))) is None
+    assert prior.speed_map(np.empty((0, 2))) is None
 
 
-def test_prior_works_from_a_single_anchor(cell_image):
+def test_reference_is_read_where_clicked():
+    """The clicked pixel is sampled as it is, also right next to a strong edge."""
+    img = np.zeros((30, 30))
+    img[:, 15:] = 1.
+    prior = IntensityPrior(smoothing=1.)
+    prior.set_image(img)
+    clicked = np.array([[10, 17], [20, 12]])
+    assert np.allclose(prior.samples(clicked), prior.image[clicked[:, 0], clicked[:, 1]])
+
+
+def test_snap_radius_moves_the_sample_to_the_edge():
+    """With a snap radius a click a pixel inside a sharp edge samples the edge instead (kept for later use)."""
+    img = np.zeros((30, 30))
+    img[:, 15:] = 1.
+    prior = IntensityPrior(smoothing=1., snap_radius=2)
+    prior.set_image(img)
+    clicked_inside = np.array([[10, 16], [20, 16]])
+    # the edge is between columns 14 and 15: either pixel is on it
+    edge_values = prior.image[10, 14:16]
+    for sample in prior.samples(clicked_inside):
+        assert np.isclose(edge_values, sample).any()
+    assert prior.samples(clicked_inside).max() < prior.image[10, 16] - 0.1
+
+
+def test_prior_works_from_a_single_anchor(blob_image):
+    img, level_line = blob_image
     prior = IntensityPrior()
     assert prior.min_anchors == 1
-    prior.set_image(cell_image)
-    mu, sigma = prior.reference([_on_circle(0)])
-    # the one sample is the reference; the tolerance is the lower limit: the noise floor, or more on this steep edge
-    gradient = prior.grad_magnitude[prior._sample_indices([_on_circle(0)])][0]
+    prior.set_image(img)
+    click = level_line[0]
+    mu, sigma = prior.reference([click])
+    # the one sample is the reference; the tolerance is the lower limit: the noise floor, or the change over a pixel
+    gradient = prior.grad_magnitude[prior._sample_indices([click])][0]
     assert sigma == max(prior.sigma_floor, gradient)
-    assert sigma > prior.sigma_floor
-    assert np.isclose(mu, prior.samples([_on_circle(0)])[0])
-    modulation = prior.speed_modulation([_on_circle(0)])
-    # away from the nucleus, every radius crosses the reference intensity within a few pixels of the cell boundary
-    for degrees in (100, 140, 180, 220, 260):
-        direction = np.array([np.sin(np.deg2rad(degrees)), np.cos(np.deg2rad(degrees))])
-        across = np.round(CENTER + np.outer(RADIUS + np.arange(-3, 4), direction)).astype(int)
-        assert modulation[across[:, 0], across[:, 1]].max() > 0.9
-    assert modulation[80, 80] < 0.4 and modulation[5, 5] < 0.4
+    assert np.isclose(mu, prior.samples([click])[0])
+    # the whole level line is fast (its pixels are up to half a pixel off the level), the core and the background slow
+    speed = prior.intensity_speed([click])
+    on_line = np.round(level_line).astype(int)
+    assert np.median(speed[on_line[:, 0], on_line[:, 1]]) > 0.6
+    assert speed[80, 95] < 0.02 and speed[5, 5] < 0.02
 
 
 @pytest.mark.parametrize("min_anchors, active_from", [(1, 1), (2, 2), (3, 3)])
@@ -112,22 +153,15 @@ def test_min_anchors_is_at_least_one():
 
 
 @pytest.mark.parametrize("max_slowdown", [3., 100., 1000.])
-def test_prior_modulation_range(cell_image, max_slowdown):
+def test_intensity_speed_range(blob_image, max_slowdown):
+    img, level_line = blob_image
     prior = IntensityPrior(max_slowdown=max_slowdown)
-    prior.set_image(cell_image)
-    modulation = prior.speed_modulation(*_traced_left_side())
-    assert modulation.shape == cell_image.shape
-    assert modulation.min() >= 1. / max_slowdown - 1e-9 and modulation.max() <= 1.
-    # the nucleus gets the full slowdown, the background (closer to the boundary intensity) at least half of it
-    assert modulation[80, 80] < 1.01 / max_slowdown
-    assert modulation[5, 5] < max_slowdown ** -0.5
-    # every radius away from the nucleus crosses the boundary intensity near the cell boundary: a pixel there
-    # is very similar to the reference (the speed factor is max_slowdown ** (similarity - 1))
-    similarity = 1. + np.log(modulation) / np.log(max_slowdown)
-    for degrees in (180, 220, 260, 300):
-        direction = np.array([np.sin(np.deg2rad(degrees)), np.cos(np.deg2rad(degrees))])
-        across = np.round(CENTER + np.outer(RADIUS + np.arange(-3, 4), direction)).astype(int)
-        assert similarity[across[:, 0], across[:, 1]].max() > 0.75
+    prior.set_image(img)
+    speed = prior.intensity_speed(level_line[[0, 40]], level_line[:41])
+    assert speed.shape == img.shape
+    assert speed.min() >= 1. / max_slowdown - 1e-9 and speed.max() <= 1.
+    # the core and the background get the full slowdown
+    assert speed[80, 95] < 1.01 / max_slowdown and speed[5, 5] < 1.01 / max_slowdown
 
 
 def test_max_slowdown_is_clamped_and_one_switches_off(cell_image):
@@ -136,7 +170,8 @@ def test_max_slowdown_is_clamped_and_one_switches_off(cell_image):
     prior.max_slowdown = 0.5
     assert prior.max_slowdown == 1.
     prior.set_image(cell_image)
-    assert prior.speed_modulation(*_traced_left_side()) is None
+    assert prior.intensity_speed([_on_circle(0)]) is None
+    assert prior.speed_map([_on_circle(0)]) is None
 
 
 def test_tolerance_floor_follows_the_noise():
@@ -158,9 +193,9 @@ def test_tolerance_floor_follows_the_noise():
     assert noise_free.sigma_floor > 0
 
 
-def test_boundary_type_is_validated():
+def test_match_type_is_validated():
     with pytest.raises(ValueError):
-        IntensityPrior(boundary="ridge")
+        IntensityPrior(match="ridge")
 
 
 @pytest.fixture(scope="module")
@@ -172,53 +207,38 @@ def membrane_image():
     return gaussian_filter(img, 1.) + np.random.default_rng(3).normal(0, 0.005, img.shape)
 
 
-def test_bright_line_does_not_slow_down_the_brighter_parts_of_the_line(membrane_image):
+def test_similar_or_brighter_does_not_slow_down_the_brighter_parts(membrane_image):
     anchors = np.array([[40, 5], [40, 30]])
     contour = np.stack([np.full(26, 40), np.arange(5, 31)], axis=1)
     on_line = membrane_image[40] > np.median(membrane_image[40, 5:31])  # brighter than the traced part
-    edge = IntensityPrior(boundary="edge")
-    edge.set_image(membrane_image)
-    bright = IntensityPrior(boundary="bright line")
-    bright.set_image(membrane_image)
-    edge_modulation = edge.speed_modulation(anchors, contour)
-    bright_modulation = bright.speed_modulation(anchors, contour)
+    similar = IntensityPrior(match="similar")
+    similar.set_image(membrane_image)
+    brighter = IntensityPrior(match="similar or brighter")
+    brighter.set_image(membrane_image)
+    similar_speed = similar.intensity_speed(anchors, contour)
+    brighter_speed = brighter.intensity_speed(anchors, contour)
     # two-sided: the brighter parts of the line are slowed down; one-sided: they keep their speed
-    assert edge_modulation[40][on_line].min() < 0.5
-    assert bright_modulation[40][on_line].min() > 0.99
+    assert similar_speed[40][on_line].min() < 0.5
+    assert brighter_speed[40][on_line].min() > 0.99
     # the dark background is slowed down either way
-    assert bright_modulation[10, 60] < 0.02 and edge_modulation[10, 60] < 0.02
+    assert brighter_speed[10, 60] < 0.02 and similar_speed[10, 60] < 0.02
 
 
-def test_dark_line_is_the_mirror_of_bright_line(membrane_image):
+def test_similar_or_darker_is_the_mirror_of_similar_or_brighter(membrane_image):
     anchors = np.array([[40, 5], [40, 30]])
     contour = np.stack([np.full(26, 40), np.arange(5, 31)], axis=1)
-    bright = IntensityPrior(boundary="bright line")
-    bright.set_image(membrane_image)
-    dark = IntensityPrior(boundary="dark line")
-    dark.set_image(1. - membrane_image)
-    assert np.allclose(bright.speed_modulation(anchors, contour), dark.speed_modulation(anchors, contour))
+    brighter = IntensityPrior(match="similar or brighter")
+    brighter.set_image(membrane_image)
+    darker = IntensityPrior(match="similar or darker")
+    darker.set_image(1. - membrane_image)
+    assert np.allclose(brighter.intensity_speed(anchors, contour), darker.intensity_speed(anchors, contour))
 
 
-def test_bright_line_anchor_is_sampled_on_the_ridge(membrane_image):
-    """A click next to a bright line samples its brightest pixel, not its flank."""
-    prior = IntensityPrior(boundary="bright line")
+def test_snapping_for_similar_or_brighter_takes_the_brightest_pixel(membrane_image):
+    prior = IntensityPrior(match="similar or brighter", snap_radius=2)
     prior.set_image(membrane_image)
     sample = prior.samples(np.array([[42, 60]]))[0]
-    assert np.isclose(sample, prior.image[38:43, 58:63].max())
-
-
-def test_anchor_is_sampled_on_the_edge():
-    """A click a pixel inside a sharp edge samples the edge, not the inside of the object."""
-    img = np.zeros((30, 30))
-    img[:, 15:] = 1.
-    prior = IntensityPrior(smoothing=1.)
-    prior.set_image(img)
-    clicked_inside = np.array([[10, 16], [20, 16]])
-    # the edge is between columns 14 and 15: either pixel is on it
-    edge_values = prior.image[10, 14:16]
-    for sample in prior.samples(clicked_inside):
-        assert np.isclose(edge_values, sample).any()
-    assert prior.samples(clicked_inside).max() < prior.image[10, 16] - 0.1
+    assert np.isclose(sample, prior.image[40:45, 58:63].max())
 
 
 def test_inconsistent_boundary_widens_the_tolerance():
@@ -238,31 +258,88 @@ def test_prior_averages_channels():
     assert np.allclose(prior.image, 0.5)
 
 
-# MinimalContourCalculator.set_speed_modulation
+def test_feature_speed():
+    rng = np.random.default_rng(5)
+    features = rng.uniform(0, 1, (40, 50, 3))
+    # without gradients: the first channel, its 1st..99th percentile scaled to 0..1
+    speed = feature_speed(features)
+    low, high = np.percentile(features[..., 0], (1, 99))
+    assert np.allclose(speed, np.clip((features[..., 0] - low) / (high - low), 0, 1))
+    # with gradients: the gradient magnitude
+    grad_x, grad_y = rng.normal(size=(2, 40, 50))
+    magnitude = np.hypot(grad_x, grad_y)
+    low, high = np.percentile(magnitude, (1, 99))
+    assert np.allclose(feature_speed(features, grad_x, grad_y), np.clip((magnitude - low) / (high - low), 0, 1))
+    assert np.array_equal(feature_speed(np.full((5, 5), 0.3)), np.ones((5, 5)))
+
+
+def test_speed_map_mixes_in_the_feature(blob_image):
+    img, level_line = blob_image
+    feature = np.random.default_rng(6).uniform(0, 1, img.shape)
+    anchors = level_line[[0]]
+    prior = IntensityPrior(feature_weight=0.25)
+    prior.set_image(img)
+    intensity = prior.intensity_speed(anchors)
+    assert np.allclose(prior.speed_map(anchors, None, feature), intensity * np.maximum(feature, 1e-3) ** 0.25)
+    # no feature, or no weight: the intensity alone
+    assert np.array_equal(prior.speed_map(anchors), intensity)
+    prior.feature_weight = 0.
+    assert np.array_equal(prior.speed_map(anchors, None, feature), intensity)
+    prior.feature_weight = 5.
+    assert prior.feature_weight == 1.
+
+
+# MinimalContourCalculator.set_speed_map
 
 @pytest.mark.parametrize("make_calculator", [_randers_calculator, _symmetric_gradient_calculator])
-def test_all_ones_modulation_changes_nothing(cell_image, make_calculator):
+def test_without_a_speed_map_the_metric_is_unchanged(cell_image, make_calculator):
     calc = make_calculator(cell_image)
     anchors = [_on_circle(70), _on_circle(-70)]
     base = _path(calc, anchors)
-    calc.set_speed_modulation(np.ones_like(cell_image))
-    assert np.array_equal(_path(calc, anchors), base)
-    calc.set_speed_modulation(None)
+    calc.set_speed_map(np.random.default_rng(7).uniform(0.1, 1, cell_image.shape))
+    assert not np.array_equal(_path(calc, anchors), base)
+    calc.set_speed_map(None)
     assert np.array_equal(_path(calc, anchors), base)
 
 
-def test_modulation_shape_must_match_the_image(cell_image):
+@pytest.mark.parametrize("make_calculator", [_randers_calculator, _symmetric_gradient_calculator])
+def test_uniform_speed_map_gives_a_shortest_path(cell_image, make_calculator):
+    """The speed map replaces the metric: with the same speed everywhere the image (and its edges) do not matter.
+
+    On the pixel grid the path is one of the equally short 8-connected paths, not necessarily the straight line.
+    """
+    calc = make_calculator(cell_image)
+    a, b = np.array([20., 30.]), np.array([130., 120.])
+    calc.set_speed_map(np.full(cell_image.shape, 0.5))
+    path = _path(calc, [a, b])
+    length = np.hypot(*np.diff(path, axis=0).T).sum()
+    assert length < 1.1 * np.hypot(*(b - a))
+
+
+def test_speed_map_scale_does_not_matter(cell_image):
+    calc = _symmetric_gradient_calculator(cell_image)
+    anchors = [_on_circle(70), _on_circle(-70)]
+    speed = np.random.default_rng(8).uniform(0.1, 1, cell_image.shape)
+    calc.set_speed_map(speed)
+    path = _path(calc, anchors)
+    calc.set_speed_map(speed * 7.)
+    assert np.array_equal(_path(calc, anchors), path)
+
+
+def test_speed_map_is_validated(cell_image):
     calc = _symmetric_gradient_calculator(cell_image)
     with pytest.raises(ValueError):
-        calc.set_speed_modulation(np.ones((10, 10)))
+        calc.set_speed_map(np.ones((10, 10)))
+    with pytest.raises(ValueError):
+        calc.set_speed_map(np.zeros(cell_image.shape))
 
 
-def test_set_image_drops_the_modulation(cell_image):
+def test_set_image_drops_the_speed_map(cell_image):
     calc = _randers_calculator(cell_image)
     anchors = [_on_circle(70), _on_circle(-70)]
     base = _path(calc, anchors)
-    # only the left half of the image keeps its speed: the path has to go around the left side
-    calc.set_speed_modulation(np.where(np.arange(W) < 80, 1., 0.05)[None].repeat(H, 0))
+    # only the left half of the image is fast: the path has to go around the left side
+    calc.set_speed_map(np.where(np.arange(W) < 80, 1., 0.05)[None].repeat(H, 0))
     assert not np.array_equal(_path(calc, anchors), base)
     calc.set_image(np.repeat(cell_image[..., None], 3, axis=2), sobel_v(cell_image), sobel_h(cell_image))
     calc.set_boundaries(0, 0, W, H)
@@ -270,20 +347,29 @@ def test_set_image_drops_the_modulation(cell_image):
 
 
 @pytest.mark.parametrize("max_slowdown", [10., 100., 1000.])
+@pytest.mark.parametrize("feature_weight", [0., 0.25])
 @pytest.mark.parametrize("make_calculator", [_randers_calculator, _symmetric_gradient_calculator])
-def test_prior_keeps_the_path_off_the_nucleus_edge(cell_image, make_calculator, max_slowdown):
-    calc = make_calculator(cell_image)
-    anchors = [_on_circle(70), _on_circle(-70)]
-    without = _boundary_error(_path(calc, anchors))
-    prior = IntensityPrior(max_slowdown=max_slowdown)
-    prior.set_image(cell_image)
-    calc.set_speed_modulation(prior.speed_modulation(*_traced_left_side()))
-    path = _path(calc, anchors)
+def test_contour_follows_the_clicked_intensity_level(blob_image, make_calculator, feature_weight, max_slowdown):
+    """Clicked on the 35% level of a soft blob, the contour follows that level and not the blob's steepest edge."""
+    img, level_line = blob_image
+    calc = make_calculator(img)
+    n = len(level_line)
+    a, b = level_line[0], level_line[n // 4]
+    segment_line = level_line[:n // 4 + 1]
+    without = _distance_to_line(_path(calc, [b, a]), segment_line)
+    prior = IntensityPrior(max_slowdown=max_slowdown, feature_weight=feature_weight)
+    prior.set_image(img)
+    if make_calculator is _randers_calculator:
+        feature = feature_speed(img, sobel_v(img), sobel_h(img))
+    else:
+        feature = feature_speed(np.hypot(sobel_v(img), sobel_h(img)))
+    calc.set_speed_map(prior.speed_map([a], None, feature))
+    path = _path(calc, [b, a])
     # the path tracing reached the start point instead of running into its step limit
     assert len(path) < 1000
-    with_prior = _boundary_error(path)
-    assert with_prior < 0.7
-    assert with_prior <= without
+    with_prior = _distance_to_line(path, segment_line)
+    assert with_prior < 1.
+    assert with_prior < without
 
 
 # widget and overlay
@@ -321,6 +407,34 @@ def _scene(viewer, monkeypatch, env=None):
                            qt_viewer=viewer_qt_viewer(viewer))
 
 
+def _vispy_overlay(scene):
+    scene.qt_viewer.controls.widgets[scene.labels].mc_button.click()
+    _process_events()
+    overlay = scene.labels._overlays["minimal_contour"]
+    visual_map = getattr(scene.qt_viewer.canvas, "_layer_overlay_to_visual", None)
+    if visual_map is None:
+        pytest.skip("this napari version keeps overlay visuals elsewhere")
+    return overlay, visual_map[scene.labels][overlay]
+
+
+def _spy_speed_maps(monkeypatch):
+    """The arguments of every set_speed_map call of the overlays' calculator."""
+    from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
+    calls = []
+    calculator = VispyMinimalContourOverlay.mc_calculator
+
+    class CalculatorSpy:
+        def set_speed_map(self, speed):
+            calls.append(speed)
+            calculator.set_speed_map(speed)
+
+        def __getattr__(self, name):
+            return getattr(calculator, name)
+
+    monkeypatch.setattr(VispyMinimalContourOverlay, "mc_calculator", CalculatorSpy())
+    return calls
+
+
 @pytest.fixture(autouse=False)
 def restore_prior_state():
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
@@ -328,7 +442,8 @@ def restore_prior_state():
     VispyMinimalContourOverlay.set_use_intensity_prior(False)
     VispyMinimalContourOverlay.set_intensity_prior_min_anchors(1)
     VispyMinimalContourOverlay.set_intensity_prior_max_slowdown(100.)
-    VispyMinimalContourOverlay.set_intensity_prior_boundary("edge")
+    VispyMinimalContourOverlay.set_intensity_prior_feature_weight(0.25)
+    VispyMinimalContourOverlay.set_intensity_prior_match("similar")
 
 
 def _shown(widget):
@@ -358,7 +473,8 @@ def test_environment_variable_shows_controls_that_are_not_persisted(viewer, monk
     mc.intensity_prior_checkbox.value = True
     mc.intensity_prior_min_anchors_spinbox.value = 3
     mc.intensity_prior_slowdown_combobox.value = 1000.
-    mc.intensity_prior_boundary_combobox.value = "bright line"
+    mc.intensity_prior_match_combobox.value = "similar or brighter"
+    mc.intensity_prior_feature_weight_slider.value = 0.6
     state = mc.__magicclass_serialize__()
     for key in INTENSITY_PRIOR_FIELDS:
         assert key not in state
@@ -371,57 +487,59 @@ def test_controls_set_the_prior(viewer, monkeypatch, restore_prior_state):
     prior = VispyMinimalContourOverlay.intensity_prior
     # the defaults of the controls are the prior's
     assert prior.max_slowdown == mc.intensity_prior_slowdown_combobox.value == 100.
-    assert prior.boundary == mc.intensity_prior_boundary_combobox.value == "edge"
+    assert prior.match == mc.intensity_prior_match_combobox.value == "similar"
+    assert prior.feature_weight == mc.intensity_prior_feature_weight_slider.value == 0.25
+    assert prior.snap_radius == 0
     mc.intensity_prior_slowdown_combobox.value = 1000.
-    mc.intensity_prior_boundary_combobox.value = "bright line"
-    assert prior.max_slowdown == 1000. and prior.boundary == "bright line"
+    mc.intensity_prior_match_combobox.value = "similar or brighter"
+    mc.intensity_prior_feature_weight_slider.value = 0.5
+    assert prior.max_slowdown == 1000. and prior.match == "similar or brighter" and prior.feature_weight == 0.5
     assert mc.intensity_prior_slowdown_combobox.native.currentText() == "×1000"
 
 
-def test_overlay_sets_the_modulation_from_accepted_anchors(viewer, monkeypatch, restore_prior_state):
+def test_low_intensity_feature_gives_the_prior_the_displayed_intensities(viewer, monkeypatch, restore_prior_state):
+    """The low intensity feature inverts the image; the prior still compares the intensities as displayed."""
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
     scene = _scene(viewer, monkeypatch, env="1")
-    scene.qt_viewer.controls.widgets[scene.labels].mc_button.click()
-    _process_events()
-    overlay = scene.labels._overlays["minimal_contour"]
-    visual_map = getattr(scene.qt_viewer.canvas, "_layer_overlay_to_visual", None)
-    if visual_map is None:
-        pytest.skip("this napari version keeps overlay visuals elsewhere")
-    vispy_overlay = visual_map[scene.labels][overlay]
+    scene.mc.used_feature_combobox.value = "Low intensity"
+    _vispy_overlay(scene)
+    raw = np.asarray(VispyMinimalContourOverlay.intensity_prior._raw_image, dtype=float)
+    raw = raw.mean(-1) if raw.ndim == 3 else raw
+    assert np.corrcoef(raw.ravel(), scene.image.data.astype(float).ravel())[0, 1] > 0.99
+
+
+def test_overlay_sets_the_speed_map_from_accepted_anchors(viewer, monkeypatch, restore_prior_state):
+    from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
+    scene = _scene(viewer, monkeypatch, env="1")
+    overlay, vispy_overlay = _vispy_overlay(scene)
     prior = VispyMinimalContourOverlay.intensity_prior
     assert prior.shape == scene.image.data.shape
     # nothing is computed for the prior while it is off
-    assert prior._image is None
+    assert prior._image is None and VispyMinimalContourOverlay._feature_speed is None
 
-    calls = []
-
-    class CalculatorSpy:
-        def __init__(self, calculator):
-            self._calculator = calculator
-
-        def set_speed_modulation(self, modulation):
-            calls.append(modulation)
-            self._calculator.set_speed_modulation(modulation)
-
-        def __getattr__(self, name):
-            return getattr(self._calculator, name)
-
-    monkeypatch.setattr(VispyMinimalContourOverlay, "mc_calculator", CalculatorSpy(VispyMinimalContourOverlay.mc_calculator))
+    calls = _spy_speed_maps(monkeypatch)
     overlay.anchor_points = [[10., 10.], [10., 40.], [30., 30.]]  # the last one follows the cursor
     overlay.stored_contour = [[10., x] for x in range(10, 41)]
 
     scene.mc.intensity_prior_checkbox.value = True
     assert calls[-1] is not None and calls[-1].shape == scene.image.data.shape
+    # the speed map mixes in the selected feature
+    feature = VispyMinimalContourOverlay._feature_speed
+    assert feature is not None
+    anchors, contour = np.array([[10., 10.], [10., 40.]]), np.array(overlay.stored_contour)
+    assert np.allclose(calls[-1], prior.speed_map(anchors, contour, feature))
+    scene.mc.intensity_prior_feature_weight_slider.value = 0.
+    assert np.allclose(calls[-1], prior.intensity_speed(anchors, contour))
 
     overlay.anchor_points = [[10., 10.], [30., 30.]]  # one accepted anchor: enough by default
     overlay.stored_contour = []
-    vispy_overlay.update_speed_modulation()
+    vispy_overlay.update_speed_map()
     assert calls[-1] is not None
 
     scene.mc.intensity_prior_min_anchors_spinbox.value = 2  # recomputes: one anchor is not enough any more
     assert calls[-1] is None
     overlay.anchor_points = [[10., 10.], [10., 40.], [30., 30.]]
-    vispy_overlay.update_speed_modulation()
+    vispy_overlay.update_speed_map()
     assert calls[-1] is not None
     scene.mc.intensity_prior_min_anchors_spinbox.value = 3
     assert calls[-1] is None
@@ -429,10 +547,10 @@ def test_overlay_sets_the_modulation_from_accepted_anchors(viewer, monkeypatch, 
     assert calls[-1] is not None
 
     overlay.anchor_points = []  # no anchor at all
-    vispy_overlay.update_speed_modulation()
+    vispy_overlay.update_speed_map()
     assert calls[-1] is None
     overlay.anchor_points = [[10., 10.], [10., 40.], [30., 30.]]
-    vispy_overlay.update_speed_modulation()
+    vispy_overlay.update_speed_map()
     vispy_overlay.clear(None)
     assert calls[-1] is None
 
@@ -445,13 +563,7 @@ def test_overlay_samples_the_roi_window_in_window_coordinates(viewer, monkeypatc
     """With a ROI the prior's image is the window; anchors (plane coordinates) are shifted into it."""
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
     scene = _scene(viewer, monkeypatch, env="1")
-    scene.qt_viewer.controls.widgets[scene.labels].mc_button.click()
-    _process_events()
-    overlay = scene.labels._overlays["minimal_contour"]
-    visual_map = getattr(scene.qt_viewer.canvas, "_layer_overlay_to_visual", None)
-    if visual_map is None:
-        pytest.skip("this napari version keeps overlay visuals elsewhere")
-    vispy_overlay = visual_map[scene.labels][overlay]
+    overlay, vispy_overlay = _vispy_overlay(scene)
 
     # a plane of the scene's shape: dark left of column 45, bright from it; the calculator has columns 30..70
     plane_shape = scene.image.data.shape
@@ -461,29 +573,19 @@ def test_overlay_samples_the_roi_window_in_window_coordinates(viewer, monkeypatc
     VispyMinimalContourOverlay.set_calculator_feature(np.repeat(plane[window][..., None], 3, axis=2),
                                                       roi_origin=(0, 30), plane_shape=plane_shape)
 
-    calls = []
-    calculator = VispyMinimalContourOverlay.mc_calculator
-
-    class CalculatorSpy:
-        def set_speed_modulation(self, modulation):
-            calls.append(modulation)
-            calculator.set_speed_modulation(modulation)
-
-        def __getattr__(self, name):
-            return getattr(calculator, name)
-
-    monkeypatch.setattr(VispyMinimalContourOverlay, "mc_calculator", CalculatorSpy())
+    calls = _spy_speed_maps(monkeypatch)
+    scene.mc.intensity_prior_feature_weight_slider.value = 0.  # the intensity alone
     scene.mc.intensity_prior_checkbox.value = True
     # an anchor on the dark part, at plane column 31 (window column 1), and the cursor; one outside the window
     overlay.anchor_points = [[30., 10.], [30., 31.], [40., 60.]]
-    vispy_overlay.update_speed_modulation()
-    modulation = calls[-1]
-    assert modulation is not None and modulation.shape == plane[window].shape
-    # the dark columns keep their speed: the anchor was sampled at the right place (unshifted it would be bright)
-    assert modulation[30, 1] > 0.95
-    assert modulation[30, 30] < 0.3
+    vispy_overlay.update_speed_map()
+    speed = calls[-1]
+    assert speed is not None and speed.shape == plane[window].shape
+    # the dark columns are fast: the anchor was sampled at the right place (unshifted it would be bright)
+    assert speed[30, 1] > 0.95
+    assert speed[30, 30] < 0.3
     # the anchor outside the window is not sampled: with it alone there is no reference
     overlay.anchor_points = [[30., 10.], [40., 60.]]
-    vispy_overlay.update_speed_modulation()
+    vispy_overlay.update_speed_map()
     assert calls[-1] is None
     VispyMinimalContourOverlay.set_calculator_feature(None)

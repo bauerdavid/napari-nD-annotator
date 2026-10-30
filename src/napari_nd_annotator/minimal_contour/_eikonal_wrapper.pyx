@@ -50,7 +50,7 @@ cdef extern from "Eikonal.h":
         void InitEnvironmentRandersGrad(SWorkImg[double]&, SWorkImg[double]&) nogil
         int SetNextStartStop() nogil
         void SetBoundaries(int, int, int, int) nogil
-        void SetSpeedModulation(SWorkImg[double]*) nogil
+        void SetSpeedMap(SWorkImg[double]*) nogil
         void SetParAll() nogil
         void DistanceCalculator() nogil
         int GetReady() nogil
@@ -67,7 +67,7 @@ cdef class MinimalContourCalculator:
     cdef int method
     cdef vector[int] method_pair
     cdef vector[int] progresses
-    cdef SWorkImg[double] ered, egreen, eblue, egradx, egrady, espeedmod
+    cdef SWorkImg[double] ered, egreen, eblue, egradx, egrady, espeedmap
     method_initialized = [False,]*4
     def __cinit__(self, np.ndarray[np.float_t, ndim=3] image, int n_points):
         self.set_image(image, np.empty((0, 0)), np.empty((0, 0)))
@@ -123,32 +123,37 @@ cdef class MinimalContourCalculator:
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cpdef set_speed_modulation(self, modulation):
-        """Multiply the front speed by a per-pixel factor in (0, 1] (lower means more expensive).
+    cpdef set_speed_map(self, speed):
+        """Replace the metric of the selected method by an isotropic per-pixel speed (higher means cheaper).
 
-        `modulation` has the shape (height, width) of the current image; None switches it off.
+        `speed` has the shape (height, width) of the current image; only relative values matter (it is scaled to a
+        maximum of 1, values below 1e-6 of the maximum are raised to that). None switches back to the method's metric.
         """
         cdef int i
-        if modulation is None:
+        if speed is None:
             for i in range(self.eikonals.size()):
-                self.eikonals[i].SetSpeedModulation(NULL)
+                self.eikonals[i].SetSpeedMap(NULL)
             return
-        cdef np.ndarray[np.float_t, ndim=2] mod = np.clip(np.asarray(modulation, dtype=np.float64), 1e-3, 1.)
-        cdef int h = mod.shape[0]
-        cdef int w = mod.shape[1]
-        if w != self.ered.GetWidth() or h != self.ered.GetHeight():
-            raise ValueError("speed modulation shape %s does not match the image shape %s"
-                             % ((h, w), (self.ered.GetHeight(), self.ered.GetWidth())))
-        if self.espeedmod.GetWidth() != w or self.espeedmod.GetHeight() != h:
-            self.espeedmod.Set(w, h)
+        speed = np.asarray(speed, dtype=np.float64)
+        if speed.ndim != 2 or speed.shape[1] != self.ered.GetWidth() or speed.shape[0] != self.ered.GetHeight():
+            raise ValueError("speed map shape %s does not match the image shape %s"
+                             % (speed.shape, (self.ered.GetHeight(), self.ered.GetWidth())))
+        cdef double max_speed = speed.max()
+        if not max_speed > 0:
+            raise ValueError("the speed map should have positive values")
+        cdef np.ndarray[np.float_t, ndim=2] scaled = np.clip(speed / max_speed, 1e-6, 1.)
+        cdef int h = scaled.shape[0]
+        cdef int w = scaled.shape[1]
+        if self.espeedmap.GetWidth() != w or self.espeedmap.GetHeight() != h:
+            self.espeedmap.Set(w, h)
         cdef int x, y
         cdef double* m_ptr
         for y in prange(h, nogil=True):
-            m_ptr = self.espeedmod[y]
+            m_ptr = self.espeedmap[y]
             for x in range(w):
-                m_ptr[x] = mod[y, x]
+                m_ptr[x] = scaled[y, x]
         for i in range(self.eikonals.size()):
-            self.eikonals[i].SetSpeedModulation(&self.espeedmod)
+            self.eikonals[i].SetSpeedMap(&self.espeedmap)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -160,8 +165,8 @@ cdef class MinimalContourCalculator:
             return
         cdef int w = image.shape[1]
         cdef int h = image.shape[0]
-        # a speed modulation belongs to the previous image: it has to be set again for this one
-        self.set_speed_modulation(None)
+        # a speed map belongs to the previous image: it has to be set again for this one
+        self.set_speed_map(None)
         cdef np.ndarray[np.float_t, ndim=1] img_max = image.max(axis=(1, 2))
         if self.ered.GetWidth() != w or self.ered.GetHeight() != h:
             self.ered.Set(w, h)

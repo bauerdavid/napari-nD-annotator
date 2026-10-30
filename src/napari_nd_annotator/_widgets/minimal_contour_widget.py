@@ -40,7 +40,8 @@ from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_di
     viewer_main_window, viewer_camera
 from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
-from ..minimal_contour.intensity_prior import MAX_SLOWDOWN as MAX_PRIOR_SLOWDOWN, EDGE, BRIGHT_LINE, DARK_LINE
+from ..minimal_contour.intensity_prior import MAX_SLOWDOWN as MAX_PRIOR_SLOWDOWN, SIMILAR, SIMILAR_OR_BRIGHTER, \
+    SIMILAR_OR_DARKER
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from .object_list import selected_object
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
@@ -109,13 +110,16 @@ FEATURES = {
 DEMO_SIZE = 200
 # set this environment variable (to anything but "" or "0") to show the experimental intensity prior controls
 INTENSITY_PRIOR_ENV = "ND_ANNOTATOR_INTENSITY_PRIOR"
-# how many times slower the pixels least like the traced boundary get (see minimal_contour/intensity_prior.py)
+# how many times slower the pixels least like the anchors' intensity get (see minimal_contour/intensity_prior.py)
 PRIOR_SLOWDOWN_CHOICES = [("×%g" % s, s) for s in (3., 10., 30., 100., 300., MAX_PRIOR_SLOWDOWN)]
 DEFAULT_PRIOR_SLOWDOWN = 100.
-PRIOR_BOUNDARY_CHOICES = [("Edge", EDGE), ("Bright line", BRIGHT_LINE), ("Dark line", DARK_LINE)]
+DEFAULT_PRIOR_FEATURE_WEIGHT = 0.25
+PRIOR_MATCH_CHOICES = [("Similar", SIMILAR), ("Similar or brighter", SIMILAR_OR_BRIGHTER),
+                       ("Similar or darker", SIMILAR_OR_DARKER)]
 # the widgets of the experimental intensity prior: hidden without INTENSITY_PRIOR_ENV and never persisted
-INTENSITY_PRIOR_FIELDS = ("intensity_prior_checkbox", "intensity_prior_boundary_combobox",
-                          "intensity_prior_slowdown_combobox", "intensity_prior_min_anchors_spinbox")
+INTENSITY_PRIOR_FIELDS = ("intensity_prior_checkbox", "intensity_prior_match_combobox",
+                          "intensity_prior_slowdown_combobox", "intensity_prior_feature_weight_slider",
+                          "intensity_prior_min_anchors_spinbox")
 
 
 class ColorBox(FreeWidget):
@@ -222,19 +226,23 @@ class MinimalContourWidget(MagicTemplate):
                                                     "closer to the Euclidean shortest path")
     local_intensity_correction_checkbox = field(bool, location=ImageFeaturesWidget).with_options(visible=False)
     # experimental, only shown when the INTENSITY_PRIOR_ENV environment variable is set
-    intensity_prior_checkbox = field(bool, label="Intensity prior", location=ImageFeaturesWidget).with_options(
-        visible=False, tooltip="[Experimental] When checked, the contour prefers pixels with the intensity\n"
-                               "of the boundary traced so far (anchor points and accepted contour)")
-    intensity_prior_boundary_combobox = field(widget_type=ComboBox, label="Boundary", location=ImageFeaturesWidget, options={
-        "choices": PRIOR_BOUNDARY_CHOICES, "value": EDGE, "visible": False,
-        "tooltip": "What the contour follows:\n"
-                   "Edge: the border of a brighter and a darker region (e.g. a nucleus)\n"
-                   "Bright line: a bright ridge (e.g. a membrane stain)\n"
-                   "Dark line: a dark valley"})
-    intensity_prior_slowdown_combobox = field(widget_type=ComboBox, label="Prior strength", location=ImageFeaturesWidget, options={
+    intensity_prior_checkbox = field(bool, label="Follow anchor intensity", location=ImageFeaturesWidget).with_options(
+        visible=False, tooltip="[Experimental] When checked, the contour follows pixels whose intensity is similar\n"
+                               "to the intensity at the anchor points (and along the accepted contour)")
+    intensity_prior_match_combobox = field(widget_type=ComboBox, label="Match", location=ImageFeaturesWidget, options={
+        "choices": PRIOR_MATCH_CHOICES, "value": SIMILAR, "visible": False,
+        "tooltip": "Which intensities count as matching the anchors:\n"
+                   "Similar: close to it, darker or brighter\n"
+                   "Similar or brighter: also anything brighter (e.g. along a membrane stain)\n"
+                   "Similar or darker: also anything darker"})
+    intensity_prior_slowdown_combobox = field(widget_type=ComboBox, label="Intensity strength", location=ImageFeaturesWidget, options={
         "choices": PRIOR_SLOWDOWN_CHOICES, "value": DEFAULT_PRIOR_SLOWDOWN, "visible": False,
         "tooltip": "How many times slower the contour moves on pixels whose intensity\n"
-                   "differs most from the boundary traced so far"})
+                   "differs most from the anchors' intensity"})
+    intensity_prior_feature_weight_slider = field(float, label="Feature weight", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(
+        min=0., max=1., value=DEFAULT_PRIOR_FEATURE_WEIGHT, visible=False,
+        tooltip="How much the selected image feature still counts while following the intensity.\n"
+                "0: intensity only; small values keep the contour tidy on noisy images")
     intensity_prior_min_anchors_spinbox = field(int, label="Prior from anchor", location=ImageFeaturesWidget).with_options(
         min=1, max=10, value=1, visible=False,
         tooltip="Number of placed anchor points after which the prior is used.\n"
@@ -335,8 +343,9 @@ class MinimalContourWidget(MagicTemplate):
             for name in INTENSITY_PRIOR_FIELDS:
                 getattr(self, name).visible = True
         for widget, setter in [
-            (self.intensity_prior_boundary_combobox, VispyMinimalContourOverlay.set_intensity_prior_boundary),
+            (self.intensity_prior_match_combobox, VispyMinimalContourOverlay.set_intensity_prior_match),
             (self.intensity_prior_slowdown_combobox, VispyMinimalContourOverlay.set_intensity_prior_max_slowdown),
+            (self.intensity_prior_feature_weight_slider, VispyMinimalContourOverlay.set_intensity_prior_feature_weight),
             (self.intensity_prior_min_anchors_spinbox, VispyMinimalContourOverlay.set_intensity_prior_min_anchors),
             (self.intensity_prior_checkbox, VispyMinimalContourOverlay.set_use_intensity_prior),
         ]:
@@ -768,7 +777,7 @@ class MinimalContourWidget(MagicTemplate):
             # image layer first, so the effective sigma was sqrt(2) * sigma.
             if self.is_blurring_enabled:
                 image = self._blur_image(image).astype(float)
-            VispyMinimalContourOverlay.set_prior_image(image)
+            VispyMinimalContourOverlay.set_prior_image(1 - image if self.feature_inverted else image)
             self.feature_editor.variables["image"] = image
             self.feature_editor.Run()
             return
@@ -808,8 +817,8 @@ class MinimalContourWidget(MagicTemplate):
         gradients and blur need, and cropped back to the ROI: inside it the result equals the whole plane's, except for
         the statistics the features are normalised with when no contrast limits are used, or for the symmetric
         gradient (its magnitude is scaled to 0..1): those are the ROI's own, which is what makes the cost independent
-        of the plane size. The ROI item is (Box, shape of the whole plane). The intensity image (normalised, inverted
-        and blurred like the features, same window) is what the intensity prior samples. Thread safe.
+        of the plane size. The ROI item is (Box, shape of the whole plane). The intensity image (normalised and blurred
+        like the features, same window, but not inverted) is what the intensity prior samples. Thread safe.
         """
         plane = job["plane"]
         sigma = job["sigma"]
@@ -845,12 +854,13 @@ class MinimalContourWidget(MagicTemplate):
         if inner is not None:
             image, grad_x, grad_y = (np.ascontiguousarray(a[inner]) for a in (image, grad_x, grad_y))
             roi = (roi, tuple(plane_shape))
+        # the prior compares intensities as they are displayed, also for the inverted (low intensity) feature
+        intensity = 1 - image if job["inverted"] else image
         if job["feature"] == SYM_GRADIENT:
             grad_x, grad_y = grad_x / (max_ - min_), grad_y / (max_ - min_)
             grad_magnitude = np.linalg.norm([grad_x, grad_y], axis=0)
             min_, max_ = grad_magnitude.min(), grad_magnitude.max()
-            return (grad_magnitude - min_) / (max_ - min_), None, None, roi, image
-        intensity = image
+            return (grad_magnitude - min_) / (max_ - min_), None, None, roi, intensity
         if image.ndim == 2:
             image = np.repeat(image[..., np.newaxis], 3, axis=2)
         return image, grad_x, grad_y, roi, intensity

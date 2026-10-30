@@ -15,7 +15,7 @@ from napari.layers.labels._labels_utils import mouse_event_to_labels_coordinate
 from .._utils.shortcuts import LABELS, bind_all
 from napari.settings import get_settings
 from napari_nd_annotator.minimal_contour._eikonal_wrapper import MinimalContourCalculator
-from napari_nd_annotator.minimal_contour.intensity_prior import IntensityPrior
+from napari_nd_annotator.minimal_contour.intensity_prior import IntensityPrior, feature_speed
 from vispy.scene import Polygon, Line, Compound, Markers
 
 from napari_nd_annotator._helper_functions import layer_get_order
@@ -92,12 +92,15 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
     _plane_shape = None
     # called with the Box of the search window when it leaves the ROI window, to have the ROI moved (set by the widget)
     roi_requester = None
-    # experimental: prefer pixels with the intensity of the already traced boundary (see intensity_prior.py).
+    # experimental: make the contour follow the intensity of the anchors (see intensity_prior.py).
     # The prior's image is the same window of the plane as the calculator's.
     intensity_prior = IntensityPrior()
     use_intensity_prior = False
-    # weak reference to the overlay whose contour the current speed modulation was computed from
+    # weak reference to the overlay whose anchors the current speed map was computed from
     _prior_overlay_ref = None
+    # (features, grad_x, grad_y) last given to the calculator, and the feature speed computed from them when needed
+    _feature_arrays = None
+    _feature_speed = None
 
     def __init__(
             self, *, layer: Labels, overlay: MinimalContourOverlay, parent=None, **kwargs
@@ -165,6 +168,8 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
 
         With ``plane_shape`` the arrays are the window of the displayed plane that starts at ``roi_origin``.
         """
+        VispyMinimalContourOverlay._feature_arrays = None
+        VispyMinimalContourOverlay._feature_speed = None
         if features is None:
             VispyMinimalContourOverlay._features_shape = None
             VispyMinimalContourOverlay._roi_origin = (0, 0)
@@ -182,7 +187,8 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         VispyMinimalContourOverlay._features_shape = features.shape[:2]
         VispyMinimalContourOverlay._roi_origin = tuple(int(o) for o in roi_origin) if plane_shape is not None else (0, 0)
         VispyMinimalContourOverlay._plane_shape = None if plane_shape is None else tuple(int(n) for n in plane_shape)
-        # set_image drops the speed modulation of the previous image
+        VispyMinimalContourOverlay._feature_arrays = (features, grad_x, grad_y)
+        # set_image drops the speed map of the previous image
         VispyMinimalContourOverlay._update_prior_overlay()
 
     @staticmethod
@@ -201,8 +207,13 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         VispyMinimalContourOverlay._update_prior_overlay()
 
     @staticmethod
-    def set_intensity_prior_boundary(boundary):
-        VispyMinimalContourOverlay.intensity_prior.boundary = boundary
+    def set_intensity_prior_match(match):
+        VispyMinimalContourOverlay.intensity_prior.match = match
+        VispyMinimalContourOverlay._update_prior_overlay()
+
+    @staticmethod
+    def set_intensity_prior_feature_weight(feature_weight):
+        VispyMinimalContourOverlay.intensity_prior.feature_weight = feature_weight
         VispyMinimalContourOverlay._update_prior_overlay()
 
     @staticmethod
@@ -215,24 +226,36 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         ref = VispyMinimalContourOverlay._prior_overlay_ref
         overlay = ref() if ref is not None else None
         if overlay is not None:
-            overlay.update_speed_modulation()
+            overlay.update_speed_map()
         else:
-            VispyMinimalContourOverlay.mc_calculator.set_speed_modulation(None)
+            VispyMinimalContourOverlay.mc_calculator.set_speed_map(None)
 
-    def update_speed_modulation(self):
-        """Recompute the intensity prior from this overlay's accepted anchors and contour."""
+    @classmethod
+    def _get_feature_speed(cls):
+        if cls._feature_speed is None and cls._feature_arrays is not None:
+            cls._feature_speed = feature_speed(*cls._feature_arrays)
+        return cls._feature_speed
+
+    def update_speed_map(self):
+        """Recompute the intensity prior's speed map from this overlay's accepted anchors and contour.
+
+        While the prior has a reference, the speed map replaces the metric of the selected feature; otherwise (it is
+        off, or not enough anchors are placed) the feature's own metric is used.
+        """
         cls = VispyMinimalContourOverlay
         cls._prior_overlay_ref = weakref.ref(self)
         prior = cls.intensity_prior
-        modulation = None
+        speed = None
         if cls.use_intensity_prior and cls._features_shape is not None \
                 and prior.shape == tuple(cls._features_shape):
             dims_displayed = list(self._dims_displayed)
             # the last anchor point follows the cursor, it is not accepted yet
             anchors = self._to_window(np.reshape(self.overlay.anchor_points[:-1], (-1, self.layer.ndim))[:, dims_displayed])
             contour = self._to_window(np.reshape(self.overlay.stored_contour, (-1, self.layer.ndim))[:, dims_displayed])
-            modulation = prior.speed_modulation(anchors, contour)
-        cls.mc_calculator.set_speed_modulation(modulation)
+            if prior.reference(anchors, contour) is not None:
+                feature = cls._get_feature_speed() if prior.feature_weight > 0 else None
+                speed = prior.speed_map(anchors, contour, feature)
+        cls.mc_calculator.set_speed_map(speed)
 
     @classmethod
     def _to_window(cls, points):
@@ -247,7 +270,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
     def _on_enabled_change(self):
         if self.overlay.enabled:
             self._on_points_change()
-            self.update_speed_modulation()
+            self.update_speed_map()
 
     def _on_width_change(self):
         self._last_anchor_to_current_pos_contour.set_data(width=self.overlay.contour_width)
@@ -421,7 +444,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
                 self.overlay.anchor_points.append((orig_pos + 1e-3).tolist())
                 self.point_triangle[-1] = [self.overlay.anchor_points[0][d] for d in dims_displayed]
                 self.point_triangle[0] = [self.overlay.anchor_points[-1][d] for d in dims_displayed]
-                self.update_speed_modulation()
+                self.update_speed_map()
         # TODO handle undo
         # elif event.button == 2 and self._num_points > 0:  # right mouse click
         #     if self._num_points < 3:
@@ -439,7 +462,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         self.overlay.anchor_points = self.overlay.anchor_points[:-1]
 
         self.overlay.add_polygon_to_labels(layer)
-        self.update_speed_modulation()
+        self.update_speed_map()
         return None
 
     def _get_mouse_coordinates(self, event):
@@ -506,7 +529,7 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         self.overlay.stored_contour = []
         self.overlay.anchor_points = []
         self.reset()
-        self.update_speed_modulation()
+        self.update_speed_map()
 
 
 visual.overlay_to_visual[MinimalContourOverlay] = VispyMinimalContourOverlay
