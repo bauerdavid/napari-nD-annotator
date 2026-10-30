@@ -196,8 +196,13 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         VispyMinimalContourOverlay._update_prior_overlay()
 
     @staticmethod
-    def set_intensity_prior_strength(strength):
-        VispyMinimalContourOverlay.intensity_prior.strength = strength
+    def set_intensity_prior_max_slowdown(max_slowdown):
+        VispyMinimalContourOverlay.intensity_prior.max_slowdown = max_slowdown
+        VispyMinimalContourOverlay._update_prior_overlay()
+
+    @staticmethod
+    def set_intensity_prior_boundary(boundary):
+        VispyMinimalContourOverlay.intensity_prior.boundary = boundary
         VispyMinimalContourOverlay._update_prior_overlay()
 
     @staticmethod

@@ -40,7 +40,7 @@ from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_di
     viewer_main_window, viewer_camera
 from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
-from ..minimal_contour.intensity_prior import MAX_STRENGTH as MAX_PRIOR_STRENGTH
+from ..minimal_contour.intensity_prior import MAX_SLOWDOWN as MAX_PRIOR_SLOWDOWN, EDGE, BRIGHT_LINE, DARK_LINE
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from .object_list import selected_object
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
@@ -109,6 +109,13 @@ FEATURES = {
 DEMO_SIZE = 200
 # set this environment variable (to anything but "" or "0") to show the experimental intensity prior controls
 INTENSITY_PRIOR_ENV = "ND_ANNOTATOR_INTENSITY_PRIOR"
+# how many times slower the pixels least like the traced boundary get (see minimal_contour/intensity_prior.py)
+PRIOR_SLOWDOWN_CHOICES = [("×%g" % s, s) for s in (3., 10., 30., 100., 300., MAX_PRIOR_SLOWDOWN)]
+DEFAULT_PRIOR_SLOWDOWN = 100.
+PRIOR_BOUNDARY_CHOICES = [("Edge", EDGE), ("Bright line", BRIGHT_LINE), ("Dark line", DARK_LINE)]
+# the widgets of the experimental intensity prior: hidden without INTENSITY_PRIOR_ENV and never persisted
+INTENSITY_PRIOR_FIELDS = ("intensity_prior_checkbox", "intensity_prior_boundary_combobox",
+                          "intensity_prior_slowdown_combobox", "intensity_prior_min_anchors_spinbox")
 
 
 class ColorBox(FreeWidget):
@@ -218,9 +225,16 @@ class MinimalContourWidget(MagicTemplate):
     intensity_prior_checkbox = field(bool, label="Intensity prior", location=ImageFeaturesWidget).with_options(
         visible=False, tooltip="[Experimental] When checked, the contour prefers pixels with the intensity\n"
                                "of the boundary traced so far (anchor points and accepted contour)")
-    intensity_prior_strength_slider = field(float, label="Prior strength", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(
-        min=0., max=MAX_PRIOR_STRENGTH, value=0.8, visible=False,
-        tooltip="How much pixels with a different intensity are avoided")
+    intensity_prior_boundary_combobox = field(widget_type=ComboBox, label="Boundary", location=ImageFeaturesWidget, options={
+        "choices": PRIOR_BOUNDARY_CHOICES, "value": EDGE, "visible": False,
+        "tooltip": "What the contour follows:\n"
+                   "Edge: the border of a brighter and a darker region (e.g. a nucleus)\n"
+                   "Bright line: a bright ridge (e.g. a membrane stain)\n"
+                   "Dark line: a dark valley"})
+    intensity_prior_slowdown_combobox = field(widget_type=ComboBox, label="Prior strength", location=ImageFeaturesWidget, options={
+        "choices": PRIOR_SLOWDOWN_CHOICES, "value": DEFAULT_PRIOR_SLOWDOWN, "visible": False,
+        "tooltip": "How many times slower the contour moves on pixels whose intensity\n"
+                   "differs most from the boundary traced so far"})
     intensity_prior_min_anchors_spinbox = field(int, label="Prior from anchor", location=ImageFeaturesWidget).with_options(
         min=1, max=10, value=1, visible=False,
         tooltip="Number of placed anchor points after which the prior is used.\n"
@@ -318,15 +332,16 @@ class MinimalContourWidget(MagicTemplate):
         VispyMinimalContourOverlay.mc_calculator.set_param(self.param)
         self.local_intensity_correction_checkbox.changed.connect(VispyMinimalContourOverlay.mc_calculator.set_use_local_maximum)
         if os.environ.get(INTENSITY_PRIOR_ENV, "") not in ("", "0"):
-            self.intensity_prior_checkbox.visible = True
-            self.intensity_prior_strength_slider.visible = True
-            self.intensity_prior_min_anchors_spinbox.visible = True
-        VispyMinimalContourOverlay.set_intensity_prior_strength(self.intensity_prior_strength_slider.value)
-        VispyMinimalContourOverlay.set_intensity_prior_min_anchors(self.intensity_prior_min_anchors_spinbox.value)
-        VispyMinimalContourOverlay.set_use_intensity_prior(self.intensity_prior_checkbox.value)
-        self.intensity_prior_checkbox.changed.connect(VispyMinimalContourOverlay.set_use_intensity_prior)
-        self.intensity_prior_strength_slider.changed.connect(VispyMinimalContourOverlay.set_intensity_prior_strength)
-        self.intensity_prior_min_anchors_spinbox.changed.connect(VispyMinimalContourOverlay.set_intensity_prior_min_anchors)
+            for name in INTENSITY_PRIOR_FIELDS:
+                getattr(self, name).visible = True
+        for widget, setter in [
+            (self.intensity_prior_boundary_combobox, VispyMinimalContourOverlay.set_intensity_prior_boundary),
+            (self.intensity_prior_slowdown_combobox, VispyMinimalContourOverlay.set_intensity_prior_max_slowdown),
+            (self.intensity_prior_min_anchors_spinbox, VispyMinimalContourOverlay.set_intensity_prior_min_anchors),
+            (self.intensity_prior_checkbox, VispyMinimalContourOverlay.set_use_intensity_prior),
+        ]:
+            setter(widget.value)
+            widget.changed.connect(setter)
 
         if self.labels_layer is not None:
             dtype_lims = get_dtype_limits(get_dtype(self.labels_layer))
@@ -371,7 +386,7 @@ class MinimalContourWidget(MagicTemplate):
             del d["source_image_container"]
         # the experimental intensity prior always starts switched off
         for container in (d, d.get("Image Features", {})):
-            for key in ("intensity_prior_checkbox", "intensity_prior_strength_slider", "intensity_prior_min_anchors_spinbox"):
+            for key in INTENSITY_PRIOR_FIELDS:
                 container.pop(key, None)
         return d
 

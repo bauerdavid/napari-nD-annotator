@@ -77,12 +77,14 @@ def test_prior_needs_an_image_and_an_anchor(cell_image):
 
 
 def test_prior_works_from_a_single_anchor(cell_image):
-    prior = IntensityPrior(strength=0.8)
+    prior = IntensityPrior()
     assert prior.min_anchors == 1
     prior.set_image(cell_image)
     mu, sigma = prior.reference([_on_circle(0)])
-    # the one sample is the reference, the tolerance is the lower limit
-    assert sigma == prior.min_sigma
+    # the one sample is the reference; the tolerance is the lower limit: the noise floor, or more on this steep edge
+    gradient = prior.grad_magnitude[prior._sample_indices([_on_circle(0)])][0]
+    assert sigma == max(prior.sigma_floor, gradient)
+    assert sigma > prior.sigma_floor
     assert np.isclose(mu, prior.samples([_on_circle(0)])[0])
     modulation = prior.speed_modulation([_on_circle(0)])
     # away from the nucleus, every radius crosses the reference intensity within a few pixels of the cell boundary
@@ -109,24 +111,100 @@ def test_min_anchors_is_at_least_one():
     assert prior.min_anchors == 2
 
 
-def test_prior_modulation_range(cell_image):
-    prior = IntensityPrior(strength=0.7)
+@pytest.mark.parametrize("max_slowdown", [3., 100., 1000.])
+def test_prior_modulation_range(cell_image, max_slowdown):
+    prior = IntensityPrior(max_slowdown=max_slowdown)
     prior.set_image(cell_image)
     modulation = prior.speed_modulation(*_traced_left_side())
     assert modulation.shape == cell_image.shape
-    assert modulation.min() >= 0.3 - 1e-9 and modulation.max() <= 1.
-    # the cell boundary keeps its speed, the nucleus edge and the background are slowed down
-    boundary = np.round(_on_circle(0)).astype(int)
-    assert modulation[tuple(boundary)] > 0.9
-    assert modulation[80, 80] < 0.4 and modulation[5, 5] < 0.4
+    assert modulation.min() >= 1. / max_slowdown - 1e-9 and modulation.max() <= 1.
+    # the nucleus gets the full slowdown, the background (closer to the boundary intensity) at least half of it
+    assert modulation[80, 80] < 1.01 / max_slowdown
+    assert modulation[5, 5] < max_slowdown ** -0.5
+    # every radius away from the nucleus crosses the boundary intensity near the cell boundary: a pixel there
+    # is very similar to the reference (the speed factor is max_slowdown ** (similarity - 1))
+    similarity = 1. + np.log(modulation) / np.log(max_slowdown)
+    for degrees in (180, 220, 260, 300):
+        direction = np.array([np.sin(np.deg2rad(degrees)), np.cos(np.deg2rad(degrees))])
+        across = np.round(CENTER + np.outer(RADIUS + np.arange(-3, 4), direction)).astype(int)
+        assert similarity[across[:, 0], across[:, 1]].max() > 0.75
 
 
-def test_prior_strength_is_clamped_and_zero_switches_off(cell_image):
-    prior = IntensityPrior(strength=2.)
-    assert prior.strength == 0.95
-    prior.strength = 0
+def test_max_slowdown_is_clamped_and_one_switches_off(cell_image):
+    prior = IntensityPrior(max_slowdown=1e6)
+    assert prior.max_slowdown == 1000.
+    prior.max_slowdown = 0.5
+    assert prior.max_slowdown == 1.
     prior.set_image(cell_image)
     assert prior.speed_modulation(*_traced_left_side()) is None
+
+
+def test_tolerance_floor_follows_the_noise():
+    """The lower limit of sigma is a few times the image noise, unless it is set explicitly."""
+    rng = np.random.default_rng(2)
+    flat = np.full((100, 100), 0.5)
+    floors = []
+    for noise in (0.005, 0.02, 0.08):
+        prior = IntensityPrior()
+        prior.set_image(flat + rng.normal(0, noise, flat.shape))
+        floors.append(prior.sigma_floor)
+    # the floor grows with the noise, about in proportion (the prior smooths the image first)
+    assert floors[0] < floors[1] < floors[2]
+    assert 2.5 < floors[2] / floors[1] < 5.5
+    prior.min_sigma = 0.05
+    assert prior.sigma_floor == 0.05
+    noise_free = IntensityPrior()
+    noise_free.set_image(flat)
+    assert noise_free.sigma_floor > 0
+
+
+def test_boundary_type_is_validated():
+    with pytest.raises(ValueError):
+        IntensityPrior(boundary="ridge")
+
+
+@pytest.fixture(scope="module")
+def membrane_image():
+    """A bright line (membrane) whose brightness varies along it, on a dark background."""
+    yy, xx = np.mgrid[:80, :120]
+    brightness = 0.5 + 0.4 * np.sin(xx / 15.)  # 0.1 .. 0.9 along the line
+    img = np.where(np.abs(yy - 40) <= 1, brightness, 0.)
+    return gaussian_filter(img, 1.) + np.random.default_rng(3).normal(0, 0.005, img.shape)
+
+
+def test_bright_line_does_not_slow_down_the_brighter_parts_of_the_line(membrane_image):
+    anchors = np.array([[40, 5], [40, 30]])
+    contour = np.stack([np.full(26, 40), np.arange(5, 31)], axis=1)
+    on_line = membrane_image[40] > np.median(membrane_image[40, 5:31])  # brighter than the traced part
+    edge = IntensityPrior(boundary="edge")
+    edge.set_image(membrane_image)
+    bright = IntensityPrior(boundary="bright line")
+    bright.set_image(membrane_image)
+    edge_modulation = edge.speed_modulation(anchors, contour)
+    bright_modulation = bright.speed_modulation(anchors, contour)
+    # two-sided: the brighter parts of the line are slowed down; one-sided: they keep their speed
+    assert edge_modulation[40][on_line].min() < 0.5
+    assert bright_modulation[40][on_line].min() > 0.99
+    # the dark background is slowed down either way
+    assert bright_modulation[10, 60] < 0.02 and edge_modulation[10, 60] < 0.02
+
+
+def test_dark_line_is_the_mirror_of_bright_line(membrane_image):
+    anchors = np.array([[40, 5], [40, 30]])
+    contour = np.stack([np.full(26, 40), np.arange(5, 31)], axis=1)
+    bright = IntensityPrior(boundary="bright line")
+    bright.set_image(membrane_image)
+    dark = IntensityPrior(boundary="dark line")
+    dark.set_image(1. - membrane_image)
+    assert np.allclose(bright.speed_modulation(anchors, contour), dark.speed_modulation(anchors, contour))
+
+
+def test_bright_line_anchor_is_sampled_on_the_ridge(membrane_image):
+    """A click next to a bright line samples its brightest pixel, not its flank."""
+    prior = IntensityPrior(boundary="bright line")
+    prior.set_image(membrane_image)
+    sample = prior.samples(np.array([[42, 60]]))[0]
+    assert np.isclose(sample, prior.image[38:43, 58:63].max())
 
 
 def test_anchor_is_sampled_on_the_edge():
@@ -191,15 +269,19 @@ def test_set_image_drops_the_modulation(cell_image):
     assert np.array_equal(_path(calc, anchors), base)
 
 
+@pytest.mark.parametrize("max_slowdown", [10., 100., 1000.])
 @pytest.mark.parametrize("make_calculator", [_randers_calculator, _symmetric_gradient_calculator])
-def test_prior_keeps_the_path_off_the_nucleus_edge(cell_image, make_calculator):
+def test_prior_keeps_the_path_off_the_nucleus_edge(cell_image, make_calculator, max_slowdown):
     calc = make_calculator(cell_image)
     anchors = [_on_circle(70), _on_circle(-70)]
     without = _boundary_error(_path(calc, anchors))
-    prior = IntensityPrior(strength=0.8)
+    prior = IntensityPrior(max_slowdown=max_slowdown)
     prior.set_image(cell_image)
     calc.set_speed_modulation(prior.speed_modulation(*_traced_left_side()))
-    with_prior = _boundary_error(_path(calc, anchors))
+    path = _path(calc, anchors)
+    # the path tracing reached the start point instead of running into its step limit
+    assert len(path) < 1000
+    with_prior = _boundary_error(path)
     assert with_prior < 0.7
     assert with_prior <= without
 
@@ -245,6 +327,8 @@ def restore_prior_state():
     yield
     VispyMinimalContourOverlay.set_use_intensity_prior(False)
     VispyMinimalContourOverlay.set_intensity_prior_min_anchors(1)
+    VispyMinimalContourOverlay.set_intensity_prior_max_slowdown(100.)
+    VispyMinimalContourOverlay.set_intensity_prior_boundary("edge")
 
 
 def _shown(widget):
@@ -253,10 +337,10 @@ def _shown(widget):
 
 
 def test_controls_are_hidden_by_default(viewer, monkeypatch, restore_prior_state):
+    from napari_nd_annotator._widgets.minimal_contour_widget import INTENSITY_PRIOR_FIELDS
     mc = _scene(viewer, monkeypatch).mc
-    assert not _shown(mc.intensity_prior_checkbox)
-    assert not _shown(mc.intensity_prior_strength_slider)
-    assert not _shown(mc.intensity_prior_min_anchors_spinbox)
+    for name in INTENSITY_PRIOR_FIELDS:
+        assert not _shown(getattr(mc, name))
     assert _shown(mc.used_feature_combobox)
 
 
@@ -267,16 +351,31 @@ def test_controls_stay_hidden_for_empty_or_zero(viewer, monkeypatch, restore_pri
 
 
 def test_environment_variable_shows_controls_that_are_not_persisted(viewer, monkeypatch, restore_prior_state):
+    from napari_nd_annotator._widgets.minimal_contour_widget import INTENSITY_PRIOR_FIELDS
     mc = _scene(viewer, monkeypatch, env="1").mc
-    assert _shown(mc.intensity_prior_checkbox)
-    assert _shown(mc.intensity_prior_strength_slider)
-    assert _shown(mc.intensity_prior_min_anchors_spinbox)
+    for name in INTENSITY_PRIOR_FIELDS:
+        assert _shown(getattr(mc, name))
     mc.intensity_prior_checkbox.value = True
     mc.intensity_prior_min_anchors_spinbox.value = 3
+    mc.intensity_prior_slowdown_combobox.value = 1000.
+    mc.intensity_prior_boundary_combobox.value = "bright line"
     state = mc.__magicclass_serialize__()
-    for key in ("intensity_prior_checkbox", "intensity_prior_strength_slider", "intensity_prior_min_anchors_spinbox"):
+    for key in INTENSITY_PRIOR_FIELDS:
         assert key not in state
         assert key not in state["Image Features"]
+
+
+def test_controls_set_the_prior(viewer, monkeypatch, restore_prior_state):
+    from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
+    mc = _scene(viewer, monkeypatch, env="1").mc
+    prior = VispyMinimalContourOverlay.intensity_prior
+    # the defaults of the controls are the prior's
+    assert prior.max_slowdown == mc.intensity_prior_slowdown_combobox.value == 100.
+    assert prior.boundary == mc.intensity_prior_boundary_combobox.value == "edge"
+    mc.intensity_prior_slowdown_combobox.value = 1000.
+    mc.intensity_prior_boundary_combobox.value = "bright line"
+    assert prior.max_slowdown == 1000. and prior.boundary == "bright line"
+    assert mc.intensity_prior_slowdown_combobox.native.currentText() == "×1000"
 
 
 def test_overlay_sets_the_modulation_from_accepted_anchors(viewer, monkeypatch, restore_prior_state):
