@@ -19,6 +19,7 @@ from napari_nd_annotator.minimal_contour.intensity_prior import IntensityPrior
 from vispy.scene import Polygon, Line, Compound, Markers
 
 from napari_nd_annotator._helper_functions import layer_get_order
+from napari_nd_annotator.minimal_contour import roi as mc_roi
 
 from .minimal_contour_overlay import MinimalContourOverlay
 
@@ -83,8 +84,16 @@ def get_dashed_cache(data_len):
 class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
     layer: Labels
     mc_calculator = MinimalContourCalculator(None, 3)
+    # shape of the image given to the calculator: the whole displayed plane, or the ROI window of it
     _features_shape = None
-    # experimental: prefer pixels with the intensity of the already traced boundary (see intensity_prior.py)
+    # with a ROI window: where the window starts in the displayed plane (rows, columns) and the shape of the whole
+    # plane. Mouse callbacks keep working in plane coordinates; only what goes to / comes from the calculator is shifted.
+    _roi_origin = (0, 0)
+    _plane_shape = None
+    # called with the Box of the search window when it leaves the ROI window, to have the ROI moved (set by the widget)
+    roi_requester = None
+    # experimental: prefer pixels with the intensity of the already traced boundary (see intensity_prior.py).
+    # The prior's image is the same window of the plane as the calculator's.
     intensity_prior = IntensityPrior()
     use_intensity_prior = False
     # weak reference to the overlay whose contour the current speed modulation was computed from
@@ -151,9 +160,15 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         return self.modifiers & Qt.AltModifier if self.modifiers is not None else False
 
     @staticmethod
-    def set_calculator_feature(features, grad_x=None, grad_y=None):
+    def set_calculator_feature(features, grad_x=None, grad_y=None, roi_origin=(0, 0), plane_shape=None):
+        """Hand the image (and gradients) to the calculator.
+
+        With ``plane_shape`` the arrays are the window of the displayed plane that starts at ``roi_origin``.
+        """
         if features is None:
             VispyMinimalContourOverlay._features_shape = None
+            VispyMinimalContourOverlay._roi_origin = (0, 0)
+            VispyMinimalContourOverlay._plane_shape = None
             return
         if grad_x is None:
             grad_x = np.empty((0, 0))
@@ -165,6 +180,8 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
             features = np.tile(features[..., None],(1, 1, 3))
         VispyMinimalContourOverlay.mc_calculator.set_image(features, grad_x, grad_y)
         VispyMinimalContourOverlay._features_shape = features.shape[:2]
+        VispyMinimalContourOverlay._roi_origin = tuple(int(o) for o in roi_origin) if plane_shape is not None else (0, 0)
+        VispyMinimalContourOverlay._plane_shape = None if plane_shape is None else tuple(int(n) for n in plane_shape)
         # set_image drops the speed modulation of the previous image
         VispyMinimalContourOverlay._update_prior_overlay()
 
@@ -202,10 +219,17 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
                 and prior.shape == tuple(cls._features_shape):
             dims_displayed = list(self._dims_displayed)
             # the last anchor point follows the cursor, it is not accepted yet
-            anchors = np.reshape(self.overlay.anchor_points[:-1], (-1, self.layer.ndim))[:, dims_displayed]
-            contour = np.reshape(self.overlay.stored_contour, (-1, self.layer.ndim))[:, dims_displayed]
+            anchors = self._to_window(np.reshape(self.overlay.anchor_points[:-1], (-1, self.layer.ndim))[:, dims_displayed])
+            contour = self._to_window(np.reshape(self.overlay.stored_contour, (-1, self.layer.ndim))[:, dims_displayed])
             modulation = prior.speed_modulation(anchors, contour)
         cls.mc_calculator.set_speed_modulation(modulation)
+
+    @classmethod
+    def _to_window(cls, points):
+        """Plane coordinates (rows, columns) of ``points`` in the calculator's window; points outside it are dropped."""
+        points = np.asarray(points, dtype=float) - cls._roi_origin
+        inside = np.all((points > -0.5) & (points < np.asarray(cls._features_shape) - 0.5), axis=1)
+        return points[inside]
 
     def _set_use_straight_lines(self):
         self.use_straight_lines = self.overlay.use_straight_lines
@@ -328,6 +352,8 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
                     warnings.warn("Features not initialized.")
                     return
                 results = self._estimate()
+                if results is None:  # the search window is not covered by the ROI window
+                    return
 
             new_e_data = np.tile(np.where([i in dims_displayed for i in range(self.layer.ndim)], np.nan,
                                           self.overlay.anchor_points[0]), [len(results[0]), 1])
@@ -429,17 +455,39 @@ class VispyMinimalContourOverlay(LayerOverlayMixin, VispySceneOverlay):
         super().reset()
         self._on_points_change()
 
+    @classmethod
+    def _roi_box(cls):
+        """The window the calculator has, as a Box in plane coordinates (the whole plane without a ROI)."""
+        if cls._plane_shape is None:
+            return mc_roi.Box(0, cls._features_shape[0], 0, cls._features_shape[1])
+        (y0, x0), (height, width) = cls._roi_origin, cls._features_shape
+        return mc_roi.Box(y0, y0 + height, x0, x0 + width)
+
     def _estimate(self):
+        plane_shape = np.asarray(self._features_shape if self._plane_shape is None else self._plane_shape)
         from_i, to_i = bbox_around_points(self.point_triangle)
-        from_i = np.clip(from_i, 0, np.asarray(self._features_shape)).astype(int)
-        to_i = np.clip(to_i, 0, np.asarray(self._features_shape)).astype(int)
+        from_i = np.clip(from_i, 0, plane_shape).astype(int)
+        to_i = np.clip(to_i, 0, plane_shape).astype(int)
+        if self._plane_shape is not None:
+            search_box = mc_roi.Box(from_i[0], to_i[0], from_i[1], to_i[1])
+            if not mc_roi.covers(self._roi_box(), search_box, self._plane_shape):
+                # the contour is searched outside of the window the calculator has: have the window moved
+                requester = VispyMinimalContourOverlay.roi_requester  # not through self: a function would be bound
+                if requester is not None:
+                    requester(search_box)
+                if self._plane_shape is not None and not mc_roi.covers(self._roi_box(), search_box, self._plane_shape):
+                    return None
+        origin = np.asarray(self._roi_origin)
+        from_i, to_i = from_i - origin, to_i - origin
         self.mc_calculator.set_boundaries(from_i[1], from_i[0], to_i[1], to_i[0])
         results = self.mc_calculator.run(
-            self.point_triangle,
+            self.point_triangle - origin,
             True,
             True,
             True
         )
+        if origin.any():
+            results = [segment + origin for segment in results]
         return results
 
     def clear(self, _):

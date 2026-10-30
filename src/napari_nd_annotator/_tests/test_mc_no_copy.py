@@ -3,7 +3,6 @@
 Blurring is applied once, to the plane handed to the minimal contour calculator; the image layer keeps the
 user's array (numpy, dask, np.memmap), so Minimal Surface and the projections see the unmodified image.
 """
-import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -37,7 +36,7 @@ def calculator_calls(monkeypatch):
     set_calculator_feature = VispyMinimalContourOverlay.set_calculator_feature
 
     def spy(features, grad_x=None, grad_y=None):
-        # copies: the gradients may be views of feature files, which could not be deleted while referenced
+        # copies: the arrays given to the calculator must not change when the test inspects them later
         calls.append(tuple(None if a is None else np.array(a) for a in (features, grad_x, grad_y)))
         return set_calculator_feature(features, grad_x, grad_y)
     monkeypatch.setattr(VispyMinimalContourOverlay, "set_calculator_feature", staticmethod(spy))
@@ -81,16 +80,6 @@ def _settle(mc):
     _process_events()
 
 
-def _wait_for_features(mc, timeout=30.):
-    """Let the background feature jobs finish: changing the display order while they run can make them fail."""
-    extractor = getattr(getattr(mc, "feature_manager", None), "feature_extractor", None)
-    deadline = time.time() + timeout
-    while extractor is not None and extractor.done_mask is not None and not extractor.done_mask.all():
-        assert time.time() < deadline, "feature jobs did not finish"
-        _process_events()
-        time.sleep(0.01)
-
-
 @pytest.mark.parametrize("kind", ["numpy", "dask", "memmap"])
 def test_image_data_is_never_copied_or_modified(viewer, tmp_path, kind):
     data, values = _volume(kind, tmp_path)
@@ -122,12 +111,10 @@ def test_image_data_is_never_copied_or_modified(viewer, tmp_path, kind):
         _settle(mc)
         check()
 
-    _wait_for_features(mc)
     viewer.dims.order = (1, 0, 2)
     _settle(mc)
     assert VispyMinimalContourOverlay._features_shape == (SHAPE[0], SHAPE[2])
     check()
-    _wait_for_features(mc)
     viewer.dims.order = (0, 1, 2)
     _settle(mc)
     check()
