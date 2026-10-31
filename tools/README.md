@@ -27,6 +27,7 @@ python tools/bench_minimal_contour.py --compare before.json after.json
 | `--cores N` | restrict the process to the first N cores (psutil `cpu_affinity`), to imitate a laptop |
 | `--rgb` | use an RGB image of shape `(Z, Y, X, 3)` |
 | `--orders` | `dims.order` permutations to switch through at the end (default `1,0,2 0,1,2 2,1,0`) |
+| `--object` | select an object in the object list before MC is activated (a box of a quarter of the plane side in the middle of the plane, 11 slices; needs `napari-bbox`): MC then works on the ROI of the object. Adds the metric `select object in the object list` |
 | `--start-with-labels` | have the labels layer selected when the plugin is created (instead of the image layer); the measured steps are the same |
 | `--json PATH` | also write all numbers as JSON (`null` = not applicable) |
 | `--label TEXT` | tag stored in the JSON, e.g. `main` or `PR3` |

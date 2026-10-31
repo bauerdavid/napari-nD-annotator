@@ -74,19 +74,6 @@ def test_suggests_anchors_for_the_selected_object(viewer, scene):
     assert len(ms.points_layer.data) % 2 == 0
 
 
-def test_suggestion_works_on_the_cropped_layer(viewer, scene):
-    image_layer, object_list, ms = scene
-    _select(viewer, object_list)
-    crop = object_list.crop_image_layer
-    assert crop is not None
-    ms.image_layer = crop
-    ms._suggest_anchors()
-    # like clicked points, the anchors are in world coordinates, which the cropped layer is translated to
-    points = np.asarray(ms.points_layer.data)
-    assert points.shape == (2, 3)
-    assert np.all(_distance_from_ball_surface(points) < 2.5)
-
-
 def test_suggesting_again_replaces_the_suggestion_but_keeps_user_anchors(viewer, scene):
     image_layer, object_list, ms = scene
     manual = np.array([[20., 30., 18.], [20., 30., 42.]])

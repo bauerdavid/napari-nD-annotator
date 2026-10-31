@@ -40,7 +40,7 @@ from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_di
 from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
-from .object_list import selected_object
+from .object_list import selected_object, selected_object_changed
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -826,7 +826,7 @@ class MinimalContourWidget(MagicTemplate):
         """The part (a Box) of the displayed plane to give the calculator, or None for the whole plane.
 
         Sources, in this order: the bounding box of the object selected in the object list (only while the contour
-        runs on that very image: a cropped copy is small already), and, for planes with more than
+        runs on the image of the object list), and, for planes with more than
         ``LARGE_PLANE_PIXELS`` pixels, a window around the anchors. ``_roi_hint`` is a search area that has to be
         inside the result (set while the overlay asks for a new window). Nothing is windowed for the custom
         features, whose script is given the whole plane.
@@ -871,6 +871,12 @@ class MinimalContourWidget(MagicTemplate):
         except Exception:
             pass
         return [(plane_shape[0] // 2, plane_shape[1] // 2)]
+
+    def _on_selected_object_changed(self, event):
+        """The object selected in the object list (and with it the ROI of the contour) changed."""
+        if getattr(event, "viewer", None) is not self.viewer or not self.is_mc_enabled:
+            return
+        self._update_features()
 
     def _on_roi_request(self, search_box):
         """The overlay needs to search ``search_box``, which is outside of the part of the plane the calculator has."""
@@ -1117,6 +1123,7 @@ class MinimalContourWidget(MagicTemplate):
 
         self.viewer.dims.events.ndisplay.connect(self._set_image, position="last")
         self.viewer.dims.events.order.connect(self._set_image, position="last")
+        selected_object_changed.connect(self._on_selected_object_changed)
         self.viewer.layers.events.removed.connect(lambda e: self._on_layer_removed(e.value))
         # key and wheel events go to the focused widget (usually the canvas), not to the main window
         viewer_main_window(self.viewer).installEventFilter(self.event_filter)

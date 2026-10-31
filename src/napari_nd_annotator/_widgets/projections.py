@@ -12,11 +12,35 @@ from qtpy import QtCore
 from .._helper_functions import layer_dims_not_displayed, layer_slice_indices
 from matplotlib import colors
 
+class DataBox:
+    """A part of the data of a layer, given by its inclusive corners in data (index) coordinates.
+
+    The projections of an object only show its bounding box. They work on numpy views of the layer data, so nothing is
+    copied, and their slice indices are relative to the first corner of the box.
+    """
+
+    def __init__(self, box_min, box_max):
+        self.set(box_min, box_max)
+
+    def set(self, box_min, box_max):
+        self.min = np.maximum(np.asarray(box_min, dtype=int), 0)
+        self.max = np.maximum(np.asarray(box_max, dtype=int), self.min)
+
+    @property
+    def idx(self):
+        return tuple(slice(int(lo), int(hi) + 1) for lo, hi in zip(self.min, self.max))
+
+
+def _box_min(box, ndim):
+    return np.zeros(ndim, dtype=int) if box is None else np.asarray(box.min, dtype=int)
+
+
 class DataProjectionWidget(QLabel):
     def __init__(self, viewer, image_layer, mask_layer, displayed_axes, slices=None,
-                 flip_image=False, crosshair_color=None):
+                 flip_image=False, crosshair_color=None, box=None):
         super().__init__()
         self._crosshair_color = None
+        self.box = box
         self.viewer = viewer
         self.image_layer = image_layer
         self.mask_layer = mask_layer
@@ -104,11 +128,13 @@ class DataProjectionWidget(QLabel):
 
     @property
     def image_data(self):
-        return self.image_layer.data
+        data = self.image_layer.data
+        return data if self.box is None else data[self.box.idx]
 
     @property
     def mask_data(self):
-        return self.mask_layer.data
+        data = self.mask_layer.data
+        return data if self.box is None else data[self.box.idx]
 
     @property
     def im_idx(self):
@@ -175,7 +201,7 @@ class DataProjectionWidget(QLabel):
         order = order + tuple(self.displayed_axes)
         self.viewer.dims.order = order
         # the slices are data indices of the layer, the viewer position is in world coordinates
-        point = self.image_layer.data_to_world(self.slices)
+        point = self.image_layer.data_to_world(np.asarray(self.slices) + _box_min(self.box, self.image_layer.ndim))
         other_dims = [dim for dim in range(len(self.viewer.dims.current_step)) if dim not in self.displayed_axes]
         self.viewer.dims.set_point(other_dims, [point[dim] for dim in other_dims])
 
@@ -184,8 +210,9 @@ class SliceDisplayWidget(QWidget):
     # the projections are rendered at most this often (in ms) while the labels or the cursor keep changing
     REFRESH_INTERVAL = 30
 
-    def __init__(self, viewer, image_layer, mask_layer, channels_dim=None, *args, **kwargs):
+    def __init__(self, viewer, image_layer, mask_layer, channels_dim=None, *args, box=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.box = box
         self.setObjectName("Projections")
         main_layout = QVBoxLayout()
         self.settings = QSettings()
@@ -209,7 +236,7 @@ class SliceDisplayWidget(QWidget):
             label = QLabel("%d" % dim)
             slider = QSlider(QtCore.Qt.Horizontal)
             slider.setMinimum(0)
-            slider.setMaximum(max(image_layer.data.shape[dim] - 1, 0))
+            slider.setMaximum(max(self.data_shape[dim] - 1, 0) if dim < len(self.data_shape) else 0)
             slider.setSingleStep(1)
             slider.setFixedWidth(100)
             slider.valueChanged.connect(self.slider_callback(dim))
@@ -234,8 +261,9 @@ class SliceDisplayWidget(QWidget):
             else:
                 flip = False
             slice_indices = layer_slice_indices(image_layer)
-            slices = [max(min(int(slice_indices[dim]), image_layer.data.shape[dim]-1), 0) if dim in layer_dims_not_displayed(image_layer) else 0 for dim in range(viewer.dims.ndim)]
-            projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, slices=slices, flip_image=flip, crosshair_color=self.overlay_color)
+            box_min = _box_min(box, image_layer.ndim)
+            slices = [max(min(int(slice_indices[dim]) - int(box_min[dim]), self.data_shape[dim]-1), 0) if dim in layer_dims_not_displayed(image_layer) else 0 for dim in range(viewer.dims.ndim)]
+            projection = DataProjectionWidget(viewer, image_layer, mask_layer, dim_pair, slices=slices, flip_image=flip, crosshair_color=self.overlay_color, box=box)
             grid_layout.setRowStretch(len(self.projections)//3, 1)
             grid_layout.setColumnStretch(len(self.projections)%3, 1)
             grid_layout.addWidget(projection, len(self.projections)//3, len(self.projections)%3, QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -263,6 +291,20 @@ class SliceDisplayWidget(QWidget):
         self.setLayout(main_layout)
         self.setSizePolicy(self.grid_widget.sizePolicy().horizontalPolicy(), QSizePolicy.Expanding)
         self._connect_events()
+
+    @property
+    def data_shape(self):
+        """Shape of the data the projections show (the box of the layer, if there is one)."""
+        shape = self.image_layer.data.shape
+        if self.box is None:
+            return tuple(shape)
+        return tuple(len(range(*s.indices(n))) for s, n in zip(self.box.idx, shape))
+
+    def set_box(self, box_min, box_max):
+        """Shows another part of the data (the bounding box of the object changed)."""
+        self.box.set(box_min, box_max)
+        self.on_step_change()
+        self.update_slider_ranges()
 
     def _connect(self, emitter, callback):
         emitter.connect(callback)
@@ -293,10 +335,14 @@ class SliceDisplayWidget(QWidget):
                 pass
         self._connections = []
 
+    def detach(self):
+        """Stops following the viewer and the layers for good (the widget is going away)."""
+        self._detached = True
+        self._disconnect_events()
+
     def _on_layer_removed(self, event):
         if event.value in (self.image_layer, self.mask_layer):
-            self._detached = True
-            self._disconnect_events()
+            self.detach()
 
     def _schedule_refresh(self, event=None):
         if self._connections and not self._refresh_timer.isActive():
@@ -332,12 +378,14 @@ class SliceDisplayWidget(QWidget):
         coordinates = np.round(np.asarray(float_coordinates)).astype(int)
         if len(coordinates) != self.image_layer.ndim:
             coordinates = coordinates[-self.image_layer.ndim:]
+        coordinates = coordinates - _box_min(self.box, len(coordinates))
+        shape = self.data_shape
         for p in self.projections:
             p.update_overlay(layer, coordinates)
         if not update_sliders:
             return
         for i, slider in enumerate(self.sliders):
-            if i in self.viewer.dims.order[-self.viewer.dims.ndisplay:] and self.image_layer.data.shape[i] > coordinates[i] >= 0:
+            if i in self.viewer.dims.order[-self.viewer.dims.ndisplay:] and shape[i] > coordinates[i] >= 0:
                 slider.blockSignals(True)
                 slider.setValue(int(coordinates[i]))
                 slider.blockSignals(False)
@@ -346,13 +394,15 @@ class SliceDisplayWidget(QWidget):
 
     def on_step_change(self, event=None, layers=None):
         # the viewer position is in world coordinates, the slices are data indices of the layer
-        point = self.image_layer.world_to_data(self.viewer.dims.point)
+        point = np.asarray(self.image_layer.world_to_data(self.viewer.dims.point))
+        point = point - _box_min(self.box, len(point))
         for projection in self.projections:
             projection.setSlices(*itertools.chain(*((dim, int(round(point[dim]))) for dim in self.viewer.dims.not_displayed)))
 
     def update_slider_ranges(self, refresh=True):
+        shape = self.data_shape
         for dim in range(len(self.sliders)):
-            self.sliders[dim].setMaximum(max(self.image_layer.data.shape[dim] - 1, 0))
+            self.sliders[dim].setMaximum(max(shape[dim] - 1, 0) if dim < len(shape) else 0)
         for projection in self.projections:
             projection.sync_with_data()
         if refresh:
