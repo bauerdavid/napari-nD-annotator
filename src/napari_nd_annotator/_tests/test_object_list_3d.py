@@ -51,7 +51,6 @@ def _select_3d(viewer, labels, object_list):
 def test_selection_clips_the_original_layers_to_the_bounding_box(viewer, scene):
     image, labels, object_list = scene
     _select_3d(viewer, labels, object_list)
-    assert object_list.crop_image_layer is None and object_list.crop_mask_layer is None
     assert not [layer for layer in viewer.layers if layer.name.startswith("Cropped")]
     assert object_list.projections_widget is None
     for layer in (image, labels):
@@ -214,17 +213,16 @@ def test_swapping_between_2d_and_3d_while_an_object_is_selected(viewer, scene):
     _select_3d(viewer, labels, object_list)
     viewer.dims.ndisplay = 2
     _process_events()
-    # back to the crops, without clipping and ghosts
-    assert object_list.crop_image_layer is not None and object_list.crop_mask_layer is not None
+    # back to the plane view of the original layers, without clipping and ghosts
+    assert object_list.projections_widget is not None
     assert object_list.clipper is None
     assert not _scaffold_layers(viewer)
     for layer in (image, labels):
         assert len(layer.experimental_clipping_planes) == 0
-        assert not layer.visible
+        assert layer.visible
     assert object_list.selected_idx == 0
     viewer.dims.ndisplay = 3
     _process_events()
-    assert object_list.crop_image_layer is None and object_list.crop_mask_layer is None
     assert not [layer for layer in viewer.layers if layer.name.startswith("Cropped")]
     assert object_list.projections_widget is None
     for layer in (image, labels):
@@ -233,16 +231,17 @@ def test_swapping_between_2d_and_3d_while_an_object_is_selected(viewer, scene):
     assert len(_scaffold_layers(viewer)) == 1
 
 
-def test_2d_selection_still_creates_crops(viewer, scene):
+def test_2d_selection_neither_clips_nor_creates_layers(viewer, scene):
     image, labels, object_list = scene
     assert viewer.dims.ndisplay == 2
-    crop_image, crop_labels = _select_object(viewer, labels, object_list)
-    assert crop_image is not None and crop_labels is not None
+    layers = list(viewer.layers)
+    _select_object(viewer, labels, object_list)
+    assert list(viewer.layers) == layers
     assert object_list.clipper is None and not _scaffold_layers(viewer)
-    assert not image.visible and not labels.visible
+    assert image.visible and labels.visible
     for layer in (image, labels):
         assert len(layer.experimental_clipping_planes) == 0
-    assert list(viewer.layers.selection) == [crop_labels]
+    assert list(viewer.layers.selection) == [labels]
 
 
 def test_the_clipped_region_is_what_the_3d_canvas_shows(viewer, scene):
