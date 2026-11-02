@@ -35,6 +35,9 @@ def parse_args(argv=None):
                    help="dims.order permutations to switch through (default: 1,0,2 0,1,2 2,1,0)")
     p.add_argument("--start-with-labels", action="store_true",
                    help="have the labels layer selected when the plugin is created, instead of the image layer")
+    p.add_argument("--object", action="store_true",
+                   help="select an object (a bounding box of a quarter of the plane side, in the middle of the "
+                        "plane) in the object list before MC is activated, so MC works on its ROI (needs napari-bbox)")
     p.add_argument("--json", metavar="PATH", help="write the results as JSON")
     p.add_argument("--label", default="", help="free text stored in the JSON (e.g. 'main' or 'PR 3')")
     p.add_argument("--compare", nargs=2, metavar=("BEFORE.json", "AFTER.json"),
@@ -242,6 +245,30 @@ def run(args):
 
         mc._set_image = timed_set_image
 
+    # --- optional: an object selected in the object list (the 2D view moves to it, MC gets its bounding box) -------
+    if args.object:
+        import itertools
+        from napari_bbox import BoundingBoxLayer
+        from napari_nd_annotator._widgets.object_list import ObjectListWidget
+        side = max(min(Y, X) // 4, 64)
+        z0, z1 = max(Z // 2 - 5, 0), min(Z // 2 + 5, Z - 1)
+        y0, x0 = (Y - side) // 2, (X - side) // 2
+        corners = np.array(list(itertools.product((z0, z1), (y0, y0 + side - 1), (x0, x0 + side - 1))), dtype=float)
+        bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent")
+        viewer.add_layer(bbox_layer)
+        bbox_layer.data = [corners]
+        bbox_layer.features = {"label": np.array([1])}
+        object_list = ObjectListWidget(viewer, "Object", bbox_layer, img, lab, None, 1)
+        pump()
+        t = time.perf_counter()
+        viewer.layers.selection.select_only(lab)
+        object_list.select_item(object_list.item(0))
+        pump()
+        m["object_select_s"] = time.perf_counter() - t
+        m["layers_after_object_select"] = len(viewer.layers)
+    else:
+        m["object_select_s"] = None
+
     # --- activation: select the labels layer, then switch MC mode on --------------------------
     # later versions only do the heavy work when MC mode is enabled, so both steps count
     cpu0, wall0 = cpu_seconds(), time.perf_counter()
@@ -275,6 +302,7 @@ def run(args):
         t = time.perf_counter()
         overlay._estimate()
         first_run = time.perf_counter() - t
+        m["roi_window_shape"] = list(overlay._features_shape) if VispyMinimalContourOverlay._plane_shape is not None else None
     except Exception as e:  # noqa: BLE001 - report instead of aborting the whole benchmark
         print("first contour run failed: %r" % e)
     m["first_run_s"] = first_run
@@ -383,6 +411,7 @@ def run(args):
 ROWS = [
     ("start_s", "plugin start", "s"),
     ("start_rss_delta_mb", "  RSS delta", "MB"),
+    ("object_select_s", "select object in the object list (GUI blocked)", "s"),
     ("select_s", "select labels layer (GUI blocked)", "s"),
     ("enable_mc_s", "enable MC mode (GUI blocked)", "s"),
     ("activation_s", "activation total", "s"),

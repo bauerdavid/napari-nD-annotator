@@ -5,20 +5,20 @@ import cv2
 import napari
 import numpy as np
 
-from qtpy.QtCore import QEvent, Qt, QObject
+from qtpy.QtCore import QEvent, Qt, QObject, QTimer
 from qtpy.QtGui import QImage, QPixmap, QHideEvent, QShowEvent
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
     QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox, QCheckBox
 from napari import Viewer
 from napari.layers import Image, Labels
-from napari.layers.labels._labels_constants import Mode
+from napari.utils.events import EventEmitter
 from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
 from ._utils.clipping import LayerClipper, displayed_layer_dims
 from ._utils.shortcuts import VIEWER, bind_all, unbind_all
-from .._helper_functions import unwrap_viewer, viewer_qt_viewer, viewer_camera
-from .projections import SliceDisplayWidget
+from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size
+from .projections import DataBox, SliceDisplayWidget
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -35,6 +35,10 @@ import time
 
 
 _OBJECT_LISTS = weakref.WeakSet()
+
+# Emitted (with ``viewer=``) whenever the selected object of an object list, or its bounding box, changes, so that
+# widgets working on the selected object (see `selected_object`) can follow it.
+selected_object_changed = EventEmitter(source=None, type_name="selected_object_changed")
 
 
 def selected_object(viewer):
@@ -63,6 +67,31 @@ def slice_len(slice_, count=None):
     if count is None:
         count = slice_.stop
     return len(range(*slice_.indices(count)))
+
+
+def _set_dims_point(viewer, layer, world_point):
+    """Moves the dims sliders of the dimensions of ``layer`` to ``world_point`` (the viewer may have more dims)."""
+    offset = viewer.dims.ndim - layer.ndim
+    viewer.dims.set_point(np.arange(layer.ndim, dtype=int) + max(offset, 0), world_point)
+
+
+def _fit_camera_to_box(viewer, layer, box_min, box_max, margin=0.9):
+    """Centers the 2D camera on the box (inclusive data corners of ``layer``) and zooms so that it fills the canvas."""
+    dims = displayed_layer_dims(viewer, layer)
+    if len(dims) != 2:
+        return
+    corners = np.stack([np.asarray(layer.data_to_world(np.asarray(box_min, dtype=float) - .5)),
+                        np.asarray(layer.data_to_world(np.asarray(box_max, dtype=float) + .5))])
+    low, high = corners.min(axis=0)[dims], corners.max(axis=0)[dims]
+    camera = viewer_camera(viewer)
+    try:
+        camera.center = tuple(camera.center)[:-2] + tuple(float(c) for c in (low + high) / 2)
+        height, width = viewer_canvas_size(viewer)
+        extent = high - low
+        if height > 0 and width > 0 and np.all(extent > 0):
+            camera.zoom = float(margin * min(height / extent[0], width / extent[1]))
+    except (ValueError, TypeError, IndexError):
+        pass
 
 
 if BoundingBoxLayer:
@@ -167,16 +196,13 @@ if BoundingBoxLayer:
             self._bounding_box = bounding_box
             self.object_item.setTextDown(bounding_box)
             self.object_item.update()
-            if self.parent.crop_image_layer is not None and \
-                self.parent.selected_idx == self.parent.indexFromItem(self).row():
-                self.parent.crop_image_layer.data = self.image_layer.data[self.bbox_idx]
-                self.parent.crop_image_layer.translate = self.crop_translate(self.image_layer)
-                self.parent.crop_image_layer.refresh()
-                self.parent.crop_mask_layer.data = self.mask_layer.data[self.bbox_idx]
-                self.parent.crop_mask_layer.translate = self.crop_translate(self.mask_layer)
-                self.parent.crop_mask_layer.refresh()
-            if self.parent.clipper is not None and self.parent.selected_idx == self.parent.indexFromItem(self).row():
-                self.update_clipping()
+            row = self.parent.indexFromItem(self).row()
+            if self.parent.selected_idx is not None and self.parent.selected_idx == row:
+                if self.parent.clipper is not None:
+                    self.update_clipping()
+                if self.parent.projections_widget is not None:
+                    self.parent.projections_widget.set_box(bounding_box[0], bounding_box[1])
+                self.parent.notify_selection_changed()
             self.update_icon()
 
         @property
@@ -193,17 +219,21 @@ if BoundingBoxLayer:
         def name(self, name):
             self.object_item.name = name
 
-        def crop_translate(self, layer):
-            # the bounding box is in data (index) coordinates, translate is in world coordinates
-            return self.bounding_box[0, :]*layer.scale + layer.translate
-
         def create_layers(self):
+            """Adds cropped layers of the object to the viewer (the "Create layers" menu action).
+
+            They are plain views of the data, independent of the object list's selection.
+            """
+            def translate(layer):
+                # the bounding box is in data (index) coordinates, translate is in world coordinates
+                return self.bounding_box[0, :] * layer.scale + layer.translate
+
             if self.image_layer is not None:
                 image_layer = Image(self.image_layer.data[self.bbox_idx],
                                     name="Cropped %s %d" % (self.image_layer.name, self.idx),
                                     colormap=self.image_layer.colormap, rgb=self.image_layer.rgb,
                                     scale=self.image_layer.scale)
-                image_layer.translate = self.crop_translate(self.image_layer)
+                image_layer.translate = translate(self.image_layer)
                 self.viewer.add_layer(image_layer)
             else:
                 image_layer = None
@@ -212,55 +242,44 @@ if BoundingBoxLayer:
                                     name="Cropped %s %d" % (self.mask_layer.name, self.idx),
                                     scale=self.mask_layer.scale)
                 mask_layer.selected_label = self.idx
-                mask_layer.translate = self.crop_translate(self.mask_layer)
+                mask_layer.translate = translate(self.mask_layer)
                 mask_layer.brush_size = self.mask_layer.brush_size
                 if image_layer is not None:
-                    # lets the minimal contour widget find the image to work on
                     mask_layer.metadata["source_image_layer"] = image_layer
-                self.mask_layer.events.data.connect(mask_layer.refresh)
                 self.viewer.add_layer(mask_layer)
-                # set after adding, so that the layer controls follow the mode
-                try:
-                    mask_layer.mode = self.mask_layer.mode
-                except (ValueError, TypeError):
-                    mask_layer.mode = Mode.PAINT
             else:
                 mask_layer = None
             return image_layer, mask_layer
 
-        def unselect(self):
-            self.parent.release_clipper()
-            had_crops = self.parent.crop_image_layer is not None
-            if self.parent.crop_image_layer is not None:
-                if self.parent.crop_image_layer in self.viewer.layers:
-                    self.viewer.layers.remove(self.parent.crop_image_layer)
-                self.parent.crop_image_layer = None
-            if self.parent.crop_mask_layer is not None:
-                if self.parent.crop_mask_layer in self.viewer.layers:
-                    self.viewer.layers.remove(self.parent.crop_mask_layer)
-                if self.mask_layer is not None:
-                    self.mask_layer.events.data.disconnect(self.parent.crop_mask_layer.refresh)
-                self.parent.crop_mask_layer.mouse_drag_callbacks.remove(QObjectListWidgetItem.update_layer)
-                self.parent.crop_mask_layer = None
-            if self.parent.projections_widget is not None:
-                self.viewer.window.remove_dock_widget(self.parent.projections_widget)
-                self.parent.projections_widget = None
-            # napari stores the mode on hiding a layer and restores it on showing it, but setting
-            # `visible = True` on a layer that is already visible resets the mode to pan/zoom
-            if had_crops and self.mask_layer is not None and not self.mask_layer.visible:
-                self.mask_layer.visible = True
-            if had_crops and self.image_layer is not None and not self.image_layer.visible:
-                self.image_layer.visible = True
+        def unselect(self, restore_view=True):
+            self.parent.release_selection(restore_view)
 
         def on_select(self):
-            self.unselect()
+            self.unselect(restore_view=False)
+            self._give_labels_a_source_image()
             if self.parent.use_clipping():
+                self.parent._saved_view = None  # the 3D view is not restored
                 self.select_with_clipping()
             else:
-                self.select_with_crops()
+                self.select_in_plane()
+            self.parent.watch_mask_layer(self.mask_layer)
+
+        def _give_labels_a_source_image(self):
+            # the minimal contour tool works on the source image of the labels layer, and asks for one when there is none
+            image_layer, mask_layer = self.image_layer, self.mask_layer
+            if "source_image_layer" not in mask_layer.metadata and image_layer.ndim == mask_layer.ndim                     and tuple(image_layer.data.shape[:image_layer.ndim]) == tuple(mask_layer.data.shape):
+                mask_layer.metadata["source_image_layer"] = image_layer
 
         def update_clipping(self):
             self.parent.clipper.set_box(self.bounding_box[0], self.bounding_box[1])
+
+        def _select_layers(self):
+            # setting `visible = True` on a visible labels layer would reset its mode to pan/zoom
+            for layer in (self.image_layer, self.mask_layer):
+                if not layer.visible:
+                    layer.visible = True
+            self.viewer.layers.selection.select_only(self.mask_layer)
+            self.mask_layer.selected_label = self.idx
 
         def select_with_clipping(self):
             # 3D: the original layers are clipped to the bounding box, no cropped copies are created
@@ -269,7 +288,7 @@ if BoundingBoxLayer:
             clipper.clip([self.image_layer, self.mask_layer], self.bounding_box[0], self.bounding_box[1])
             self.parent.update_ghosts()
             center = self.image_layer.data_to_world(self.bounding_box.mean(axis=0))
-            self.viewer.dims.set_point(np.arange(self.image_layer.ndim, dtype=int), center)
+            _set_dims_point(self.viewer, self.image_layer, center)
             try:
                 viewer_camera(self.viewer).center = tuple(center[d] for d in displayed_layer_dims(self.viewer, self.image_layer))
             except (ValueError, TypeError, IndexError):
@@ -277,44 +296,18 @@ if BoundingBoxLayer:
             self.viewer.layers.selection.select_only(self.mask_layer)
             self.mask_layer.selected_label = self.idx
 
-        def select_with_crops(self):
-            self.parent.crop_image_layer, self.parent.crop_mask_layer = self.create_layers()
-            self.parent.crop_image_layer.name = self.parent.crop_image_layer.name
-            self.parent.crop_mask_layer.name = self.parent.crop_mask_layer.name
-            self.viewer.dims.set_point(
-                np.arange(self.parent.crop_image_layer.ndim, dtype=int),
-                np.mean(self.parent.crop_image_layer.extent.world, axis=0))
-            self.parent.crop_mask_layer.events.set_data.connect(self.on_data_change)
+        def select_in_plane(self):
+            # 2D: the original layers stay as they are; the view moves to the object. The minimal contour tool
+            # (which works on the original image) takes its region of interest from the bounding box.
+            self.parent.store_view()
+            _set_dims_point(self.viewer, self.image_layer, self.image_layer.data_to_world(self.bounding_box.mean(axis=0)))
+            _fit_camera_to_box(self.viewer, self.image_layer, self.bounding_box[0], self.bounding_box[1])
             if self.image_layer.ndim > 2:
-                self.parent.projections_widget = SliceDisplayWidget(self.viewer, self.parent.crop_image_layer, self.parent.crop_mask_layer, self.channels_dim)
+                box = DataBox(self.bounding_box[0], self.bounding_box[1])
+                self.parent.projections_widget = SliceDisplayWidget(
+                    self.viewer, self.image_layer, self.mask_layer, self.channels_dim, box=box)
                 self.viewer.window.add_dock_widget(self.parent.projections_widget)
-            self.parent.crop_mask_layer.mouse_drag_callbacks.append(self.update_layer)
-            self.viewer.layers.selection.select_only(self.parent.crop_mask_layer)
-            # the minimal contour tool is not a napari mode (it borrows pan/zoom), so it is carried over separately
-            mc_overlay = self.mask_layer._overlays.get("minimal_contour")
-            if mc_overlay is not None and mc_overlay.enabled:
-                mc_button = getattr(viewer_qt_viewer(self.viewer).controls.widgets.get(self.parent.crop_mask_layer),
-                                    "mc_button", None)
-                if mc_button is not None:
-                    mc_button.click()
-            self.mask_layer.selected_label = self.idx
-            self.mask_layer.visible = False
-            self.image_layer.visible = False
-
-        def on_data_change(self, event):
-            if self.parent.crop_mask_layer is None:
-                return
-            self.mask_layer.data[self.bbox_idx] = self.parent.crop_mask_layer.data
-            if self.parent.projections_widget is not None:
-                self.parent.projections_widget.update_slider_ranges()
-            self.parent.on_layer_event(event)
-
-        @staticmethod
-        def update_layer(layer, event):
-            yield
-            while event.type == "mouse_move":
-                yield
-            layer.refresh()
+            self._select_layers()
 
         def update_icon(self):
             visible_dims = list(self.viewer.dims.displayed)[-2:]
@@ -355,9 +348,15 @@ if BoundingBoxLayer:
             self._bounding_box_layer = None
             self._image_layer = None
             self._mask_layer = None
-            self.crop_image_layer = None
-            self.crop_mask_layer = None
             self.projections_widget = None
+            # the camera and slice position before the first object was selected, restored when it is unselected
+            self._saved_view = None
+            self._watched_mask_layer = None
+            # the icon of the selected object follows the edits of the labels (throttled, painting is fast)
+            self._icon_timer = QTimer(self)
+            self._icon_timer.setSingleShot(True)
+            self._icon_timer.setInterval(50)
+            self._icon_timer.timeout.connect(self._refresh_selected_icon)
             self._mouse_down = False
             self.selected_idx = None
             _OBJECT_LISTS.add(self)
@@ -415,9 +414,9 @@ if BoundingBoxLayer:
 
         @image_layer.setter
         def image_layer(self, new_layer):
-            clipped = self.clipper is not None and new_layer is not self._image_layer
+            clipped = self.selected_idx is not None and new_layer is not self._image_layer
             if clipped:
-                self.release_clipper()
+                self.release_selection()
             self._image_layer = new_layer
             for i in range(self.count()):
                 item = self.item(i)
@@ -433,9 +432,9 @@ if BoundingBoxLayer:
 
         @mask_layer.setter
         def mask_layer(self, new_layer):
-            clipped = self.clipper is not None and new_layer is not self._mask_layer
+            clipped = self.selected_idx is not None and new_layer is not self._mask_layer
             if clipped:
-                self.release_clipper()
+                self.release_selection()
             self._mask_layer = new_layer
             for i in range(self.count()):
                 item = self.item(i)
@@ -464,7 +463,7 @@ if BoundingBoxLayer:
             self.update_ghosts()
 
         def use_clipping(self):
-            # clipping planes act only in the 3D canvas, in 2D the object is shown on cropped copies of the layers
+            # clipping planes act only in the 3D canvas, in 2D the view moves to the object
             return self.viewer.dims.ndisplay == 3 and self.image_layer is not None and self.image_layer.ndim >= 3
 
         def update_ghosts(self):
@@ -478,10 +477,80 @@ if BoundingBoxLayer:
                 clipper, self.clipper = self.clipper, None
                 clipper.close()
 
+        def notify_selection_changed(self):
+            selected_object_changed(viewer=self.viewer)
+
+        def store_view(self):
+            """Remembers the view, unless it was remembered already (switching between objects keeps the first)."""
+            if self._saved_view is None:
+                camera = viewer_camera(self.viewer)
+                self._saved_view = (tuple(self.viewer.dims.point), tuple(camera.center), camera.zoom)
+
+        def _restore_view(self):
+            saved, self._saved_view = self._saved_view, None
+            if saved is None:
+                return
+            point, center, zoom = saved
+            if len(point) == self.viewer.dims.ndim:
+                self.viewer.dims.set_point(list(range(len(point))), point)
+            camera = viewer_camera(self.viewer)
+            try:
+                camera.center = center
+                camera.zoom = zoom
+            except (ValueError, TypeError):
+                pass
+
+        def watch_mask_layer(self, layer):
+            self.unwatch_mask_layer()
+            if layer is None:
+                return
+            self._watched_mask_layer = layer
+            for event_name in ("data", "set_data", "labels_update"):  # a paint stroke only emits labels_update
+                emitter = getattr(layer.events, event_name, None)
+                if emitter is not None:
+                    emitter.connect(self._on_mask_changed)
+
+        def unwatch_mask_layer(self):
+            layer, self._watched_mask_layer = self._watched_mask_layer, None
+            self._icon_timer.stop()
+            if layer is None:
+                return
+            for event_name in ("data", "set_data", "labels_update"):
+                emitter = getattr(layer.events, event_name, None)
+                if emitter is not None:
+                    try:
+                        emitter.disconnect(self._on_mask_changed)
+                    except (ValueError, KeyError, RuntimeError):
+                        pass
+
+        def _on_mask_changed(self, event=None):
+            if not self._mouse_down:
+                self._icon_timer.start()
+
+        def _refresh_selected_icon(self):
+            item = self.item(self.selected_idx) if self.selected_idx is not None else None
+            if item is not None:
+                item.update_icon()
+
+        def release_selection(self, restore_view=False):
+            """Ends what showing the selected object did: the clipping, the projections and the watching of the labels."""
+            self.release_clipper()
+            self.unwatch_mask_layer()
+            if self.projections_widget is not None:
+                self.projections_widget.detach()
+                try:
+                    self.viewer.window.remove_dock_widget(self.projections_widget)
+                except (ValueError, KeyError, RuntimeError):
+                    pass
+                self.projections_widget = None
+            if restore_view:
+                self._restore_view()
+
         def _reselect(self):
             item = self.item(self.selected_idx) if self.selected_idx is not None else None
             if item is not None and self.image_layer is not None and self.mask_layer is not None:
                 item.on_select()
+                self.notify_selection_changed()
 
         def _on_ndisplay_changed(self, event=None):
             # the selected object is shown differently in 2D and 3D
@@ -514,14 +583,12 @@ if BoundingBoxLayer:
 
         def select_item(self, item):
             selected_idx = self.indexFromItem(item).row()
-            if self.mask_layer is not None and self.image_layer is not None:
-                item.on_select()
-            else:
+            if self.mask_layer is None or self.image_layer is None:
                 self.clearSelection()
                 self.clearFocus()
                 warnings.warn("Image and labels layer should be selected!")
                 return
-            if selected_idx == self.selected_idx or self.mask_layer is None or self.image_layer is None:
+            if selected_idx == self.selected_idx:
                 self.selected_idx = None
                 item.unselect()
                 self.clearSelection()
@@ -529,12 +596,14 @@ if BoundingBoxLayer:
                 self.bounding_box_layer.edge_color[selected_idx] = self.previous_edge_color
                 self.bounding_box_layer.data = self.bounding_box_layer.data
             else:
+                item.on_select()
                 if self.selected_idx is not None:
                     self.bounding_box_layer.edge_color[self.selected_idx] = self.previous_edge_color
                 self.selected_idx = selected_idx
                 self.previous_edge_color = self.bounding_box_layer.edge_color[selected_idx].copy()
                 self.bounding_box_layer.edge_color[selected_idx] = (1., 0., 0., 1.)
                 self.bounding_box_layer.data = self.bounding_box_layer.data
+            self.notify_selection_changed()
 
         def _on_bounding_boxes_removed(self, event=None):
             # bounding boxes deleted from the layer (e.g. with its delete button)
@@ -553,6 +622,7 @@ if BoundingBoxLayer:
                 self.selected_idx = None
             else:
                 self.selected_idx = row
+            self.notify_selection_changed()
 
         def bounding_box_corners(self):
             if self._bounding_box_layer is None or len(self._bounding_box_layer.data) == 0:
@@ -566,11 +636,8 @@ if BoundingBoxLayer:
 
         def eventFilter(self, source: QObject, event: QEvent) -> bool:
             if event.type() == QEvent.Close:
-                self.release_clipper()
-                if self.crop_image_layer is not None:
-                    self.viewer.layers.remove(self.crop_image_layer)
-                    self.viewer.layers.remove(self.crop_mask_layer)
-                    self.viewer.window.remove_dock_widget(self.projections_widget)
+                self.release_selection()
+                self._saved_view = None
             elif event.type() == QEvent.ContextMenu and source is self:
                 menu = QMenu()
                 menu.addAction("Create layers")
