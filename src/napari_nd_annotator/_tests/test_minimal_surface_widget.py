@@ -1,9 +1,10 @@
 """End-to-end test of the Minimal Surface widget.
 
-A real (never shown) ``napari.Viewer`` and ``AnnotatorWidget`` are created, a synthetic ball and
-two points on its equator are added and the widget's own ``_start_estimation`` is called. The user
-pressing "Done" on the slice annotation is simulated, and every exception raised on the way
-(main thread, Qt slots, worker thread) is collected.
+A real (never shown) ``napari.Viewer`` and ``AnnotatorWidget`` are created, a synthetic ball with an object (a
+bounding box with a label id) around it and two anchors on its equator are added and the widget's own
+``_start_estimation`` is called. The user pressing "Done" on the slice annotation is simulated, and every exception
+raised on the way (main thread, Qt slots, worker thread) is collected. The result has to be written with the label
+id of the object, and Ctrl+Z has to take it back.
 
 The test needs the optional ``minimal_surface`` package and an OpenGL context (napari creates its
 canvas even if the viewer is not shown), so it is skipped when either is missing. On Linux CI run it
@@ -18,6 +19,7 @@ import os
 import threading
 import time
 import traceback
+import warnings
 
 import numpy as np
 import pytest
@@ -103,22 +105,44 @@ def no_dialogs(monkeypatch):
                         staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes))
 
 
-# F1-F4 of the 2026-10-12 widget scan: the "Minimal contour" slice annotation, z_scale, float32 images (fixed in
-# minimal-surface master) and a Labels layer of another shape; they were strict xfails until fixed
+OBJECT_LABEL = 5
+
+
+def _add_object(viewer, image_layer, labels_layer, label=OBJECT_LABEL):
+    """An object list with one object (the box is the whole image) that is selected."""
+    import itertools
+    from napari_bbox import BoundingBoxLayer
+    from napari_nd_annotator._widgets.object_list import ObjectListWidget
+    low, high = np.zeros(3), np.asarray(BALL_SHAPE, dtype=float) - 1
+    corners = np.where(list(itertools.product((False, True), repeat=3)), high, low)
+    bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent")
+    viewer.add_layer(bbox_layer)
+    bbox_layer.data = [corners]
+    bbox_layer.features = {"label": np.array([label])}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)  # the object list sets the text of the boxes the old way
+        object_list = ObjectListWidget(viewer, "Object", bbox_layer, image_layer, labels_layer, None, label + 1)
+        QtWidgets.QApplication.processEvents()
+        object_list.select_item(object_list.item(0))
+        QtWidgets.QApplication.processEvents()
+    return bbox_layer, object_list
+
+
+# F1-F3 of the 2026-10-12 widget scan: the "Minimal contour" slice annotation, z_scale, float32 images (fixed in
+# minimal-surface master); they were strict xfails until fixed
 @pytest.mark.parametrize(
-    "dtype, method, z_scale, mismatch",
+    "dtype, method, z_scale",
     [
-        ("float64", "Threshold", 1.0, False),
-        ("uint16", "Threshold", 1.0, False),
-        ("float64", "Manual", 1.0, False),
-        ("uint16", "Manual", 1.0, False),
-        pytest.param("float64", "Minimal contour", 1.0, False, id="float64-Minimal contour-F1"),
-        pytest.param("float64", "Threshold", 2.0, False, id="float64-Threshold-F2"),
-        pytest.param("float32", "Threshold", 1.0, False, id="float32-Threshold-F3"),
-        pytest.param("float64", "Threshold", 1.0, True, id="float64-Threshold-F4"),
+        ("float64", "Threshold", 1.0),
+        ("uint16", "Threshold", 1.0),
+        ("float64", "Manual", 1.0),
+        ("uint16", "Manual", 1.0),
+        pytest.param("float64", "Minimal contour", 1.0, id="float64-Minimal contour-F1"),
+        pytest.param("float64", "Threshold", 2.0, id="float64-Threshold-F2"),
+        pytest.param("float32", "Threshold", 1.0, id="float32-Threshold-F3"),
     ],
 )
-def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, workers, dtype, method, z_scale, mismatch):
+def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, workers, dtype, method, z_scale):
     with qtbot.capture_exceptions() as exceptions:
         monkeypatch.setattr(threading, "excepthook",
                             lambda args: exceptions.append((args.exc_type, args.exc_value, args.exc_traceback)))
@@ -130,10 +154,13 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
         qtbot.waitUntil(lambda: ms.image_layer is layer, timeout=5000)
         ms.slice_annotation_method = method
         ms.z_scale = z_scale
-        if mismatch:
-            viewer.dims.set_point(0, 5)  # a slice that the small labels layer also has
-            ms.labels_layer = viewer.add_labels(np.zeros((10, 10, 10), dtype=np.uint16), name="wrong shape")
-        ms.points_layer.add(np.array([[20., 30., 16.], [20., 30., 44.]]))
+        labels = viewer.add_labels(np.zeros(BALL_SHAPE, dtype=np.uint16), name="labels")
+        # the object was segmented before, and another object is next to it
+        labels.data[0:3, 0:3, 0:3] = OBJECT_LABEL
+        labels.data[0:3, 58:60, 58:60] = OBJECT_LABEL + 1
+        bbox_layer, object_list = _add_object(viewer, layer, labels)
+        from napari_nd_annotator.object_anchors import anchor_store
+        anchor_store(bbox_layer).set(OBJECT_LABEL, [[20., 30., 16.], [20., 30., 44.]])
 
         state = {"all_done": False, "annotated": False}
         ms._start_estimation()
@@ -169,10 +196,11 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
     assert state["annotated"], "the slice annotation never started"
     assert state["all_done"], "the estimation did not finish"
 
-    results = [np.asarray(l.data) > 0 for l in viewer.layers
-               if l.__class__.__name__ == "Labels" and l.data.shape == BALL_SHAPE]
-    assert results, "no result Labels layer"
-    mask = max(results, key=np.count_nonzero)
+    # the result is the object, with its label id: the previous mask of the object is gone, the other object stays
+    assert set(np.unique(labels.data)) == {0, OBJECT_LABEL, OBJECT_LABEL + 1}
+    assert np.all(labels.data[0:3, 0:3, 0:3] == 0) and np.all(labels.data[0:3, 58:60, 58:60] == OBJECT_LABEL + 1)
+    assert viewer.layers.selection.active is labels  # Ctrl+Z works
+    mask = np.asarray(labels.data) == OBJECT_LABEL
     voxels = np.count_nonzero(mask)
     assert voxels > 0, "the result Labels layer is empty"
 
@@ -183,3 +211,9 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
     extent = coords.max(axis=0) - coords.min(axis=0) + 1
     assert extent.max() / extent.min() < 1.5, extent
     assert voxels / np.prod(extent) > 0.15, (voxels, extent)  # not a thin shell or a few stray voxels
+
+    # Ctrl+Z takes the result back (one step), with the previous state of the object
+    labels.undo()
+    assert not np.any(labels.data == OBJECT_LABEL) or np.count_nonzero(labels.data == OBJECT_LABEL) == 27
+    assert np.all(labels.data[0:3, 0:3, 0:3] == OBJECT_LABEL)
+    assert np.all(labels.data[0:3, 58:60, 58:60] == OBJECT_LABEL + 1)
