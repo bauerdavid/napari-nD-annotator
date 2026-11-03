@@ -307,7 +307,7 @@ repall:
 
 		ix = (int)(path.x+0.0001f); iy = (int)(path.y+0.0001f);
 		dir.x = 0.0f; dir.y = 0.0f;
-		GradientCorrection(dir, ix, iy); // specific call (additive)
+		if (!GetSpeedMap()) GradientCorrection(dir, ix, iy); // specific call (additive); a speed map is isotropic
 		dir *= qc;
 
 		double minv(0);
@@ -376,6 +376,7 @@ void CRanders::DistanceCalculator()
 
 	double maxv(0);
 	m_velo.clear();
+	SWorkImg<double> *map = GetSpeedMap();
 
 	auto bsi = m_boundary.size();
 	m_velo.resize(bsi);
@@ -412,7 +413,7 @@ void CRanders::DistanceCalculator()
                 eikon = 1;
             }
 
-            double vnormed = gradlen / eikon;
+            double vnormed = map ? gradlen * (*map)[yy][xx] : gradlen / eikon;
 
             if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
             SVeloData sv(xx, yy, vnormed);
@@ -470,6 +471,7 @@ void CSplitter::DistanceCalculator()
 
 	double maxv(0);
 	m_velo.clear();
+	SWorkImg<double> *map = GetSpeedMap();
 	int tx = m_xdisto, ty = m_ydisto;
 
 	auto bsi = m_boundary.size();
@@ -499,7 +501,7 @@ void CSplitter::DistanceCalculator()
             if (eikon < 0) eikon = 0;
             eikon = Qn+sqrt(eikon);
 
-            double vnormed = gradlen/eikon;
+            double vnormed = map ? gradlen * (*map)[yy][xx] : gradlen/eikon;
             if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
 
             SVeloData sv(xx,yy,vnormed);
@@ -562,6 +564,7 @@ void CInhomog::DistanceCalculator()
 
 	double maxv(0);
 	m_velo.clear();
+	SWorkImg<double> *map = GetSpeedMap();
 
 	int bsi = m_boundary.size();
 	for (int ii = 0; ii < bsi; ++ii) {
@@ -572,8 +575,7 @@ void CInhomog::DistanceCalculator()
 		double nx = 0.5f * (m_field[yy][xx + 1] - m_field[yy][xx - 1]);
 		double ny = 0.5f * (m_field[yy + 1][xx] - m_field[yy - 1][xx]);
 		double gradlen = sqrtf(nx * nx + ny * ny);
-        double q = 1./(0.01 + (1.0 - 0.01) * ((double)exp(-m_expfac * q/m_maxauxgrad)));
-		double vnormed = gradlen * data[yy][xx];
+		double vnormed = gradlen * (map ? (*map)[yy][xx] : data[yy][xx]);
 		if (vnormed < 1e-9f) vnormed = 1e-9f; // causality criterion
 		if (maxv < vnormed) maxv = vnormed;
 
