@@ -52,7 +52,7 @@ _ANNOTATOR_LABELS_SHORTCUTS = ("extend_mask", "reduce_mask", "decrement_label", 
 
 @magicclass(name="Annotation Toolbox")
 class AnnotatorWidget(MagicTemplate):
-    autofill_objects = vfield(bool).with_options(tooltip="When drawing labels,"
+    autofill_objects = vfield(bool).with_options(value=True, tooltip="When drawing labels,"
                                               " close the drawn curve and fill its area after releasing the mouse")
 
     @magicclass(widget_type="tabbed")
