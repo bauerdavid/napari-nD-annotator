@@ -10,7 +10,7 @@ from qtpy.QtGui import QImage, QPixmap, QHideEvent, QShowEvent
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
     QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox, QCheckBox
 from napari import Viewer
-from napari.layers import Image, Labels
+from napari.layers import Image, Labels, Layer
 from napari.utils.events import EventEmitter
 from scipy.ndimage import find_objects
 
@@ -28,6 +28,7 @@ except ImportError:
 import itertools
 import csv
 import weakref
+from typing import NamedTuple, Optional
 
 import PIL.Image as PilImage
 
@@ -41,12 +42,31 @@ _OBJECT_LISTS = weakref.WeakSet()
 selected_object_changed = EventEmitter(source=None, type_name="selected_object_changed")
 
 
-def selected_object(viewer):
-    """The object selected in the object list of ``viewer`` as ``(label, bbox_min, bbox_max, image_layer)``, or None.
+class SelectedObject(NamedTuple):
+    """The object selected in the object list: its label id, the inclusive corners of its bounding box (data
+    coordinates of ``image_layer``) and the layers of the object list it belongs to."""
+    label: int
+    bbox_min: np.ndarray
+    bbox_max: np.ndarray
+    image_layer: Layer
+    labels_layer: Optional[Layer]
+    bbox_layer: Layer
 
-    The bounding box corners are inclusive and in data (index) coordinates of ``image_layer``, the image layer
-    of the object list. Lets other widgets work on the selected object without a reference to the object list.
-    """
+
+def find_object_list(viewer):
+    """The object list of ``viewer`` that has a bounding box layer, or None."""
+    viewer = unwrap_viewer(viewer)
+    for object_list in list(_OBJECT_LISTS):
+        try:
+            if object_list.viewer is viewer and object_list.bounding_box_layer is not None:
+                return object_list
+        except RuntimeError:  # the widget was deleted
+            continue
+    return None
+
+
+def selected_object_info(viewer) -> Optional[SelectedObject]:
+    """The object selected in the object list of ``viewer``, or None."""
     viewer = unwrap_viewer(viewer)
     for object_list in list(_OBJECT_LISTS):
         try:
@@ -54,13 +74,26 @@ def selected_object(viewer):
                 continue
             item = object_list.item(object_list.selected_idx)
             image_layer = object_list.image_layer
+            labels_layer = object_list.mask_layer
+            bbox_layer = object_list.bounding_box_layer
         except RuntimeError:  # the widget was deleted
             continue
-        if item is None or image_layer is None:
+        if item is None or image_layer is None or bbox_layer is None:
             continue
         bounding_box = np.asarray(item.bounding_box)
-        return item.idx, bounding_box[0].copy(), bounding_box[1].copy(), image_layer
+        return SelectedObject(item.idx, bounding_box[0].copy(), bounding_box[1].copy(), image_layer, labels_layer,
+                              bbox_layer)
     return None
+
+
+def selected_object(viewer):
+    """The object selected in the object list of ``viewer`` as ``(label, bbox_min, bbox_max, image_layer)``, or None.
+
+    The bounding box corners are inclusive and in data (index) coordinates of ``image_layer``, the image layer
+    of the object list. Lets other widgets work on the selected object without a reference to the object list.
+    """
+    selected = selected_object_info(viewer)
+    return None if selected is None else selected[:4]
 
 
 def slice_len(slice_, count=None):
@@ -748,6 +781,24 @@ if BoundingBoxLayer:
 
         def next_index(self):
             return next(self.indices)
+
+        def add_object(self, box_min, box_max):
+            """Adds an object with a bounding box (inclusive data corners of the image layer) and selects it.
+
+            Returns the label id of the new object.
+            """
+            layer = self.bounding_box_layer
+            ndim = len(box_min)
+            corners = np.where(list(itertools.product((False, True), repeat=ndim)), box_max, box_min).astype(float)
+            if self.image_layer is not None:
+                corners = corners * self.image_layer.scale + self.image_layer.translate  # the layer is in world coordinates
+            label = self.next_index()
+            labels = list(layer.features["label"]) + [label] if "label" in layer.features else [label]
+            layer.data = [np.asarray(box) for box in layer.data] + [corners]
+            layer.features = {"label": np.asarray(labels, dtype=int)}
+            self.update_items()
+            self.select_item(self.item(self.count() - 1))
+            return label
 
         def _on_bb_double_click(self, layer=None, event=None):
             if len(self.bounding_box_layer.selected_data) == 0:
