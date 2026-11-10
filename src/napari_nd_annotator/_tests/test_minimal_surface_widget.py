@@ -40,6 +40,11 @@ try:
 except ImportError as e:
     _skip("the optional minimal_surface package is not installed: %r" % e)
 
+try:
+    import napari_bbox  # noqa: F401
+except ImportError as e:
+    _skip("the napari-bbox plugin (the object list) is not installed: %r" % e)
+
 BALL_CENTER = (20, 30, 30)
 BALL_SHAPE = (40, 60, 60)
 TIMEOUT_MS = 90_000
