@@ -86,7 +86,9 @@ jobs:
 
       - name: Install napari and the plugin
         run: |
-          python -m pip install napari PyQt6 napari-bbox pytest pytest-qt
+          # napari 0.9.2 is the version this widget was verified on (README); napari-bbox 0.1.x cannot create its layer
+          # controls on napari 0.10 (layer.text.size is None), which the object list needs
+          python -m pip install napari==0.9.2 PyQt6 napari-bbox pytest pytest-qt
           python -m pip install .
           # opencv-python bundles its own Qt platform plugins, which can abort the process at the first
           # QApplication; the headless build of the same version has none
