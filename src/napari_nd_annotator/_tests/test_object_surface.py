@@ -292,3 +292,13 @@ def test_new_object_is_centered_on_the_shown_slice_in_2D(viewer, scene, surface_
     assert np.all(selected.bbox_min >= 0) and np.all(selected.bbox_max <= np.asarray(SHAPE) - 1)
     # in 2D the object is shown on the original layers, and anchors can still be suggested
     assert selected.image_layer is image_layer
+
+
+def test_writing_the_mask_in_3D_does_not_upset_the_interpolation_widget(viewer, object_scene):
+    # data_setitem emits labels_update like painting does; the labels layer is shown in 3D, so it has no slice dimension
+    image_layer, object_list, ms = object_scene
+    labels = object_list.mask_layer
+    assert viewer.layers.selection.active is labels and viewer.dims.ndisplay == 3
+    write_object_mask(labels, LABEL, _ball_mask(), np.array([5., 8., 9.]))
+    _process_events()
+    assert np.count_nonzero(labels.data == LABEL) == np.count_nonzero(_ball_mask())

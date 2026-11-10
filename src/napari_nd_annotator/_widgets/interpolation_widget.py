@@ -657,7 +657,10 @@ class InterpolationWidget(MagicTemplate):
             self._labels_update_tmp = (event.data, event.offset)
             return
         self._recompute_pending = False
-        idx = layer_slice_indices(self._active_labels_layer)[self.dimension]
+        dimension = self.dimension
+        if dimension is None:  # e.g. the labels layer is shown in 3D, there is no slice to interpolate
+            return
+        idx = layer_slice_indices(self._active_labels_layer)[dimension]
         self._drop_interpolation_of_annotated_slice(idx)
         self._execute_interpolation(idx)
 
