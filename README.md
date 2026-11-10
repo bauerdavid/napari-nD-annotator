@@ -129,7 +129,7 @@ https://user-images.githubusercontent.com/36735863/188876826-1771acee-93ba-4905-
 ### Minimal surface
 The `Minimal Surface` tab segments a whole 3D object from two points on its surface (see [Minimal surface](#minimal-surface) for the optional dependency). It works on the object selected in the object list, an object being a bounding box with a label id:
 
- 1. Select an object in the object list, or press `New object` to add one (then adjust its bounding box in the 3D view). The status line of the tab shows the selected object and how many of its two anchors are set.
+ 1. Select an object in the object list (create its bounding box with the `Object List` widget). The status line of the tab shows the selected object and how many of its two anchors are set.
  2. Set the two anchors of the object, roughly opposite each other on its surface:
     * in the 3D view, click (without dragging) on the object. The anchor is placed where the ray under the cursor first enters the image data inside the bounding box (the half-maximum edge of the first bright structure on the ray), so click on what you see. A right click removes the last anchor, a third left click starts a new pair. Anchors are only placed while the `Minimal Surface` tab is shown and `Place anchors in 3D` is checked.
     * or with `Suggest anchors`, which proposes the pair from the bounding box.

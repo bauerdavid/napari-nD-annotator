@@ -33,10 +33,10 @@ from napari.utils.notifications import show_info
 from ._utils import ProgressWidget, QDoubleSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
 from ._utils.clipping import SCAFFOLD_KEY
-from .._helper_functions import layer_dims_displayed, layer_dims_not_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer
+from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer
 from ..surface_anchors import suggest_anchors_in_image
 from ..object_anchors import anchor_store, pick_along_ray, pick_on_plane
-from .object_list import find_object_list, selected_object_changed, selected_object_info
+from .object_list import selected_object_changed, selected_object_info
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 
@@ -581,10 +581,6 @@ class EstimationWorker(QObject):
 class _MinimalSurfaceWidget(MagicTemplate):
     image_layer_combobox = field(Image, label="Image")
     object_status_label = field(widget_type="Label", label="Object")
-    new_object_button = field(widget_type=PushButton, name="New object").with_options(
-        tooltip="Add an object (a bounding box with a new label id) to the object list and select it."
-                " Edit its bounding box in the 3D view."
-    )
     place_anchors_checkbox = field(bool, label="Place anchors in 3D").with_options(
         value=True,
         tooltip="In the 3D view, click (without dragging) inside the bounding box of the selected object to place its"
@@ -703,7 +699,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _start_estimation(self):
         selected = self._selected_object()
         if selected is None:
-            warnings.warn("No object selected: select one in the object list or press 'New object'")
+            warnings.warn("No object selected: select one in the object list")
             return
         image, labels = selected.image_layer, selected.labels_layer
         if image.ndim != 3 or image.rgb:
@@ -809,7 +805,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def __post_init__(self):
         self.call_button.clicked.connect(self._start_estimation)
         self.suggest_anchors_button.clicked.connect(self._suggest_anchors)
-        self.new_object_button.clicked.connect(self._new_object)
         self.clear_anchors_button.clicked.connect(self._clear_anchors)
         self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
                                     + self.native.children()[1].verticalScrollBar().sizeHint().width()
@@ -1131,7 +1126,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
             container.enabled = is_enabled
         self.call_button.enabled = is_enabled
         self.suggest_anchors_button.enabled = is_enabled
-        self.new_object_button.enabled = is_enabled
         self.clear_anchors_button.enabled = is_enabled
         self.place_anchors_checkbox.enabled = is_enabled
         self.anchor_placement_combobox.enabled = is_enabled
@@ -1218,28 +1212,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
             return
         anchor_store(selected.bbox_layer).clear(selected.label)
         self._update_object_state()
-
-    def _new_object(self):
-        object_list = find_object_list(self._viewer)
-        if object_list is None:
-            warnings.warn("Add a bounding box layer to the object list first (Plugins > Object List: choose the image,"
-                          " the labels layer and 'Create Bounding Box layer')")
-            return
-        image_layer = object_list.image_layer
-        if image_layer is None or image_layer.ndim != 3 or image_layer.rgb or object_list.mask_layer is None:
-            warnings.warn("Choose a 3D image and a labels layer in the object list first")
-            return
-        if self.call_button.text != "Run":
-            warnings.warn("Wait until the estimation finishes before adding an object")
-            return
-        shape = np.asarray(image_layer.data.shape[:3])
-        center = (shape - 1) / 2
-        if self._viewer.dims.ndisplay == 2:  # the slice that is shown
-            point = image_layer.world_to_data(self._viewer.dims.point[-3:])
-            for dim in layer_dims_not_displayed(image_layer):
-                center[dim] = np.clip(round(point[dim]), 0, shape[dim] - 1)
-        half = np.maximum(shape // 6, 4)
-        object_list.add_object(np.clip(np.round(center - half), 0, shape - 1), np.clip(np.round(center + half), 0, shape - 1))
 
     @anchor_placement_combobox.connect
     def _on_placement_changed(self, mode=None):

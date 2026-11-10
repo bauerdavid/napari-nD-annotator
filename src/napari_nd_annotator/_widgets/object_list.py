@@ -53,18 +53,6 @@ class SelectedObject(NamedTuple):
     bbox_layer: Layer
 
 
-def find_object_list(viewer):
-    """The object list of ``viewer`` that has a bounding box layer, or None."""
-    viewer = unwrap_viewer(viewer)
-    for object_list in list(_OBJECT_LISTS):
-        try:
-            if object_list.viewer is viewer and object_list.bounding_box_layer is not None:
-                return object_list
-        except RuntimeError:  # the widget was deleted
-            continue
-    return None
-
-
 def selected_object_info(viewer) -> Optional[SelectedObject]:
     """The object selected in the object list of ``viewer``, or None."""
     viewer = unwrap_viewer(viewer)
@@ -781,24 +769,6 @@ if BoundingBoxLayer:
 
         def next_index(self):
             return next(self.indices)
-
-        def add_object(self, box_min, box_max):
-            """Adds an object with a bounding box (inclusive data corners of the image layer) and selects it.
-
-            Returns the label id of the new object.
-            """
-            layer = self.bounding_box_layer
-            ndim = len(box_min)
-            corners = np.where(list(itertools.product((False, True), repeat=ndim)), box_max, box_min).astype(float)
-            if self.image_layer is not None:
-                corners = corners * self.image_layer.scale + self.image_layer.translate  # the layer is in world coordinates
-            label = self.next_index()
-            labels = list(layer.features["label"]) + [label] if "label" in layer.features else [label]
-            layer.data = [np.asarray(box) for box in layer.data] + [corners]
-            layer.features = {"label": np.asarray(labels, dtype=int)}
-            self.update_items()
-            self.select_item(self.item(self.count() - 1))
-            return label
 
         def _on_bb_double_click(self, layer=None, event=None):
             if len(self.bounding_box_layer.selected_data) == 0:

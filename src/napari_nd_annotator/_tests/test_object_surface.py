@@ -145,6 +145,16 @@ def test_image_plane_placement(viewer, object_scene):
     assert abs(_anchors(ms)[1, 2] - (BALL_CENTER[2] + BALL_RADIUS)) < 1.5
 
 
+def _add_second_object(object_list):
+    import itertools
+    layer = object_list.bounding_box_layer
+    corners = np.where(list(itertools.product((False, True), repeat=3)), [30, 45, 45], [10, 15, 15]).astype(float)
+    layer.data = [np.asarray(box) for box in layer.data] + [corners]
+    layer.features = {"label": np.array([LABEL, LABEL + 1])}
+    object_list.update_items()
+    _process_events()
+
+
 def test_anchors_belong_to_their_object(viewer, scene, surface_tab):
     image_layer, object_list, ms = scene
     viewer.dims.ndisplay = 3
@@ -152,7 +162,8 @@ def test_anchors_belong_to_their_object(viewer, scene, surface_tab):
     _click(ms, viewer, (20, 30, -20), (0, 0, 1))
     _click(ms, viewer, (20, 30, 80), (0, 0, -1))
     first = _anchors(ms).copy()
-    ms.new_object_button.native.click()
+    _add_second_object(object_list)
+    object_list.select_item(object_list.item(1))
     _process_events()
     selected = selected_object_info(viewer)
     assert selected.label == LABEL + 1 and object_list.count() == 2
@@ -202,12 +213,6 @@ def test_run_checks_the_labels_layer_of_the_object_list(viewer, scene, surface_t
         ms._start_estimation()
     assert ms.call_button.text == "Run"
     object_list.mask_layer.data = np.zeros(SHAPE, dtype=np.uint16)
-
-
-def test_new_object_needs_an_object_list(viewer, annotator, surface_tab):
-    viewer.add_image(np.zeros((10, 10, 10)))
-    with pytest.warns(UserWarning, match="bounding box layer"):
-        surface_tab._new_object()
 
 
 def _labels(viewer, dtype=np.uint16):
@@ -280,18 +285,7 @@ def test_settings_saved_with_the_old_widget_still_load(viewer, annotator, tmp_pa
     assert ms.alpha == pytest.approx(.2) and ms.z_scale == pytest.approx(3.)
 
 
-def test_new_object_is_centered_on_the_shown_slice_in_2D(viewer, scene, surface_tab):
-    image_layer, object_list, ms = scene
-    viewer.dims.ndisplay = 2
-    viewer.dims.set_point(0, 10)
-    ms.new_object_button.native.click()
-    _process_events()
-    selected = selected_object_info(viewer)
-    assert selected.label == LABEL + 1
-    assert (selected.bbox_min[0] + selected.bbox_max[0]) / 2 == pytest.approx(10, abs=1)
-    assert np.all(selected.bbox_min >= 0) and np.all(selected.bbox_max <= np.asarray(SHAPE) - 1)
-    # in 2D the object is shown on the original layers, and anchors can still be suggested
-    assert selected.image_layer is image_layer
+
 
 
 def test_writing_the_mask_in_3D_does_not_upset_the_interpolation_widget(viewer, object_scene):
