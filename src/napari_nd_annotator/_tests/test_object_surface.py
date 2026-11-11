@@ -296,3 +296,32 @@ def test_writing_the_mask_in_3D_does_not_upset_the_interpolation_widget(viewer, 
     write_object_mask(labels, LABEL, _ball_mask(), np.array([5., 8., 9.]))
     _process_events()
     assert np.count_nonzero(labels.data == LABEL) == np.count_nonzero(_ball_mask())
+
+
+def test_automatic_slice_annotation_needs_a_feature_that_tells_the_object_from_the_background(viewer, object_scene):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = object_scene
+    if "Automatic (distances)" not in msw.annotation_methods():
+        pytest.skip("this minimal_surface build has no automatic slice annotation")
+    assert ms.used_feature == msw.GRADIENT
+    ms.slice_annotation_method = "Automatic (distances)"
+    assert ms.used_feature == msw.GRADIENT_INTENSITY  # chosen for the user
+    ms.used_feature_combobox.value = msw.GRADIENT
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    with pytest.warns(UserWarning, match="Gradient \+ intensity"):
+        ms._start_estimation()
+    assert ms.call_button.text == "Run"
+
+
+def test_gradient_intensity_features():
+    from napari_nd_annotator._widgets.minimal_surface_widget import gradient_intensity_features
+    zz, yy, xx = np.mgrid[:30, :30, :30]
+    distance = np.sqrt((zz - 15) ** 2 + (yy - 15) ** 2 + (xx - 15) ** 2)
+    image = 1 / (1 + np.exp((distance - 8) / 1.2))
+    features = gradient_intensity_features(image)
+    assert features.shape == image.shape and features.min() == 0 and features.max() == 1
+    # the edge is the highest, the background is higher than the inside: this is what tells them apart
+    assert features[15, 15, 23] > features[15, 15, 28] > features[15, 15, 15]
+    # flat images do not divide by zero
+    assert np.all(gradient_intensity_features(np.ones((5, 5, 5))) == 0)

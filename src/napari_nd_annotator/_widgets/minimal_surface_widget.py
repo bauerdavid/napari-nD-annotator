@@ -9,7 +9,7 @@ from random import shuffle, seed
 
 #image processing modules
 import skimage.measure, skimage.morphology
-from scipy.ndimage import gaussian_filter, zoom
+from scipy.ndimage import gaussian_filter, gaussian_gradient_magnitude, zoom
 
 #UI
 from magicclass import magicclass, MagicTemplate, field, vfield, set_design
@@ -53,8 +53,9 @@ except ImportError:
 
 
 GRADIENT = "Gradient"
+GRADIENT_INTENSITY = "Gradient + intensity"
 CUSTOM = "Custom"
-FEATURE_KEYS = [GRADIENT, CUSTOM]
+FEATURE_KEYS = [GRADIENT, GRADIENT_INTENSITY, CUSTOM]
 # FEATURES = {
 #     ASSYM_GRADIENT: GRADIENT_BASED,
 #     SYM_GRADIENT: INTENSITY_BASED,
@@ -146,6 +147,27 @@ def write_object_mask(labels_layer, label, mask, offset, bbox=None):
     labels_layer.data_setitem(indices, updated[changed])
 
 
+def gradient_intensity_features(image, delta=.1):
+    """High where the gradient is high and the intensity is low, in 0..1 (the feature of the minimal-surface README).
+
+    Unlike the plain gradient it tells the object from the background, which the automatic slice annotation needs.
+    """
+    low, high = image.min(), np.quantile(image, .95)
+    image = np.clip((image - low) / (high - low), 0, 1) if high > low else np.zeros_like(image, dtype=float)
+    gradient = gaussian_gradient_magnitude(image, 1.)
+    features = gradient * (1 + (delta - 1) * image ** 2) + delta * (1 - image ** 2)
+    span = features.max() - features.min()
+    return (features - features.min()) / span if span > 0 else np.zeros_like(features)
+
+
+def annotation_methods():
+    """The slice annotation methods; the automatic ones need a minimal-surface build that has them."""
+    methods = list(EstimationWorker.ANNOTATION_METHODS)
+    if minimal_surface is not None and hasattr(minimal_surface.MinimalSurfaceCalculator, "set_initial_plane_method"):
+        methods += list(EstimationWorker.AUTOMATIC_METHODS)
+    return methods
+
+
 class EstimationWorker(QObject):
     image_data_received = Signal(str, object, object)
     mask_data_received = Signal(object, object)
@@ -160,6 +182,10 @@ class EstimationWorker(QObject):
     MANUAL_ANNOTATION = "Manual"
     THRESHOLD_ANNOTATION = "Threshold"
     MINIMAL_CONTOUR_ANNOTATION = "Minimal contour"
+    DISTANCE_AUTOMATIC = "Automatic (distances)"
+    PHASE_FIELD_AUTOMATIC = "Automatic (phase field)"
+    # the methods that find the contour in the meeting plane without the user, by the name the estimator knows them by
+    AUTOMATIC_METHODS = {DISTANCE_AUTOMATIC: "distance", PHASE_FIELD_AUTOMATIC: "phase_field"}
     ANNOTATION_METHODS = [MANUAL_ANNOTATION, THRESHOLD_ANNOTATION, MINIMAL_CONTOUR_ANNOTATION]
 
     def __init__(self, viewer, minimal_contour_widget: MinimalContourWidget, minimal_surface_widget, parent=None):
@@ -187,6 +213,7 @@ class EstimationWorker(QObject):
         self.blur_func = None
         self.init_slice_annotation_fun = None
         self.finish_slice_annotation_fun = None
+        self.initial_plane_method = None
         self.bb_layer = None
         self.slice_image_layer = None
         self.slice_labels_layer = None
@@ -248,7 +275,8 @@ class EstimationWorker(QObject):
         self.init_slice_annotation_fun()
 
     def finish_slice_annotation(self):
-        self.finish_slice_annotation_fun()
+        if self.finish_slice_annotation_fun is not None:
+            self.finish_slice_annotation_fun()
         self.minimal_surface_widget.call_button.enabled = False
         if self.slice_labels_layer is not None:
             self.slice_annotation = self.slice_labels_layer.data > 0
@@ -306,8 +334,9 @@ class EstimationWorker(QObject):
         self.n_iter = n_iter
         self.use_meeting_plane_points = use_meeting_plane_points
         self.blur_func = blur_func
-        self.init_slice_annotation_fun = self.slice_annotation_methods[slice_annotation_method]
-        self.finish_slice_annotation_fun = self.finish_annotation_methods[slice_annotation_method]
+        self.initial_plane_method = EstimationWorker.AUTOMATIC_METHODS.get(slice_annotation_method)
+        self.init_slice_annotation_fun = self.slice_annotation_methods.get(slice_annotation_method)
+        self.finish_slice_annotation_fun = self.finish_annotation_methods.get(slice_annotation_method)
         self.z_scale = z_scale
         self.use_gradient = use_gradient
 
@@ -444,7 +473,10 @@ class EstimationWorker(QObject):
             for i in range(len(self.points) // 2):
                 estimator = minimal_surface.MinimalSurfaceCalculator()
                 self.estimators.append(estimator)
-                estimator.set_initial_plane_calculator(self.segment_initial_slice)
+                if self.initial_plane_method is None:
+                    estimator.set_initial_plane_calculator(self.segment_initial_slice)
+                else:
+                    estimator.set_initial_plane_method(self.initial_plane_method)
                 estimator.set_using_meeting_points(self.use_meeting_plane_points)
                 self.hook_callbacks(i)
                 bounding_box = pts_2_bb(self.points[2 * i], self.points[2 * i + 1], self.image.shape,
@@ -648,7 +680,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if image_layer.ndim != 3 or image_layer.rgb:
             warnings.warn("Suggesting anchors needs a 3D image layer")
             return
-        if self.used_feature != "Gradient":
+        if self.used_feature == CUSTOM:
             show_info("The suggestion uses the gradient feature, not the custom one")
         result = suggest_anchors_in_image(
             image_layer.data, bbox_min, bbox_max, resample=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
@@ -721,13 +753,18 @@ class _MinimalSurfaceWidget(MagicTemplate):
             return
         self._run_target = (labels, selected.label, (selected.bbox_min, selected.bbox_max))
         image_data = image.data
-        phi_func = None if (self.used_feature == "Gradient") else self._run_feature_extractor
+        if self.slice_annotation_method in EstimationWorker.AUTOMATIC_METHODS and self.used_feature == GRADIENT:
+            warnings.warn("The automatic slice annotation needs a feature that tells the object from the background:"
+                          " choose 'Gradient + intensity' (or a custom feature) under Image Features")
+            return
+        phi_func = {GRADIENT: None, GRADIENT_INTENSITY: gradient_intensity_features}.get(
+            self.used_feature, self._run_feature_extractor)
         points_data = anchors.copy()
         z_scale = self.z_scale
         alpha = self.alpha
         beta = self.beta
         n_iter = self.iterations
-        use_gradient = self.used_feature == "Gradient"
+        use_gradient = self.used_feature == GRADIENT
         use_meeting_plane_points = True
         estimation_worker = EstimationWorker(self._viewer, self.minimal_contour_widget, self)
         estimation_worker.initialize(image_data, phi_func, points_data, beta, alpha, n_iter, use_meeting_plane_points, self.slice_annotation_method, self._blur_image if self.is_blurring_enabled else None, z_scale, use_gradient)
@@ -776,7 +813,13 @@ class _MinimalSurfaceWidget(MagicTemplate):
     conductance_spinbox = field(float, location=BlurringWidget).with_options(max=100, value=9)
     cad_iterations_spinbox = field(int, label="Iterations", location=BlurringWidget).with_options(min=1, max=20, value=5)
 
-    slice_annotation_method = vfield(str, location=SliceAnnotationWidget).with_choices(EstimationWorker.ANNOTATION_METHODS)
+    slice_annotation_method = vfield(str, location=SliceAnnotationWidget).with_options(
+        choices=annotation_methods(),
+        tooltip="How the contour of the object in the plane where the fronts of the two anchors meet is found."
+                " Manual, Threshold, Minimal contour: you annotate it. Automatic (distances): from the distances of"
+                " the anchors in the plane, which is instant (falls back to the phase field if they give nothing"
+                " usable). Automatic (phase field): evolves a phase field in the plane, which takes seconds."
+    )
 
     def __init__(self):
         self._collapsible_group = CollapsibleContainerGroup()
@@ -890,6 +933,11 @@ class _MinimalSurfaceWidget(MagicTemplate):
     @set_design(text="Try", location=BlurringWidget,)
     def try_blurring(self):
         self._toggle_blur_demo()
+
+    @slice_annotation_method.connect
+    def _on_annotation_method_changed(self, method):
+        if method in EstimationWorker.AUTOMATIC_METHODS and self.used_feature == GRADIENT:
+            self.used_feature_combobox.value = GRADIENT_INTENSITY
 
     @used_feature_combobox.connect
     def _on_feature_changed(self, feature):

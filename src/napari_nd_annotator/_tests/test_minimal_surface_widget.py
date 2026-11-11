@@ -145,6 +145,9 @@ def _add_object(viewer, image_layer, labels_layer, label=OBJECT_LABEL):
         pytest.param("float64", "Minimal contour", 1.0, id="float64-Minimal contour-F1"),
         pytest.param("float64", "Threshold", 2.0, id="float64-Threshold-F2"),
         pytest.param("float32", "Threshold", 1.0, id="float32-Threshold-F3"),
+        pytest.param("float64", "Automatic (distances)", 1.0, id="float64-Automatic-distances"),
+        pytest.param("uint16", "Automatic (distances)", 2.0, id="uint16-Automatic-distances-z2"),
+        pytest.param("float64", "Automatic (phase field)", 1.0, id="float64-Automatic-phase-field"),
     ],
 )
 def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, workers, dtype, method, z_scale):
@@ -157,6 +160,10 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
         layer = viewer.add_image(_ball_image(dtype), name="ball")
         ms.image_layer = layer
         qtbot.waitUntil(lambda: ms.image_layer is layer, timeout=5000)
+        from napari_nd_annotator._widgets import minimal_surface_widget as msw
+        automatic = method in msw.EstimationWorker.AUTOMATIC_METHODS
+        if method not in msw.annotation_methods():
+            pytest.skip("this minimal_surface build has no automatic slice annotation")
         ms.slice_annotation_method = method
         ms.z_scale = z_scale
         labels = viewer.add_labels(np.zeros(BALL_SHAPE, dtype=np.uint16), name="labels")
@@ -198,7 +205,8 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
 
     assert not exceptions, "exceptions raised:\n" + "\n".join(
         "".join(traceback.format_exception(*e)) for e in exceptions)
-    assert state["annotated"], "the slice annotation never started"
+    # the automatic methods need no annotation: no dialog or temporary layers, the view stays as it is
+    assert state["annotated"] != automatic, "the slice annotation %s" % ("started" if automatic else "never started")
     assert state["all_done"], "the estimation did not finish"
 
     # the result is the object, with its label id: the previous mask of the object is gone, the other object stays
@@ -209,8 +217,10 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
     voxels = np.count_nonzero(mask)
     assert voxels > 0, "the result Labels layer is empty"
 
-    # roughly a ball around the centre: size close to the 4139 voxels seen on a working setup, centred, compact
-    assert 2000 < voxels < 10000, voxels
+    # roughly a ball around the centre, centred, compact. The annotated methods give a smaller blob (4139 voxels seen
+    # on a working setup); the automatic ones find the ball (radius 14, 11494 voxels) from the anchors alone
+    low, high = (8000, 13000) if automatic else (2000, 10000)
+    assert low < voxels < high, voxels
     coords = np.argwhere(mask)
     assert np.allclose(coords.mean(axis=0), BALL_CENTER, atol=3), coords.mean(axis=0)
     extent = coords.max(axis=0) - coords.min(axis=0) + 1
