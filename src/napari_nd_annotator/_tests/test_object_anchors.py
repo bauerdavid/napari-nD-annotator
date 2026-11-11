@@ -4,7 +4,8 @@ import pytest
 from scipy.ndimage import gaussian_filter
 
 from napari_nd_annotator.object_anchors import (
-    AnchorStore, METADATA_KEY, anchor_store, clip_ray_to_box, pick_along_ray, pick_on_plane)
+    AnchorStore, METADATA_KEY, anchor_store, box_reference, clip_ray_to_box, nearest_point_to_ray, pick_along_ray,
+    pick_on_plane)
 
 CENTER = np.array([20., 30., 30.])
 RADIUS = 12.
@@ -138,3 +139,36 @@ def test_store_of_a_layer_lives_in_its_metadata():
     # replaced metadata
     layer.metadata = {}
     assert len(anchor_store(layer).get(2)) == 0
+
+
+def test_nearest_point_to_ray():
+    points = [[10., 0., 0.], [10., 0., 20.], [30., 5., 5.]]
+    direction = [1., 0., 0.]
+    # the ray along the first axis through the first point; the others are further than the radius
+    assert nearest_point_to_ray(points, [0., 0., 0.], direction, 2.) == 0
+    assert nearest_point_to_ray(points, [0., 0., 20.], direction, 2.) == 1
+    assert nearest_point_to_ray(points, [0., 5., 5.], direction, 2.) == 2
+    # too far from all of them
+    assert nearest_point_to_ray(points, [0., 0., 10.], direction, 2.) is None
+    # the closest of two within the radius; the direction does not need to be a unit vector
+    assert nearest_point_to_ray([[0., 1., 0.], [0., .5, 0.]], [-5., 0., 0.], [3., 0., 0.], 2.) == 1
+    assert nearest_point_to_ray([], [0., 0., 0.], direction, 2.) is None
+
+
+def test_pick_with_a_given_reference_is_the_same():
+    image = _ball(noise=20)
+    start, end = CENTER - [0, 0, 40], CENTER + [0, 0, 40]
+    reference = box_reference(image, *BOX)
+    assert reference[0] < reference[1]
+    np.testing.assert_allclose(pick_along_ray(image, start, end, *BOX, reference=reference),
+                               pick_along_ray(image, start, end, *BOX))
+
+
+def test_nearest_point_to_ray_ignores_points_behind_the_depth_limit():
+    points = [[10., 0., 0.], [30., 0., 0.]]
+    direction = [1., 0., 0.]
+    assert nearest_point_to_ray(points, [0., 0., 0.], direction, 1., max_depth=12.) == 0
+    assert nearest_point_to_ray(points, [0., 0., 0.], direction, 1., max_depth=5.) is None
+    # the near one is a bit off the ray, the far one is hidden: nothing is grabbed
+    assert nearest_point_to_ray([[10., 3., 0.], [30., 0., 0.]], [0., 0., 0.], direction, 1., max_depth=12.) is None
+    assert nearest_point_to_ray(points, [0., 0., 0.], direction, 1.) in (0, 1)

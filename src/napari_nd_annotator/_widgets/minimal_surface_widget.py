@@ -35,7 +35,7 @@ from ._utils.callbacks import keep_layer_on_top
 from ._utils.clipping import SCAFFOLD_KEY
 from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer
 from ..surface_anchors import suggest_anchors_in_image
-from ..object_anchors import anchor_store, pick_along_ray, pick_on_plane
+from ..object_anchors import anchor_store, box_reference, nearest_point_to_ray, pick_along_ray, pick_on_plane
 from .object_list import selected_object_changed, selected_object_info
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
@@ -617,7 +617,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         value=True,
         tooltip="In the 3D view, click (without dragging) inside the bounding box of the selected object to place its"
                 " anchors on the surface, right-click to remove the last one. A third click starts a new pair."
-                " Only while this tab is shown and the object list has an object selected."
+                " Drag an anchor to move it along the surface. Only while this tab is shown and the object list has"
+                " an object selected."
     )
     anchor_placement_combobox = field(widget_type="ComboBox", label="Placement").with_options(
         choices=ANCHOR_PLACEMENTS,
@@ -627,6 +628,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
     )
     clear_anchors_button = field(widget_type=PushButton, name="Clear anchors").with_options(
         tooltip="Remove the anchors of the selected object"
+    )
+    anchor_distance_slider = field(float, label="Anchor distance (%)", widget_type="FloatSlider").with_options(
+        min=25., max=200., step=1., value=100.,
+        tooltip="Moves the two anchors of the selected object further from (above 100) or closer to (below 100) the"
+                " center of its bounding box, along the line from the center to each anchor, relative to where they"
+                " were when you suggested, placed or dragged them."
     )
 
     @magicclass(widget_type="collapsible", name="Image Features")
@@ -827,6 +834,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._run_target = None
         self._anchors_layer = None
         self._plane_image_layer = None
+        self._anchor_base = None
         self.blurred_layer = None
         self._try_blurring_button = None
         self.blurring_progress_widget = ProgressWidget(message="blurring...")
@@ -1175,6 +1183,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.call_button.enabled = is_enabled
         self.suggest_anchors_button.enabled = is_enabled
         self.clear_anchors_button.enabled = is_enabled
+        self.anchor_distance_slider.enabled = is_enabled and self._anchor_base is not None
         self.place_anchors_checkbox.enabled = is_enabled
         self.anchor_placement_combobox.enabled = is_enabled
         self.suggestion_mode_combobox.enabled = is_enabled
@@ -1201,6 +1210,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             self.object_status_label.value = "none selected"
             self._show_anchors(None, np.zeros((0, 3)), "")
             self._apply_placement_mode()
+            self._reset_anchor_base(None)
             return
         image_layer = selected.image_layer
         if image_layer.ndim == 3 and not image_layer.rgb and image_layer is not self.image_layer:
@@ -1211,6 +1221,37 @@ class _MinimalSurfaceWidget(MagicTemplate):
             if image_layer.ndim == 3 else np.zeros((0, 3))
         self._show_anchors(image_layer, world, "Anchors of object %d [display only]" % selected.label)
         self._apply_placement_mode(selected)
+        self._reset_anchor_base(selected)
+
+    def _refresh_anchors_display(self, selected):
+        """Shows the current anchors of the object, while they are dragged or scaled."""
+        image_layer = selected.image_layer
+        anchors = anchor_store(selected.bbox_layer).get(selected.label)
+        self.object_status_label.value = "%d (%d/2 anchors)" % (selected.label, len(anchors))
+        world = np.asarray([image_layer.data_to_world(point) for point in anchors]).reshape(-1, 3)
+        self._show_anchors(image_layer, world, "Anchors of object %d [display only]" % selected.label)
+
+    def _reset_anchor_base(self, selected):
+        """The distance slider works relative to the anchors as they are now: it goes back to 100%."""
+        pair = None
+        if selected is not None:
+            anchors = anchor_store(selected.bbox_layer).get(selected.label)
+            pair = anchors.copy() if len(anchors) == 2 else None
+        self._anchor_base = pair
+        with self.anchor_distance_slider.changed.blocked():
+            self.anchor_distance_slider.value = 100.
+        self.anchor_distance_slider.enabled = pair is not None and self.call_button.enabled
+
+    @anchor_distance_slider.connect
+    def _on_anchor_distance_changed(self, percent):
+        selected = self._selected_object()
+        if selected is None or self._anchor_base is None:
+            return
+        center = (selected.bbox_min + selected.bbox_max) / 2
+        points = center + percent / 100. * (self._anchor_base - center)
+        shape = np.asarray(selected.image_layer.data.shape[:3])
+        anchor_store(selected.bbox_layer).set(selected.label, np.clip(points, 0, shape - 1))
+        self._refresh_anchors_display(selected)
 
     def _show_anchors(self, image_layer, world_points, name):
         """Shows the anchors of the selected object on a Points layer that the plugin owns."""
@@ -1302,9 +1343,37 @@ class _MinimalSurfaceWidget(MagicTemplate):
             return None
         return selected
 
+    def _anchor_under_cursor(self, selected, event):
+        """The index of the visible anchor of the object that the cursor ray of ``event`` passes through, or None.
+
+        An anchor behind the surface that the ray hits is hidden by it, so it is not grabbed: clicking the object
+        from the other side places a new anchor there.
+        """
+        image_layer = selected.image_layer
+        anchors = anchor_store(selected.bbox_layer).get(selected.label)
+        if len(anchors) == 0:
+            return None
+        world = np.asarray([image_layer.data_to_world(point) for point in anchors])
+        position = np.asarray(event.position)[-3:]
+        direction = np.asarray(event.view_direction)[-3:]
+        max_depth = None
+        hit = self._pick_anchor(selected, event.position, event.view_direction, event.dims_displayed)
+        if hit is not None:
+            extent = (selected.bbox_max - selected.bbox_min + 1) * np.asarray(image_layer.scale)[-3:]
+            tolerance = max(2., .1 * np.linalg.norm(extent))  # the anchors are not exactly where this picks
+            max_depth = (np.asarray(image_layer.data_to_world(hit)) - position) @ (direction / np.linalg.norm(direction))
+            max_depth += tolerance
+        return nearest_point_to_ray(world, position, direction, .75 * self._anchor_size(image_layer), max_depth)
+
     def _on_canvas_mouse(self, viewer, event):
-        if self._placing_anchors(event) is None:
+        selected = self._placing_anchors(event)
+        if selected is None:
             return
+        if event.button == 1:
+            grabbed = self._anchor_under_cursor(selected, event)
+            if grabbed is not None:
+                yield from self._drag_anchor(selected, grabbed, event)
+                return
         button = event.button
         position, view_direction, dims_displayed = event.position, event.view_direction, event.dims_displayed
         dragging = False
@@ -1314,6 +1383,30 @@ class _MinimalSurfaceWidget(MagicTemplate):
             yield
         if not dragging:
             self.place_anchor(button, position, view_direction, dims_displayed)
+
+    def _drag_anchor(self, selected, index, event):
+        """Moves an anchor to where the cursor ray hits the surface (like placing it) until the mouse is released."""
+        store = anchor_store(selected.bbox_layer)
+        reference = None
+        if self.anchor_placement_combobox.value != IMAGE_PLANE:
+            reference = box_reference(selected.image_layer.data, selected.bbox_min, selected.bbox_max)
+        camera = viewer_camera(self._viewer)
+        saved = camera.mouse_pan, camera.mouse_zoom
+        camera.mouse_pan = camera.mouse_zoom = False  # the view does not rotate with the anchor
+        try:
+            yield
+            while event.type == "mouse_move":
+                point = self._pick_anchor(selected, event.position, event.view_direction, event.dims_displayed,
+                                          reference)
+                if point is not None:
+                    anchors = store.get(selected.label)
+                    anchors[index] = point
+                    store.set(selected.label, anchors)
+                    self._refresh_anchors_display(selected)
+                yield
+        finally:
+            camera.mouse_pan, camera.mouse_zoom = saved
+        self._update_object_state()
 
     def place_anchor(self, button, position, view_direction, dims_displayed):
         """A click in the 3D view: the left button places an anchor of the selected object, the right removes one."""
@@ -1334,7 +1427,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             store.add(selected.label, point)
         self._update_object_state()
 
-    def _pick_anchor(self, selected, position, view_direction, dims_displayed):
+    def _pick_anchor(self, selected, position, view_direction, dims_displayed, reference=None):
         """The anchor under the cursor ray (data coordinates of the image of the object), or None."""
         image_layer = selected.image_layer
         start, end = image_layer.get_ray_intersections(
@@ -1344,7 +1437,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if self.anchor_placement_combobox.value == IMAGE_PLANE and image_layer.depiction == "plane":
             return pick_on_plane(start, end, image_layer.plane.position, image_layer.plane.normal,
                                  selected.bbox_min, selected.bbox_max)
-        return pick_along_ray(image_layer.data, start, end, selected.bbox_min, selected.bbox_max)
+        return pick_along_ray(image_layer.data, start, end, selected.bbox_min, selected.bbox_max,
+                              reference=reference)
 
 if minimal_surface is not None:
     import SimpleITK as sitk

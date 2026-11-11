@@ -8,6 +8,7 @@ of napari and Qt; coordinates are data (index) coordinates of the image layer of
   so that they follow the bounding box layer and survive the selection of other objects.
 - :func:`pick_along_ray`: the point where the cursor ray first enters the data inside a bounding box.
 - :func:`pick_on_plane`: the point where the cursor ray crosses a plane inside a bounding box.
+- :func:`nearest_point_to_ray`: the anchor under the cursor, to grab it.
 """
 import weakref
 from typing import Optional
@@ -15,7 +16,8 @@ from typing import Optional
 import numpy as np
 from scipy.ndimage import map_coordinates
 
-__all__ = ["METADATA_KEY", "AnchorStore", "anchor_store", "clip_ray_to_box", "pick_along_ray", "pick_on_plane"]
+__all__ = ["METADATA_KEY", "AnchorStore", "anchor_store", "clip_ray_to_box", "box_reference", "pick_along_ray",
+           "pick_on_plane", "nearest_point_to_ray"]
 
 METADATA_KEY = "nd_annotator_anchors"
 _STORES = weakref.WeakKeyDictionary()
@@ -97,7 +99,23 @@ def clip_ray_to_box(start, end, box_min, box_max) -> Optional[tuple]:
     return t_enter, t_exit
 
 
-def pick_along_ray(volume, start, end, box_min, box_max, fraction=.5, min_contrast=.2, step=.5) -> Optional[np.ndarray]:
+def box_reference(volume, box_min, box_max) -> tuple:
+    """``(background, peak)``: the 1st and 99th percentile of the volume inside the box (inclusive voxel corners).
+
+    Computed on a strided subsample, so it is cheap for big boxes. :func:`pick_along_ray` takes it as ``reference``
+    to avoid recomputing it for every position of a dragged anchor.
+    """
+    shape = np.asarray(volume.shape)
+    corner_low = np.clip(np.ceil(np.asarray(box_min, dtype=float)).astype(int), 0, shape - 1)
+    corner_high = np.clip(np.floor(np.asarray(box_max, dtype=float)).astype(int) + 1, 1, shape)
+    box = volume[tuple(slice(a, b) for a, b in zip(corner_low, corner_high))]
+    stride = max(int(np.ceil((box.size / 1e6) ** (1 / box.ndim))), 1)
+    background, peak = np.percentile(np.asarray(box[(slice(None, None, stride),) * box.ndim]), (1, 99))
+    return float(background), float(peak)
+
+
+def pick_along_ray(volume, start, end, box_min, box_max, fraction=.5, min_contrast=.2, step=.5,
+                   reference=None) -> Optional[np.ndarray]:
     """Where a ray first enters the data inside a bounding box.
 
     The ray from ``start`` to ``end`` (data coordinates, e.g. from ``layer.get_ray_intersections``) is limited to the
@@ -107,7 +125,8 @@ def pick_along_ray(volume, start, end, box_min, box_max, fraction=.5, min_contra
     ``fraction=.5`` the half-maximum edge of the first bright structure on the ray, which is the visible surface of
     a blurred object. Returns None if the ray misses the box, or if nothing on it rises above the background by at
     least ``min_contrast`` of ``peak - background``. If the ray starts inside the structure, the point is where it
-    enters the box. The result is in the data coordinates of the ray.
+    enters the box. The result is in the data coordinates of the ray. ``reference`` is ``(background, peak)``
+    from :func:`box_reference`, computed here if not given.
     """
     start = np.asarray(start, dtype=float)
     end = np.asarray(end, dtype=float)
@@ -124,11 +143,7 @@ def pick_along_ray(volume, start, end, box_min, box_max, fraction=.5, min_contra
     crop = np.asarray(volume[tuple(slice(a, b) for a, b in zip(low, high))])
     profile = map_coordinates(crop, (points - low).T, order=1, mode="nearest", output=np.float32)
 
-    corner_low = np.clip(np.ceil(np.asarray(box_min, dtype=float)).astype(int), 0, shape - 1)
-    corner_high = np.clip(np.floor(np.asarray(box_max, dtype=float)).astype(int) + 1, 1, shape)
-    box = volume[tuple(slice(a, b) for a, b in zip(corner_low, corner_high))]
-    stride = max(int(np.ceil((box.size / 1e6) ** (1 / box.ndim))), 1)
-    background, peak = np.percentile(np.asarray(box[(slice(None, None, stride),) * box.ndim]), (1, 99))
+    background, peak = box_reference(volume, box_min, box_max) if reference is None else reference
     top = profile.max()
     if top - background < min_contrast * (peak - background) or top <= background:
         return None
@@ -157,3 +172,23 @@ def pick_on_plane(start, end, plane_position, plane_normal, box_min, box_max) ->
     if np.any(point < np.asarray(box_min, dtype=float) - .5) or np.any(point > np.asarray(box_max, dtype=float) + .5):
         return None
     return point
+
+
+def nearest_point_to_ray(points, ray_position, ray_direction, max_distance, max_depth=None) -> Optional[int]:
+    """The index of the point closest to a ray, if it is within ``max_distance`` of it, else None.
+
+    All in the same coordinates, e.g. the world coordinates of the cursor ray and of the anchors. Points further along
+    the ray than ``max_depth`` (measured from ``ray_position``) are ignored: they are hidden behind what the ray hit.
+    """
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    if len(points) == 0:
+        return None
+    direction = np.asarray(ray_direction, dtype=float)
+    direction = direction / np.linalg.norm(direction)
+    offsets = points - np.asarray(ray_position, dtype=float)
+    depths = offsets @ direction
+    distances = np.linalg.norm(offsets - np.outer(depths, direction), axis=1)
+    if max_depth is not None:
+        distances = np.where(depths <= max_depth, distances, np.inf)
+    nearest = int(np.argmin(distances))
+    return nearest if distances[nearest] <= max_distance else None

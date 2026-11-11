@@ -18,6 +18,7 @@ from .test_suggest_anchors_widget import (  # noqa: E402,F401
 
 from napari_nd_annotator._widgets.minimal_surface_widget import write_object_mask  # noqa: E402
 from napari_nd_annotator._widgets.object_list import selected_object_info  # noqa: E402
+from napari_nd_annotator._helper_functions import viewer_camera  # noqa: E402
 from napari_nd_annotator.object_anchors import anchor_store  # noqa: E402
 
 LABEL = 3  # the label of the object of the scene
@@ -68,8 +69,8 @@ def test_clicks_place_the_anchors_on_the_surface(viewer, object_scene):
     # the plugin's display layer shows them, in world coordinates
     np.testing.assert_allclose(ms._anchors_layer.data, [image_layer.data_to_world(p) for p in points])
     assert not ms._anchors_layer.editable
-    # a third click starts a new pair
-    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    # a third click, away from the anchors, starts a new pair
+    _click(ms, viewer, (20, 36, -20), (0, 0, 1))
     assert len(_anchors(ms)) == 1
 
 
@@ -325,3 +326,129 @@ def test_gradient_intensity_features():
     assert features[15, 15, 23] > features[15, 15, 28] > features[15, 15, 15]
     # flat images do not divide by zero
     assert np.all(gradient_intensity_features(np.ones((5, 5, 5))) == 0)
+
+
+def _drag(ms, viewer, press, moves, watch=None):
+    """Press at ``press`` (position, direction), move to each of ``moves``, release. ``watch`` is called after each move."""
+    event = SimpleNamespace(type="mouse_press", button=1, modifiers=(), position=tuple(press[0]),
+                            view_direction=tuple(np.asarray(press[1], dtype=float)), dims_displayed=(0, 1, 2))
+    callback = ms._on_canvas_mouse(viewer, event)
+    next(callback, None)
+    for position, direction in moves:
+        event.type = "mouse_move"
+        event.position, event.view_direction = tuple(position), tuple(np.asarray(direction, dtype=float))
+        next(callback, None)
+        if watch is not None:
+            watch()
+    event.type = "mouse_release"
+    for _ in callback:
+        pass
+
+
+@pytest.fixture
+def pair_scene(viewer, object_scene):
+    """The object scene with the anchors on both sides of the ball (along the last axis)."""
+    image_layer, object_list, ms = object_scene
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    return image_layer, object_list, ms
+
+
+def test_dragging_an_anchor_moves_it_along_the_surface(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    first, second = _anchors(ms).copy()
+    camera = viewer_camera(viewer)
+    states = []
+    # grab the anchor on the near side (the ray goes through it) and move the cursor up in the first axis' neighbour
+    _drag(ms, viewer, ((20, 30, -20), (0, 0, 1)), [((20, 33, -20), (0, 0, 1)), ((20, 36, -20), (0, 0, 1))],
+          watch=lambda: states.append((camera.mouse_pan, camera.mouse_zoom)))
+    anchors = _anchors(ms)
+    assert len(anchors) == 2
+    np.testing.assert_allclose(anchors[1], second)  # the other one stays
+    assert abs(np.linalg.norm(anchors[0] - BALL_CENTER) - BALL_RADIUS) < 1.5  # still on the surface
+    assert abs(anchors[0][1] - 36) < 1e-6 and anchors[0][2] > first[2]  # under the cursor, on the near side
+    # the view does not rotate during the drag, and can afterwards
+    assert states == [(False, False)] * 2
+    assert (camera.mouse_pan, camera.mouse_zoom) == (True, True)
+    np.testing.assert_allclose(ms._anchors_layer.data[0], image_layer.data_to_world(anchors[0]))
+
+
+def test_dragging_through_the_other_anchor_moves_the_far_one(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    first, second = _anchors(ms).copy()
+    _drag(ms, viewer, ((20, 30, 80), (0, 0, -1)), [((20, 24, 80), (0, 0, -1))])
+    anchors = _anchors(ms)
+    np.testing.assert_allclose(anchors[0], first)
+    assert abs(anchors[1][1] - 24) < 1e-6 and abs(np.linalg.norm(anchors[1] - BALL_CENTER) - BALL_RADIUS) < 1.5
+
+
+def test_pressing_an_anchor_without_moving_does_nothing(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    before = _anchors(ms).copy()
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    np.testing.assert_allclose(_anchors(ms), before)
+    assert len(_anchors(ms)) == 2
+
+
+def test_a_drag_that_misses_the_data_leaves_the_anchor(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    before = _anchors(ms).copy()
+    _drag(ms, viewer, ((20, 30, -20), (0, 0, 1)), [((20, 5, -20), (0, 0, 1))])  # beside the ball
+    np.testing.assert_allclose(_anchors(ms), before)
+
+
+def test_dragging_away_from_the_anchors_rotates_the_view(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    before = _anchors(ms).copy()
+    camera = viewer_camera(viewer)
+    states = []
+    _drag(ms, viewer, ((20, 36, -20), (0, 0, 1)), [((20, 40, -20), (0, 0, 1))],
+          watch=lambda: states.append((camera.mouse_pan, camera.mouse_zoom)))
+    np.testing.assert_allclose(_anchors(ms), before)
+    assert states == [(True, True)]
+
+
+def test_distance_slider_moves_the_anchors_from_and_to_the_center(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    base = _anchors(ms).copy()
+    center = np.array([20., 30., 30.])  # the center of the bounding box of the scene
+    assert ms.anchor_distance_slider.enabled and ms.anchor_distance_slider.value == 100
+    ms.anchor_distance_slider.value = 150
+    np.testing.assert_allclose(_anchors(ms), center + 1.5 * (base - center))
+    np.testing.assert_allclose(ms._anchors_layer.data[0], image_layer.data_to_world(_anchors(ms)[0]))
+    ms.anchor_distance_slider.value = 50
+    np.testing.assert_allclose(_anchors(ms), center + .5 * (base - center))
+    ms.anchor_distance_slider.value = 100
+    np.testing.assert_allclose(_anchors(ms), base)
+    # dragging an anchor makes the new positions the ones the slider is relative to
+    ms.anchor_distance_slider.value = 150
+    _drag(ms, viewer, ((20, 30, 80), (0, 0, -1)), [((20, 24, 80), (0, 0, -1))])
+    assert ms.anchor_distance_slider.value == 100
+    moved = _anchors(ms).copy()
+    ms.anchor_distance_slider.value = 50
+    np.testing.assert_allclose(_anchors(ms), center + .5 * (moved - center))
+    # so does clicking
+    ms.anchor_distance_slider.value = 100
+    _click(ms, viewer, (20, 36, -20), (0, 0, 1))  # a new pair, with one anchor
+    assert not ms.anchor_distance_slider.enabled and ms.anchor_distance_slider.value == 100
+
+
+def test_distance_slider_keeps_the_anchors_in_the_image(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    ms.anchor_distance_slider.value = 200
+    assert np.all(_anchors(ms) >= 0) and np.all(_anchors(ms) <= np.asarray(SHAPE) - 1)
+
+
+def test_distance_slider_follows_the_selected_object(viewer, scene, surface_tab):
+    image_layer, object_list, ms = scene
+    assert not ms.anchor_distance_slider.enabled
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    assert not ms.anchor_distance_slider.enabled  # no anchors yet
+    ms._suggest_anchors()
+    assert ms.anchor_distance_slider.enabled
+    suggested = _anchors(ms).copy()
+    ms.anchor_distance_slider.value = 130
+    assert not np.allclose(_anchors(ms), suggested)
+    ms.clear_anchors_button.native.click()
+    assert not ms.anchor_distance_slider.enabled and ms.anchor_distance_slider.value == 100
