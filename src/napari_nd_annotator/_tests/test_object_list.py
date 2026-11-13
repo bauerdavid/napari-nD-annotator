@@ -134,7 +134,27 @@ def test_bounding_box_is_in_data_coordinates(scene):
     np.testing.assert_array_equal(object_list.item(0).bounding_box, [BBOX_MIN, BBOX_MAX])
 
 
-BOX_LAYER_TRANSFORMS = [((3., 1., 1.), (0., 0., 0.)), ((3., 1., 1.), (5., 2., 3.)), ((1.5, 2., .5), (-4., 1., 0.))]
+def test_new_boxes_do_not_inherit_the_highlight_of_the_selected_object(viewer, scene):
+    """Selecting a box in the layer copies its edge color to the boxes drawn next, which must not be the highlight."""
+    _, labels, object_list = scene
+    layer = object_list.bounding_box_layer
+    green = np.array(layer.edge_color[0])
+    _select_object(viewer, labels, object_list)
+    np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])  # the selected object is highlighted
+    layer.selected_data = {0}  # clicking the highlighted box
+    assert layer.current_edge_color != "red"
+    np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])  # it stays highlighted
+    layer.selected_data = set()
+    corners = np.where(list(itertools.product((False, True), repeat=3)), [8, 30, 35], [7, 20, 30]) * SCALE + TRANSLATE
+    layer.add(corners)  # what drawing a box does
+    np.testing.assert_allclose(layer.edge_color[1], green)
+    np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])
+    # unselecting the object gives its box the color it had
+    object_list.select_item(object_list.item(0))
+    np.testing.assert_allclose(layer.edge_color[0], green)
+
+
+BOX_LAYER_TRANSFORMS =[((3., 1., 1.), (0., 0., 0.)), ((3., 1., 1.), (5., 2., 3.)), ((1.5, 2., .5), (-4., 1., 0.))]
 
 
 @pytest.fixture(params=BOX_LAYER_TRANSFORMS, ids=["scale", "scale+translate", "other"])
