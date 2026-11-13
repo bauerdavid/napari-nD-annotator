@@ -67,8 +67,20 @@ public:
 	    mEndY = endY;
 	    GetMaxAuxGrad();
 	}
+	// Per-pixel isotropic speed (> 0) that replaces the metric of the method (not owned); null switches it off
+	void SetSpeedMap(SWorkImg<double> *p) {
+		m_pSpeedMap = p;
+	}
     virtual void CalcImageQuant() = 0;
 protected:
+	// The speed map if it matches the current image size, otherwise null
+	SWorkImg<double> *GetSpeedMap() {
+		if (m_pSpeedMap && m_pSpeedMap->xs == m_spacex && m_pSpeedMap->ys == m_spacey)
+			return m_pSpeedMap;
+		return 0;
+	}
+	SWorkImg<double> *m_pSpeedMap = 0;
+
 	void InitEnvironment(int spacex, int spacey);
 	void UpdateDistanceMap(double maxv);
 	void GetMaxAuxGrad();
@@ -344,6 +356,11 @@ struct SControl
 	    m_Randers.SetBoundaries(startX,startY,endX, endY);
 		m_Splitter.SetBoundaries(startX,startY,endX, endY);
 		m_Inhomog.SetBoundaries(startX,startY,endX, endY);
+	}
+	void SetSpeedMap(SWorkImg<double> *p) {
+		m_Randers.SetSpeedMap(p);
+		m_Splitter.SetSpeedMap(p);
+		m_Inhomog.SetSpeedMap(p);
 	}
 	// Prepare all data terms from color image (for sequential use)
 	void InitEnvironmentAllMethods(SWorkImg<double> &red, SWorkImg<double> &green, SWorkImg<double> &blue) {
