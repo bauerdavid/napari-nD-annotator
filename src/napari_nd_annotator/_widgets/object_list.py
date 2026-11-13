@@ -650,8 +650,10 @@ if BoundingBoxLayer:
                 return []
             b_data = np.asarray(self._bounding_box_layer.data)
             if self.image_layer is not None:
-                # the bounding boxes are in world coordinates, the item bounding boxes in data (index) ones
-                b_data = (b_data - self.image_layer.translate) / self.image_layer.scale
+                # the data of the bounding box layer is in its own coordinates (the layer may have a scale and
+                # a translate), the item bounding boxes are in data (index) coordinates of the image layer
+                b_data = np.asarray([[self.image_layer.world_to_data(self._bounding_box_layer.data_to_world(point))
+                                      for point in box] for box in b_data])
             b_data = np.round(b_data).astype(int)
             return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
@@ -709,8 +711,9 @@ if BoundingBoxLayer:
             while event.type == "mouse_move":
                 yield
             self._mouse_down = False
-            new_data = np.asarray(layer.data)
-            # the bounding boxes are in world coordinates
+            # the data of the layer is in its own coordinates, the image extent is in world coordinates
+            new_data = np.asarray([[layer.data_to_world(point) for point in box] for box in layer.data]) \
+                .reshape((len(layer.data), -1, layer.ndim))
             if self.image_layer:
                 im_size = self.image_layer.data.shape
                 if self.image_layer.rgb:
@@ -724,7 +727,8 @@ if BoundingBoxLayer:
                     or np.any(np.all(new_data < world_min, 1))):
                 layer.data = previous_data
             if len(new_data) > len(previous_data):
-                layer.data[-1][:] = np.clip(layer.data[-1], world_min, world_max - self.image_layer.scale)
+                clipped = np.clip(new_data[-1], world_min, world_max - self.image_layer.scale)
+                layer.data[-1][:] = [layer.world_to_data(point) for point in clipped]
                 layer.data = layer.data
             self.update_items()
             if self.projections_widget is not None:
@@ -949,7 +953,9 @@ if BoundingBoxLayer:
         def bounding_boxes_from_labels(self):
             if self.labels.layer is None:
                 return
-            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
+            # the corners below are image indices, so the layer shares the transform of the image
+            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
+                                        scale=self.image_layer.scale, translate=self.image_layer.translate)
             bb_corners = find_objects(self.labels.layer.data)
             ids = []
             bbs = []

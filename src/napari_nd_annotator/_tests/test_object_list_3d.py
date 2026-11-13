@@ -13,7 +13,7 @@ from napari_nd_annotator._helper_functions import viewer_camera  # noqa: E402
 from napari_nd_annotator._widgets._utils.clipping import SCAFFOLD_KEY, is_scaffold  # noqa: E402
 from .test_object_list import (  # noqa: E402,F401  (the fixtures are used by their names)
     BBOX_MAX, BBOX_MIN, OBJECT_ID, SCALE, TRANSLATE,
-    _add_objects, _delete_box, _process_events, _select_object, scene, viewer,
+    _add_objects, _delete_box, _process_events, _select_object, scaled_box_layer, scene, viewer,
 )
 
 
@@ -63,6 +63,13 @@ def test_selection_clips_the_original_layers_to_the_bounding_box(viewer, scene):
         # the first plane is the lower one of the first axis, half a voxel outside the box, in world coordinates
         first = layer.experimental_clipping_planes[0]
         np.testing.assert_allclose(first.position[0], (BBOX_MIN[0] - .5) * SCALE[0] + TRANSLATE[0])
+
+
+def test_clipping_with_a_box_layer_that_has_its_own_scale(viewer, scaled_box_layer):
+    image, labels, object_list, _ = scaled_box_layer
+    _select_3d(viewer, labels, object_list)
+    for layer in (image, labels):
+        np.testing.assert_array_equal(_kept_voxels(viewer, layer), _bbox_voxels(layer.data.shape))
 
 
 def test_selection_with_a_transposed_view(viewer, scene):

@@ -134,6 +134,32 @@ def test_bounding_box_is_in_data_coordinates(scene):
     np.testing.assert_array_equal(object_list.item(0).bounding_box, [BBOX_MIN, BBOX_MAX])
 
 
+BOX_LAYER_TRANSFORMS = [((3., 1., 1.), (0., 0., 0.)), ((3., 1., 1.), (5., 2., 3.)), ((1.5, 2., .5), (-4., 1., 0.))]
+
+
+@pytest.fixture(params=BOX_LAYER_TRANSFORMS, ids=["scale", "scale+translate", "other"])
+def scaled_box_layer(viewer, scene, request):
+    """The bounding box layer of ``scene`` replaced by one with a scale and translate of its own."""
+    from napari_bbox import BoundingBoxLayer
+    image, labels, object_list = scene
+    scale, translate = request.param
+    bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent", scale=scale, translate=translate)
+    viewer.add_layer(bbox_layer)
+    corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX, BBOX_MIN) * SCALE + TRANSLATE
+    # the same box in world space as the one of the scene, in the data coordinates of the box layer
+    bbox_layer.data = [(corners - translate) / scale]
+    bbox_layer.features = {"label": np.array([OBJECT_ID])}
+    object_list.bounding_box_layer = bbox_layer
+    _process_events()
+    return image, labels, object_list, bbox_layer
+
+
+def test_box_layer_with_its_own_scale_and_translate(scaled_box_layer):
+    """The data of the box layer is in the coordinates of the box layer, not in world coordinates."""
+    _, _, object_list, _ = scaled_box_layer
+    np.testing.assert_array_equal(object_list.item(0).bounding_box, [BBOX_MIN, BBOX_MAX])
+
+
 def test_selecting_an_object_creates_no_layers_and_copies_no_data(viewer, scene):
     image, labels, object_list = scene
     layers, image_data, labels_data = list(viewer.layers), image.data, labels.data
