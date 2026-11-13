@@ -126,6 +126,22 @@ weighted sum.
 
 https://user-images.githubusercontent.com/36735863/188876826-1771acee-93ba-4905-982e-bfb459329659.mp4
 
+### Minimal surface
+The `Minimal Surface` tab segments a whole 3D object from two points on its surface (see [Minimal surface](#minimal-surface) for the optional dependency). It works on the object selected in the object list, an object being a bounding box with a label id:
+
+ 1. Select an object in the object list (create its bounding box with the `Object List` widget). The status line of the tab shows the selected object and how many of its two anchors are set.
+ 2. Set the two anchors of the object, roughly opposite each other on its surface:
+    * in the 3D view, click (without dragging) on the object. The anchor is placed where the ray under the cursor first enters the image data inside the bounding box (the half-maximum edge of the first bright structure on the ray), so click on what you see. A right click removes the last anchor, a third left click starts a new pair. To correct an anchor, drag it (press on it, not on the object behind it): it follows the cursor along the surface, like when it is placed, and the view does not rotate meanwhile. Anchors are only placed while the `Minimal Surface` tab is shown and `Place anchors in 3D` is checked.
+    * or with `Suggest anchors`, which proposes the pair from the bounding box.
+    * `Anchor distance (%)` moves the two anchors further from (above 100) or closer to (below 100) the center of the bounding box, along the line from the center to each anchor, relative to where they were when you last suggested, placed or dragged them. Use it to move suggested anchors onto the surface.
+    * if you prefer to place the anchors on a plane, set `Placement` to `Image plane`: the image is then shown with napari's plane depiction (`Shift`+drag moves the plane along its normal, double click sets its position) and the anchor is where the ray crosses the plane inside the bounding box.
+ 3. Choose how the contour of the object in the meeting plane of the two anchors is found (`Slice Annotation Method`, in the collapsed section of the tab):
+    * `Manual`, `Threshold` and `Minimal contour`: you annotate it on the plane when `Run` asks for it.
+    * `Automatic (distances)`: found from the distances of the two anchors in the plane, which takes a fraction of a second and needs no interaction. `Automatic (phase field)` evolves a phase field in the plane instead, which takes seconds. They need a minimal-surface build that has them and a feature that tells the object from the background, so choosing one switches `Image Features` to `Gradient + intensity` (the plain `Gradient` gives no usable contour, and `Run` refuses it).
+ 4. Press `Run`. The result is written to the labels layer of the object list with the label id of the object, so it can be undone with `Ctrl+Z`. The previous mask of the object (its voxels inside its bounding box and the box of the result) is replaced, voxels of other objects under the new mask are overwritten like when painting, and voxels of the object far outside that region stay.
+
+The anchors belong to the object: they are kept when other objects are selected, and are stored in the `metadata` of the bounding box layer. The selected object's anchors are shown on a display-only layer (named `Anchors of object ... [display only]`) that you do not need to select or edit; use `Clear anchors` or click again to change them. Placing anchors needs the 3D view; in 2D use `Suggest anchors`.
+
 ### Minimal contour
 This plugin can estimate a minimal contour, which is calculated from a point set on the edges of the object, which are provided by the user. This contour will follow some kind of image feature (pixels with high gradient or high/low intensity).
 Features:

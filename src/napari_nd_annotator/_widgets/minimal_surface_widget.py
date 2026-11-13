@@ -2,8 +2,6 @@ import warnings
 
 from magicgui.widgets import PushButton
 from time import sleep
-from copy import deepcopy
-from collections.abc import Iterable
 import numpy as np
 import itertools
 import colorsys
@@ -11,37 +9,34 @@ from random import shuffle, seed
 
 #image processing modules
 import skimage.measure, skimage.morphology
-from scipy.ndimage import gaussian_filter, zoom
+from scipy.ndimage import gaussian_filter, gaussian_gradient_magnitude, zoom
 
 #UI
 from magicclass import magicclass, MagicTemplate, field, vfield, set_design
 from magicclass.serialize import serialize
-from magicclass.widgets import FreeWidget
 
 from qtpy.QtCore import Signal, Qt, QObject, QThread
 from qtpy.QtWidgets import (
     QVBoxLayout,
     QLabel,
-    QCheckBox,
     QPushButton,
     QWidget,
-    QApplication,
-    QMessageBox
+    QApplication
 )
 
 import napari
-from napari.layers import Image, Labels, Points, Shapes, Layer
+from napari.layers import Image, Points, Shapes
 from napari.layers.labels._labels_constants import Mode
-from napari.utils.colormaps.standardize_color import transform_color
 from napari.utils.notifications import show_info
-from napari.layers._source import layer_source
 
 
-from ._utils import ProgressWidget, QDoubleSlider, QSymmetricDoubleRangeSlider, ScriptExecuteWidget
+from ._utils import ProgressWidget, QDoubleSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
+from ._utils.clipping import SCAFFOLD_KEY
 from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer
 from ..surface_anchors import suggest_anchors_in_image
-from .object_list import selected_object
+from ..object_anchors import anchor_store, box_reference, nearest_point_to_ray, pick_along_ray, pick_on_plane
+from .object_list import selected_object_changed, selected_object_info
 from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 
@@ -58,8 +53,9 @@ except ImportError:
 
 
 GRADIENT = "Gradient"
+GRADIENT_INTENSITY = "Gradient + intensity"
 CUSTOM = "Custom"
-FEATURE_KEYS = [GRADIENT, CUSTOM]
+FEATURE_KEYS = [GRADIENT, GRADIENT_INTENSITY, CUSTOM]
 # FEATURES = {
 #     ASSYM_GRADIENT: GRADIENT_BASED,
 #     SYM_GRADIENT: INTENSITY_BASED,
@@ -67,6 +63,13 @@ FEATURE_KEYS = [GRADIENT, CUSTOM]
 #     LOW_INTENSITY: INTENSITY_BASED,
 #     CUSTOM: INTENSITY_BASED
 # }
+
+# the estimator's correction is always on
+USE_CORRECTION = True
+
+IMAGE_PLANE = "Image plane"
+ANCHOR_PLACEMENTS = ["Ray pick", IMAGE_PLANE]
+ANCHOR_COLORS = ["red", "cyan"]
 
 SUGGESTION_MODES = {"Axis": "axis", "Fan (farthest pair)": "fan"}
 
@@ -89,10 +92,6 @@ def get_bb_corners(bb):
 def bb_2_slice(bb):
     bb_corners = get_bb_corners(bb).round().astype(int)
     return tuple(slice(bb_corners[0, i], bb_corners[1, i]) for i in range(3))
-
-
-def color_to_hex_string(rgb_tuple):
-    return '#%.2X%.2X%.2X' % rgb_tuple
 
 
 def generate_label_colors(n):
@@ -119,46 +118,54 @@ def generate_sphere_mask(shape):
     return mask
 
 
-class ColorPairsCallback:
-    def __init__(self, n_colors=50):
-        self.prev_selection = set()
-        self.prev_len = 0
-        self.prev_data = None
-        color_cycle = list(
-            map(lambda color_tuple: color_to_hex_string(color_tuple), generate_label_colors(n_colors)))
-        self.color_cycle = itertools.cycle(color_cycle)
-        self._last_color = None
+def write_object_mask(labels_layer, label, mask, offset, bbox=None):
+    """Writes a segmentation result into a labels layer as the object ``label``, as one undoable edit.
 
-    def __call__(self, event):
-        if getattr(event, "action", "add") not in ["add", "added"]:
-            return
-        points_layer = event.source
-        if len(points_layer.selected_data) > 1:
-            points_layer.selected_data = self.prev_selection
-            points_layer.refresh()
-            return
-        self.prev_selection = points_layer.selected_data.copy()
-        if len(points_layer.data) > self.prev_len:
-            if len(points_layer.data) % 2 == 1:
-                self._last_color = next(self.color_cycle)
-                # points_layer.current_face_color = new_color
-            points_layer.face_color[-1] = transform_color(self._last_color)
-            self.prev_data = points_layer.data.copy()
-        elif len(points_layer.data):
-            removed_idx = np.squeeze(np.argwhere(
-                np.all(np.any(~np.equal(self.prev_data[np.newaxis], points_layer.data[:, np.newaxis]), -1),
-                       axis=0)))
-            if removed_idx.ndim == 0:
-                removed_idx = int(removed_idx)
-                points_layer.selected_data.clear()
-                if removed_idx % 2 == 0 and removed_idx < len(points_layer.data):
-                    points_layer.selected_data.add(removed_idx)
-                elif removed_idx % 2 == 1:
-                    points_layer.selected_data.add(removed_idx - 1)
-                points_layer.remove_selected()
-        points_layer.refresh()
-        self.prev_data = points_layer.data
-        self.prev_len = len(points_layer.data)
+    ``mask`` is a boolean array whose corner is at the index ``offset``. The voxels under the mask take the label
+    whatever they held (as when painting). The previous mask of the object is replaced: the voxels of ``label`` inside
+    the region this touches, the union of the box of ``mask`` and ``bbox`` (the inclusive corners of the object's
+    bounding box), become background. Voxels of the object further away stay.
+    """
+    offset = np.asarray(offset).round().astype(int)
+    shape = np.asarray(labels_layer.data.shape)
+    low = np.clip(offset, 0, shape)
+    high = np.clip(offset + np.asarray(mask.shape), 0, shape)
+    if bbox is not None:
+        low = np.minimum(low, np.clip(np.floor(bbox[0]).astype(int), 0, shape))
+        high = np.maximum(high, np.clip(np.floor(bbox[1]).astype(int) + 1, 0, shape))
+    region_slice = tuple(slice(a, b) for a, b in zip(low, high))
+    region = np.asarray(labels_layer.data[region_slice])
+    updated = region.copy()
+    updated[region == label] = 0
+    mask_slice = tuple(slice(max(o, a) - o, min(o + m, b) - o) for o, m, a, b in zip(offset, mask.shape, low, high))
+    target_slice = tuple(slice(max(o, a) - a, min(o + m, b) - a) for o, m, a, b in zip(offset, mask.shape, low, high))
+    updated[target_slice][np.asarray(mask)[mask_slice] > 0] = label
+    changed = np.nonzero(updated != region)
+    if len(changed[0]) == 0:
+        return
+    indices = tuple(index + start for index, start in zip(changed, low))
+    labels_layer.data_setitem(indices, updated[changed])
+
+
+def gradient_intensity_features(image, delta=.1):
+    """High where the gradient is high and the intensity is low, in 0..1 (the feature of the minimal-surface README).
+
+    Unlike the plain gradient it tells the object from the background, which the automatic slice annotation needs.
+    """
+    low, high = image.min(), np.quantile(image, .95)
+    image = np.clip((image - low) / (high - low), 0, 1) if high > low else np.zeros_like(image, dtype=float)
+    gradient = gaussian_gradient_magnitude(image, 1.)
+    features = gradient * (1 + (delta - 1) * image ** 2) + delta * (1 - image ** 2)
+    span = features.max() - features.min()
+    return (features - features.min()) / span if span > 0 else np.zeros_like(features)
+
+
+def annotation_methods():
+    """The slice annotation methods; the automatic ones need a minimal-surface build that has them."""
+    methods = list(EstimationWorker.ANNOTATION_METHODS)
+    if minimal_surface is not None and hasattr(minimal_surface.MinimalSurfaceCalculator, "set_initial_plane_method"):
+        methods += list(EstimationWorker.AUTOMATIC_METHODS)
+    return methods
 
 
 class EstimationWorker(QObject):
@@ -172,9 +179,14 @@ class EstimationWorker(QObject):
     annotation_needed_signal = Signal(object, object)
     slice_annotations_done = Signal(int)
     object_annotated = Signal(int)
+    bounding_box_changed = Signal(object)  # layers must only be changed in the main thread
     MANUAL_ANNOTATION = "Manual"
     THRESHOLD_ANNOTATION = "Threshold"
     MINIMAL_CONTOUR_ANNOTATION = "Minimal contour"
+    DISTANCE_AUTOMATIC = "Automatic (distances)"
+    PHASE_FIELD_AUTOMATIC = "Automatic (phase field)"
+    # the methods that find the contour in the meeting plane without the user, by the name the estimator knows them by
+    AUTOMATIC_METHODS = {DISTANCE_AUTOMATIC: "distance", PHASE_FIELD_AUTOMATIC: "phase_field"}
     ANNOTATION_METHODS = [MANUAL_ANNOTATION, THRESHOLD_ANNOTATION, MINIMAL_CONTOUR_ANNOTATION]
 
     def __init__(self, viewer, minimal_contour_widget: MinimalContourWidget, minimal_surface_widget, parent=None):
@@ -194,7 +206,6 @@ class EstimationWorker(QObject):
         self.phi = None
         self.image = None
         self.points = None
-        self.use_correction = None
         self.beta = None
         self.alpha = None
         self.n_iter = None
@@ -203,6 +214,7 @@ class EstimationWorker(QObject):
         self.blur_func = None
         self.init_slice_annotation_fun = None
         self.finish_slice_annotation_fun = None
+        self.initial_plane_method = None
         self.bb_layer = None
         self.slice_image_layer = None
         self.slice_labels_layer = None
@@ -264,7 +276,8 @@ class EstimationWorker(QObject):
         self.init_slice_annotation_fun()
 
     def finish_slice_annotation(self):
-        self.finish_slice_annotation_fun()
+        if self.finish_slice_annotation_fun is not None:
+            self.finish_slice_annotation_fun()
         self.minimal_surface_widget.call_button.enabled = False
         if self.slice_labels_layer is not None:
             self.slice_annotation = self.slice_labels_layer.data > 0
@@ -313,18 +326,18 @@ class EstimationWorker(QObject):
     def finish_minimal_contour_annotation(self):
         self.manual_annotation_dialog.hide()
 
-    def initialize(self, image, phi_func, points, use_correction, beta, alpha, n_iter, use_meeting_plane_points, slice_annotation_method="Manual", blur_func=None, z_scale=1., use_gradient=True):
+    def initialize(self, image, phi_func, points, beta, alpha, n_iter, use_meeting_plane_points, slice_annotation_method="Manual", blur_func=None, z_scale=1., use_gradient=True):
         self.image = image
         self.phi_func = phi_func
         self.points = points
-        self.use_correction = use_correction
         self.beta = beta
         self.alpha = alpha
         self.n_iter = n_iter
         self.use_meeting_plane_points = use_meeting_plane_points
         self.blur_func = blur_func
-        self.init_slice_annotation_fun = self.slice_annotation_methods[slice_annotation_method]
-        self.finish_slice_annotation_fun = self.finish_annotation_methods[slice_annotation_method]
+        self.initial_plane_method = EstimationWorker.AUTOMATIC_METHODS.get(slice_annotation_method)
+        self.init_slice_annotation_fun = self.slice_annotation_methods.get(slice_annotation_method)
+        self.finish_slice_annotation_fun = self.finish_annotation_methods.get(slice_annotation_method)
         self.z_scale = z_scale
         self.use_gradient = use_gradient
 
@@ -461,7 +474,10 @@ class EstimationWorker(QObject):
             for i in range(len(self.points) // 2):
                 estimator = minimal_surface.MinimalSurfaceCalculator()
                 self.estimators.append(estimator)
-                estimator.set_initial_plane_calculator(self.segment_initial_slice)
+                if self.initial_plane_method is None:
+                    estimator.set_initial_plane_calculator(self.segment_initial_slice)
+                else:
+                    estimator.set_initial_plane_method(self.initial_plane_method)
                 estimator.set_using_meeting_points(self.use_meeting_plane_points)
                 self.hook_callbacks(i)
                 bounding_box = pts_2_bb(self.points[2 * i], self.points[2 * i + 1], self.image.shape,
@@ -490,7 +506,7 @@ class EstimationWorker(QObject):
                 self.imgs.append(data)
                 self.phis.append(phi)
                 if self.use_meeting_plane_points:
-                    estimator.calc_eikonal_and_transport_init(phi, data, point1, point2, self.use_correction)
+                    estimator.calc_eikonal_and_transport_init(phi, data, point1, point2, USE_CORRECTION)
                 else:
                     estimator.init_transport_slice(phi, point1, point2)
             self.slice_annotations_done.emit(len(self.estimators))
@@ -504,11 +520,11 @@ class EstimationWorker(QObject):
                     show_info("Stopped calculation")
                     break
                 if self.bb_layer is not None:
-                    self.bb_layer.data = [bounding_box]
+                    self.bounding_box_changed.emit(bounding_box)
 
                 offset = np.clip(bounding_box.min(0), 0, np.asarray(self.image.shape) - 1)
                 # start = time.time()
-                output = estimator.calculate(phi, data, point1, point2, self.use_correction, self.n_iter)
+                output = estimator.calculate(phi, data, point1, point2, USE_CORRECTION, self.n_iter)
                 segmented = (output >= 0)
                 labelled = skimage.measure.label(segmented)
                 obj_pixel = np.argwhere(output == output.max())[0]
@@ -594,77 +610,32 @@ class EstimationWorker(QObject):
         return points @ self.rotation_matrix.T + self.translation_matrix
 
 
-class SliderWithCheckbox(FreeWidget):
-    def __init__(self, state=False, value=None, min=None, max=None, enabled=True):
-        super().__init__("horizontal")
-        self.wdt = QWidget()
-        layout = QVBoxLayout()
-        self._checkbox = QCheckBox()
-        layout.addWidget(self._checkbox)
-        self._slider = QSymmetricDoubleRangeSlider(Qt.Horizontal)
-        if min is not None:
-            self.min = min
-        if max is not None:
-            self.max = max
-        self.enabled = enabled
-        if value is not None:
-            self._slider.setValue(value)
-        layout.addWidget(self._slider)
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.wdt.setLayout(layout)
-        self.set_widget(self.wdt)
-        self.checked = state
-
-    @property
-    def checked(self):
-        return self._checkbox.isChecked()
-
-    @checked.setter
-    def checked(self, new_value):
-        if new_value == self._checkbox.isChecked():
-            return
-        self._checkbox.setChecked(new_value)
-        self._slider.setEnabled(new_value)
-        self.state_changed.emit(self.checked)
-
-    @property
-    def state_changed(self):
-        return self._checkbox.clicked
-
-    @property
-    def value_changed(self):
-        return self._slider.valueChanged
-
-    @property
-    def value(self):
-        return self._slider.value()
-
-    @value.setter
-    def value(self, new_value):
-        self._slider.setValue(new_value)
-
-    @property
-    def max(self):
-        return self._slider.maximum()
-
-    @max.setter
-    def max(self, new_max):
-        self._slider.setMaximum(new_max)
-
-    @property
-    def min(self):
-        return self._slider.minimum()
-
-    @min.setter
-    def min(self, new_min):
-        self._slider.setMinimum(new_min)
-
-
 @magicclass(name="Minimal Surface", widget_type="scrollable", properties={"x_enabled": False})
 class _MinimalSurfaceWidget(MagicTemplate):
     image_layer_combobox = field(Image, label="Image")
-    labels_layer_combobox = field(Labels, label="Labels")
+    object_status_label = field(widget_type="Label", label="Object")
+    place_anchors_checkbox = field(bool, label="Place anchors in 3D").with_options(
+        value=True,
+        tooltip="In the 3D view, click (without dragging) inside the bounding box of the selected object to place its"
+                " anchors on the surface, right-click to remove the last one. A third click starts a new pair."
+                " Drag an anchor to move it along the surface. Only while this tab is shown and the object list has"
+                " an object selected."
+    )
+    anchor_placement_combobox = field(widget_type="ComboBox", label="Placement").with_options(
+        choices=ANCHOR_PLACEMENTS,
+        tooltip="Ray pick: the anchor is where the ray under the cursor first enters the image data inside the"
+                " bounding box. Image plane: the anchor is where the ray crosses the plane of the image layer"
+                " (shown with the plane depiction: Shift+drag moves it, double click sets its position)."
+    )
+    clear_anchors_button = field(widget_type=PushButton, name="Clear anchors").with_options(
+        tooltip="Remove the anchors of the selected object"
+    )
+    anchor_distance_slider = field(float, label="Anchor distance (%)", widget_type="FloatSlider").with_options(
+        min=25., max=200., step=1., value=100.,
+        tooltip="Moves the two anchors of the selected object further from (above 100) or closer to (below 100) the"
+                " center of its bounding box, along the line from the center to each anchor, relative to where they"
+                " were when you suggested, placed or dragged them."
+    )
 
     @magicclass(widget_type="collapsible", name="Image Features")
     class ImageFeaturesWidget(MagicTemplate):
@@ -677,139 +648,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     @magicclass(widget_type="collapsible", name="Slice Annotation Method")
     class SliceAnnotationWidget(MagicTemplate):
         ...
-
-    @magicclass
-    class ImageSliceWidget(MagicTemplate):
-        dim_spinbox = field(int, label="Axis").with_options(max=0)
-        position_slider = field(int, label="Position", widget_type="Slider").with_options(max=0)
-
-        def __init__(self):
-            super().__init__()
-            self._viewer = None
-            self._layer = None
-            self._slice_layer = None
-            self._ctrl_down = False
-            self._mouse_drag_callbacks = []
-            self._update_slice()
-            self._update_widgets_state()
-            self._update_max_position()
-            self._clipping_widget = None
-
-        @property
-        def viewer(self):
-            return self._viewer
-
-        @viewer.setter
-        def viewer(self, viewer):
-            self._viewer = viewer
-            viewer.dims.events.ndisplay.connect(self._on_ndisplay_changed)
-
-        @property
-        def clipping_widget(self):
-            if self._clipping_widget is None:
-                raise AttributeError("clipping_widget not initialized")
-            return self._clipping_widget
-
-        @clipping_widget.setter
-        def clipping_widget(self, clipping_widget):
-            if self._clipping_widget is not None:
-                raise AttributeError("clipping_widget already initialized")
-            self._clipping_widget = clipping_widget
-
-        @property
-        def position(self):
-            return self.position_slider.value
-
-        @property
-        def dimension(self):
-            return self.dim_spinbox.value
-
-        @property
-        def layer(self):
-            return self._layer
-
-        @layer.setter
-        def layer(self, new_layer):
-            self.clipping_widget.remove_layer(self._layer)
-            self._layer = new_layer
-            self.clipping_widget.add_layer(self._layer)
-            self._update_slice()
-            self._update_max_position()
-            self._update_max_dim()
-            self._update_widgets_state()
-            if self._viewer.dims.ndisplay == 3:
-                self._create_slice_layer()
-
-        @dim_spinbox.connect
-        def _on_dim_changed(self, new_dim):
-            self._update_max_position()
-            self._update_slice()
-            self._update_widgets_state()
-
-        def _update_max_position(self):
-            if self.layer is None:
-                return
-            self.position_slider.max = self.layer.data.shape[self.dimension] - 1
-
-        def _update_max_dim(self):
-            if self.layer is None:
-                return
-            self.dim_spinbox.native.setMaximum(self.layer.data.ndim - 1)
-
-        @position_slider.connect
-        def _update_slice(self):
-            if self._slice_layer is None:
-                return
-            dim = self.dimension
-            idx = tuple(slice(self.position, self.position + 1) if i == dim else slice(None)
-                        for i in range(self.layer.data.ndim))
-            self._slice_layer.data = self.layer.data[idx]
-            self._slice_layer.translate = [self.position * self.layer.scale[i] if i == dim else 0 for i in
-                                           range(self.layer.data.ndim)]
-
-        def _on_mouse_scroll(self, layer, event):
-            if "Alt" not in event.modifiers:
-                return
-            self.position_slider.value = int(self.position - event.delta[0])
-
-        def _update_widgets_state(self):
-            is_enabled = self.layer is not None and self._viewer.dims.ndisplay == 3
-            self.dim_spinbox.enabled = is_enabled
-            self.position_slider.enabled = is_enabled
-
-        def _remove_slice_layer(self):
-            if self._slice_layer is not None:
-                self._viewer.layers.remove(self._slice_layer)
-                self.clipping_widget.remove_layer(self._slice_layer)
-                self._slice_layer = None
-
-        def _create_slice_layer(self):
-            self._remove_slice_layer()
-            if self.layer is None:
-                return
-            self._slice_layer = self._viewer.add_image(data=np.empty((1, 1, 1)), colormap="red",
-                                                       scale=self.layer.scale, blending="additive",
-                                                       experimental_clipping_planes=self.layer.experimental_clipping_planes)
-            self.clipping_widget.add_layer(self._slice_layer)
-            self._slice_layer.mouse_drag_callbacks.extend(self._mouse_drag_callbacks)
-            self._slice_layer.mouse_wheel_callbacks.append(self._on_mouse_scroll)
-            self._update_slice()
-            self._update_widgets_state()
-            self._slice_layer.reset_contrast_limits()
-
-        def _on_ndisplay_changed(self):
-            if self._viewer.dims.ndisplay == 2:
-                self._remove_slice_layer()
-            elif self._viewer.dims.ndisplay == 3:
-                self._create_slice_layer()
-            self._update_widgets_state()
-
-        @set_design(visible=False)
-        def add_mouse_drag_callback(self, callback):
-            self._mouse_drag_callbacks.append(callback)
-            if self._slice_layer is not None:
-                self._slice_layer.mouse_drag_callbacks.append(callback)
-            return callback
 
     suggestion_mode_combobox = field(widget_type="ComboBox", label="Suggestion mode").with_options(
         choices=list(SUGGESTION_MODES),
@@ -834,7 +672,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
     )
     suggest_anchors_button = field(widget_type=PushButton, name="Suggest anchors").with_options(
         tooltip="Propose the two anchor points from the bounding box selected in the object list."
-                " Move them to adjust, then run."
+                " Click in the 3D view to place them again, then run."
     )
     call_button = field(widget_type=PushButton, name="Run")
 
@@ -842,28 +680,15 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if self.call_button.text != "Run":
             warnings.warn("Wait until the estimation finishes before suggesting anchors")
             return
-        image_layer = self.image_layer
-        if image_layer is None or image_layer.ndim != 3 or image_layer.rgb:
-            warnings.warn("Suggesting anchors needs a 3D image layer")
-            return
-        selected = selected_object(self._viewer)
+        selected = self._selected_object()
         if selected is None:
             warnings.warn("Select an object in the object list first")
             return
-        label, bbox_min, bbox_max, list_image_layer = selected
-        if list_image_layer.ndim != 3:
-            warnings.warn("Suggesting anchors needs a 3D object list image")
+        label, bbox_min, bbox_max, image_layer = selected.label, selected.bbox_min, selected.bbox_max, selected.image_layer
+        if image_layer.ndim != 3 or image_layer.rgb:
+            warnings.warn("Suggesting anchors needs a 3D image layer")
             return
-        if list_image_layer is not image_layer:
-            # e.g. a cropped copy of the object list's image: the bounding box is converted through world coordinates
-            corners = np.stack([
-                image_layer.world_to_data(list_image_layer.data_to_world(corner)) for corner in (bbox_min, bbox_max)
-            ])
-            bbox_min, bbox_max = corners.min(0), corners.max(0)
-        if len(self.points_layer.data) % 2 == 1:
-            warnings.warn("Finish the current pair of anchors before suggesting new ones")
-            return
-        if self.used_feature != "Gradient":
+        if self.used_feature == CUSTOM:
             show_info("The suggestion uses the gradient feature, not the custom one")
         result = suggest_anchors_in_image(
             image_layer.data, bbox_min, bbox_max, resample=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
@@ -873,12 +698,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if not result.found:
             warnings.warn("No anchor suggestion for object %d: %s" % (label, result.reason))
             return
-        self._remove_last_suggestion()
-        added = []
-        for point in (result.p1, result.p2):
-            added.append(self.points_layer.world_to_data(image_layer.data_to_world(point)))
-            self.points_layer.add(added[-1])
-        self._last_suggestion = added
+        anchor_store(selected.bbox_layer).set(label, [result.p1, result.p2])
+        self._update_object_state()
         message = "Suggested anchors for object %d (confidence %.2f%s)" % (
             label, result.confidence, ", blurred" if self.is_blurring_enabled else ", not blurred"
         )
@@ -904,74 +725,57 @@ class _MinimalSurfaceWidget(MagicTemplate):
                        self.fan_min_relative_strength_spinbox):
             widget.visible = is_fan
 
-    def _remove_last_suggestion(self):
-        """Replace the previous suggestion, but only if the user has not touched it."""
-        previous, self._last_suggestion = self._last_suggestion, None
-        if previous is None:
-            return
-        data = np.asarray(self.points_layer.data)
-        if len(data) < 2 or not (np.allclose(data[-2], previous[0]) and np.allclose(data[-1], previous[1])):
-            return
-        self.points_layer.selected_data = {len(data) - 2, len(data) - 1}
-        self.points_layer.remove_selected()
-        # keeps the pair coloring in sync with the layer
-        self._color_pairs_callback.prev_len = len(self.points_layer.data)
-        self._color_pairs_callback.prev_data = np.asarray(self.points_layer.data).copy()
+    def _selected_object(self):
+        return selected_object_info(self._viewer) if self._viewer is not None else None
+
+    def _anchor_pair(self):
+        """The anchors of the selected object as two points in data coordinates of its image layer, or None."""
+        selected = self._selected_object()
+        if selected is None:
+            return None
+        anchors = anchor_store(selected.bbox_layer).get(selected.label)
+        return (anchors[0], anchors[1]) if len(anchors) == 2 else None
 
     def _start_estimation(self):
-        if self.image_layer not in self._viewer.layers:
-            warnings.warn("Missing image layer")
+        selected = self._selected_object()
+        if selected is None:
+            warnings.warn("No object selected: select one in the object list")
             return
-        if len(self.points_layer.data) == 0:
-            warnings.warn("No points were added")
+        image, labels = selected.image_layer, selected.labels_layer
+        if image.ndim != 3 or image.rgb:
+            warnings.warn("Minimal Surface works only with 3D, single channel images")
             return
-        if len(self.points_layer.data) == 1:
-            warnings.warn("Not enough points")
+        if labels is None:
+            warnings.warn("Select a labels layer in the object list")
             return
-        if self.labels_layer is None:
-            answer = QMessageBox.question(
-                self.native,
-                "Missing Labels layer",
-                "Create Labels layer?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                new_labels = self._viewer.add_labels(
-                    np.zeros(self.image_layer.data.shape[:self.image_layer.ndim], dtype=np.uint16))
-                self.labels_layer = new_labels
-            else:
-                return
-        elif not np.array_equal(
-                self.labels_layer.data.shape[:self.labels_layer.ndim],
-                self.image_layer.data.shape[:self.image_layer.ndim]
-        ):
-            answer = QMessageBox.question(
-                self.native,
-                "Shape mismatch",
-                "Current labels and image layers have different shape."
-                " Do you want to create a new labels layer with the appropriate shape?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                new_labels = self._viewer.add_labels(
-                    np.zeros(self.image_layer.data.shape[:self.image_layer.ndim], dtype=np.uint16))
-                self.labels_layer = new_labels
-            else:
-                return
-        image = self.image_layer
+        if not np.array_equal(labels.data.shape[:labels.ndim], image.data.shape[:image.ndim]):
+            warnings.warn("The labels layer of the object list and its image have different shapes")
+            return
+        if np.issubdtype(labels.dtype, np.integer) and selected.label > np.iinfo(labels.dtype).max:
+            warnings.warn("The label id %d does not fit the data type of the labels layer (%s)" % (selected.label, labels.dtype))
+            return
+        anchors = anchor_store(selected.bbox_layer).get(selected.label)
+        if len(anchors) < 2:
+            warnings.warn("Object %d needs two anchors: click on its surface in the 3D view or press 'Suggest anchors'"
+                          % selected.label)
+            return
+        self._run_target = (labels, selected.label, (selected.bbox_min, selected.bbox_max))
         image_data = image.data
-        phi_func = None if (self.used_feature == "Gradient") else self._run_feature_extractor
-        points = self.points_layer
-        points_data = points.data.copy()
+        if self.slice_annotation_method in EstimationWorker.AUTOMATIC_METHODS and self.used_feature == GRADIENT:
+            warnings.warn("The automatic slice annotation needs a feature that tells the object from the background:"
+                          " choose 'Gradient + intensity' (or a custom feature) under Image Features")
+            return
+        phi_func = {GRADIENT: None, GRADIENT_INTENSITY: gradient_intensity_features}.get(
+            self.used_feature, self._run_feature_extractor)
+        points_data = anchors.copy()
         z_scale = self.z_scale
         alpha = self.alpha
         beta = self.beta
         n_iter = self.iterations
-        use_correction = self.use_correction
-        use_gradient = self.used_feature == "Gradient"
+        use_gradient = self.used_feature == GRADIENT
         use_meeting_plane_points = True
         estimation_worker = EstimationWorker(self._viewer, self.minimal_contour_widget, self)
-        estimation_worker.initialize(image_data, phi_func, points_data, use_correction, beta, alpha, n_iter, use_meeting_plane_points, self.slice_annotation_method, self._blur_image if self.is_blurring_enabled else None, z_scale, use_gradient)
+        estimation_worker.initialize(image_data, phi_func, points_data, beta, alpha, n_iter, use_meeting_plane_points, self.slice_annotation_method, self._blur_image if self.is_blurring_enabled else None, z_scale, use_gradient)
         estimation_worker.image_data_received.connect(self._add_image)
         estimation_worker.layer_invalidated.connect(self._refresh_layer)
         estimation_worker.mask_data_received.connect(self._mask_received)
@@ -991,192 +795,15 @@ class _MinimalSurfaceWidget(MagicTemplate):
             estimation_worker.bb_layer = BoundingBoxLayer(
                 [[[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]], scale=(z_scale, 1., 1.))
             self._viewer.add_layer(estimation_worker.bb_layer)
+
+            def show_bounding_box(bounding_box, layer=estimation_worker.bb_layer):
+                if layer in self._viewer.layers:
+                    layer.data = [bounding_box]
+
+            estimation_worker.bounding_box_changed.connect(show_bounding_box)
             estimation_thread.finished.connect(lambda: self._viewer.layers.remove(estimation_worker.bb_layer))
         estimation_thread.start()
         # viewer.add_image(data)
-
-    @magicclass(widget_type="collapsible")
-    class ClippingWidget(MagicTemplate):
-        slider_0 = field(SliderWithCheckbox)
-        slider_1 = field(SliderWithCheckbox)
-        slider_2 = field(SliderWithCheckbox)
-
-        def __init__(self):
-            super().__init__()
-            self._viewer: napari.Viewer = None
-            self._layers = []
-            self._ghost_layers = dict()
-            self.sliders = []
-            self._clipping_planes = []
-            self.n_checked = 0
-
-        def __post_init__(self):
-            for i, slider in enumerate([self.slider_0, self.slider_1, self.slider_2]):
-                slider.name = str(i)
-                slider.state_changed.connect(self._on_checked)
-                slider.value_changed.connect(self._range_change_handler(i))
-                self.sliders.append(slider)
-            self._initialize_clipping_planes()
-
-        @property
-        def viewer(self):
-            return self._viewer
-
-        @viewer.setter
-        def viewer(self, viewer):
-            self._viewer = viewer
-            viewer.dims.events.ndisplay.connect(self._on_ndisplay_changed)
-
-        @property
-        def layers(self):
-            return list(self._layers)
-
-        @layers.setter
-        def layers(self, new_layers):
-            new_layers = list(new_layers) if isinstance(new_layers, Iterable) \
-                else [new_layers] if new_layers else []
-            if self._layers:
-                for layer in self.layers:
-                    if layer not in new_layers:
-                        self.remove_layer(layer)
-                    else:
-                        new_layers.remove(layer)
-            for layer in new_layers:
-                self.add_layer(layer)
-            self._update_ranges()
-
-        @set_design(visible=False)
-        def add_layer(self, layer):
-            if layer is None:
-                return
-            if layer in self.layers:
-                return
-            self._layers.append(layer)
-            self._ghost_layers[layer] = None
-            self._update_ghost_layers()
-            layer.events.scale.connect(self._update_ranges)
-            layer.experimental_clipping_planes = self._clipping_planes
-            layer.events.data.connect(self._on_layer_data_change)
-            self._update_ranges()
-
-        @set_design(visible=False)
-        def remove_layer(self, layer):
-            if layer is None:
-                return
-            if layer not in self.layers:
-                return
-            self._layers.remove(layer)
-            if self._ghost_layers[layer] is not None:
-                self.viewer.layers.remove(self._ghost_layers[layer])
-            del self._ghost_layers[layer]
-            layer.events.scale.disconnect(self._update_ranges)
-            layer.events.data.disconnect(self._on_layer_data_change)
-            layer.experimental_clipping_planes = []
-            self._update_ranges()
-
-        def _on_layer_data_change(self, event):
-            layer = event.source
-            if layer not in self._ghost_layers:
-                print("%s not in ghost layers!" % layer.name if layer else None)
-                return
-            ghost_layer = self._ghost_layers[event.source]
-            if ghost_layer is None:
-                return
-            ghost_layer.data = event.source.data
-
-        def _range_change_handler(self, idx):
-            def on_range_change(value):
-                self._clipping_planes[idx * 2]["position"][idx] = value[0]
-                self._clipping_planes[idx * 2 + 1]["position"][idx] = value[1]
-                self._update_clipping_planes()
-
-            return on_range_change
-
-        def _on_checked(self, value):
-            self.n_checked += 1 if value else -1
-            self._update_ghost_layers()
-            self._update_clipping_planes()
-
-        def _update_ghost_layers(self):
-            if self.viewer is None:
-                return
-            for layer in self._layers:
-                ghost = self._ghost_layers[layer]
-                if ghost is None and self.n_checked > 0 and self.viewer.dims.ndisplay == 3:
-                    data, state, type_str = layer.as_layer_data_tuple()
-                    state["name"] = u"\U0001F47B " + layer.name
-                    state["opacity"] /= 2.
-                    state["experimental_clipping_planes"] = []
-                    with layer_source(parent=layer):
-                        new = Layer.create(deepcopy(data), state, type_str)
-                    self.viewer.add_layer(new)
-                    self.viewer.layers.link_layers([layer, new])
-                    self.viewer.layers.unlink_layers([layer, new],
-                                                      ["opacity", "experimental_clipping_planes", "blending"])
-                    self.viewer.layers.move(self.viewer.layers.index(new), self.viewer.layers.index(layer) + 1)
-                    self._ghost_layers[layer] = new
-                elif ghost is not None and (self.n_checked == 0 or self.viewer.dims.ndisplay == 2):
-                    self.viewer.layers.remove(ghost)
-                    self._ghost_layers[layer] = None
-
-        def _remove_ghost_layers(self):
-            for layer in self._layers:
-                ghost = self._ghost_layers[layer]
-                if ghost is not None:
-                    self.viewer.layers.remove(ghost)
-                    self._ghost_layers[layer] = None
-
-        def _on_ndisplay_changed(self, e):
-            if e.value == 2:
-                self._remove_ghost_layers()
-            else:
-                self._update_ghost_layers()
-
-        def _update_ranges(self):
-            if not self.layers:
-                return
-            nan = np.finfo(float).max
-            negnan = np.finfo(float).min
-
-            extent = np.asarray([[nan, nan, nan], [negnan, negnan, negnan]])
-            for layer in self.layers:
-                layer_extent = layer.extent.world
-                if layer.ndim == 2:
-                    layer_extent = np.concatenate([np.asarray([[nan], [negnan]]), layer_extent], axis=1)
-                extent[0] = np.minimum(extent[0], layer_extent[0])
-                extent[1] = np.maximum(extent[1], layer_extent[1])
-            for s_idx, slider in enumerate(self.sliders):
-                slider.checked = slider.checked or not np.any(np.equal(extent[:, s_idx], np.asarray([nan, negnan])))
-                slider.min = extent[0, s_idx]
-                slider.max = max(slider.min+1, extent[1, s_idx])
-            self._update_clipping_planes()
-
-        def _initialize_clipping_planes(self):
-            new_clipping_planes = []
-            for s_idx, slider in enumerate(self.sliders):
-                start, end = slider.value
-                clipping_plane0 = {
-                    "position": [start if i == s_idx else 0 for i in range(3)],
-                    "normal": [1 if i == s_idx else 0 for i in range(3)]
-                }
-                new_clipping_planes.append(clipping_plane0)
-                clipping_plane1 = {
-                    "position": [end if i == s_idx else 0 for i in range(3)],
-                    "normal": [-1 if i == s_idx else 0 for i in range(3)]
-                }
-                new_clipping_planes.append(clipping_plane1)
-            self._clipping_planes = new_clipping_planes
-            for layer in self.layers:
-                layer.experimental_clipping_planes = self._clipping_planes
-
-        def _update_clipping_planes(self):
-            new_clipping_planes = []
-            for s_idx, slider in enumerate(self.sliders):
-                if not slider.checked:
-                    continue
-                new_clipping_planes.extend(self._clipping_planes[s_idx * 2:s_idx * 2 + 2])
-            for layer in self.layers:
-                layer.experimental_clipping_planes = new_clipping_planes
 
     @magicclass(widget_type="collapsible", name="Shortest Paths")
     class ShortestPathsWidget(MagicTemplate):
@@ -1188,7 +815,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     beta = vfield(float, label="\u03B2", location=ImageFeaturesWidget).with_options(min=.01, max=500., value=5)
     iterations = vfield(int, widget_type="Slider", location=ImageFeaturesWidget).with_options(min=1, max=10000, value=10000)
     z_scale = vfield(float, location=ImageFeaturesWidget).with_options(min=0.01, max=20., value=1.)
-    use_correction = vfield(bool, location=ImageFeaturesWidget)
 
     distance_map_combobox = field(Image, label="Distance map (anchor 1)", location=ShortestPathsWidget)
     second_distance_map_combobox = field(Image, label="Distance map (anchor 2)", location=ShortestPathsWidget)
@@ -1201,19 +827,25 @@ class _MinimalSurfaceWidget(MagicTemplate):
     conductance_spinbox = field(float, location=BlurringWidget).with_options(max=100, value=9)
     cad_iterations_spinbox = field(int, label="Iterations", location=BlurringWidget).with_options(min=1, max=20, value=5)
 
-    slice_annotation_method = vfield(str, location=SliceAnnotationWidget).with_choices(EstimationWorker.ANNOTATION_METHODS)
+    slice_annotation_method = vfield(str, location=SliceAnnotationWidget).with_options(
+        choices=annotation_methods(),
+        tooltip="How the contour of the object in the plane where the fronts of the two anchors meet is found."
+                " Manual, Threshold, Minimal contour: you annotate it. Automatic (distances): from the distances of"
+                " the anchors in the plane, which is instant (falls back to the phase field if they give nothing"
+                " usable). Automatic (phase field): evolves a phase field in the plane, which takes seconds."
+    )
 
     def __init__(self):
         self._collapsible_group = CollapsibleContainerGroup()
         self._viewer = None
-        self._prev_labels = None
+        self._run_target = None
+        self._anchors_layer = None
+        self._plane_image_layer = None
+        self._anchor_base = None
         self.blurred_layer = None
         self._try_blurring_button = None
         self.blurring_progress_widget = ProgressWidget(message="blurring...")
         self.estimation_progress_widget = ProgressWidget(message="Annotating...")
-        self.points_layer = None
-        self._last_suggestion = None
-        self._color_pairs_callback = None
         self._estimation_running = False
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignTop)
@@ -1228,11 +860,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
         self.crop_mask = None
 
-        # self.slice_widget.clipping_widget.add_layer(self.points_layer)
-
     def __post_init__(self):
         self.call_button.clicked.connect(self._start_estimation)
         self.suggest_anchors_button.clicked.connect(self._suggest_anchors)
+        self.clear_anchors_button.clicked.connect(self._clear_anchors)
         self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
                                     + self.native.children()[1].verticalScrollBar().sizeHint().width()
                                     + 2 * self.native.children()[1].widget().layout().getContentsMargins()[2])
@@ -1249,7 +880,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._ensure_3d_image()
 
     # widgets that hold a layer: layers are not serializable
-    _NOT_SERIALIZED = ("image_layer_combobox", "labels_layer_combobox", "distance_map_combobox",
+    _NOT_SERIALIZED = ("image_layer_combobox", "object_status_label", "distance_map_combobox",
                        "second_distance_map_combobox", "start_points_combobox")
 
     def __magicclass_serialize__(self):
@@ -1275,14 +906,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     @image_layer.setter
     def image_layer(self, new_layer):
         self.image_layer_combobox.value = new_layer
-
-    @property
-    def labels_layer(self):
-        return self.labels_layer_combobox.value
-
-    @labels_layer.setter
-    def labels_layer(self, new_layer):
-        self.labels_layer_combobox.value = new_layer
 
     @property
     def is_blurring_enabled(self):
@@ -1316,32 +939,20 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _initialize(self, viewer: napari.Viewer, minimal_contour_widget: MinimalContourWidget):
         self._viewer = unwrap_viewer(viewer)
         self.minimal_contour_widget = minimal_contour_widget
-        self.points_layer = self.viewer.add_points(ndim=3, size=2, name="3D Anchors [DO NOT REMOVE]")
-        self._color_pairs_callback = ColorPairsCallback()
-        self.points_layer.events.data.connect(self._color_pairs_callback)
-        self.points_layer.mouse_drag_callbacks.append(self._drag_points_callback)
-        self.viewer.layers.events.inserted.connect(keep_layer_on_top(self.points_layer))
-        self.viewer.layers.events.moved.connect(keep_layer_on_top(self.points_layer))
-        self.ImageSliceWidget.viewer = self.viewer
-        self.ImageSliceWidget.clipping_widget = self.ClippingWidget
-        self._on_labels_changed()
+        self._viewer.mouse_drag_callbacks.append(self._on_canvas_mouse)
+        selected_object_changed.connect(self._on_selected_object_changed)
         self._ensure_3d_image()
-        self._set_slice_widget_image()
         self._update_custom_feature_image()
-        self.ImageSliceWidget.add_mouse_drag_callback(self._on_slice_clicked)
-        self.ClippingWidget.viewer = self.viewer
+        self._update_object_state()
 
     @set_design(text="Try", location=BlurringWidget,)
     def try_blurring(self):
         self._toggle_blur_demo()
 
-    @labels_layer_combobox.connect
-    def _on_labels_changed(self, idx=None):
-        if self._prev_labels == self.labels_layer:
-            return
-        self.ImageSliceWidget.clipping_widget.remove_layer(self._prev_labels)
-        self.ImageSliceWidget.clipping_widget.add_layer(self.labels_layer)
-        self._prev_labels = self.labels_layer
+    @slice_annotation_method.connect
+    def _on_annotation_method_changed(self, method):
+        if method in EstimationWorker.AUTOMATIC_METHODS and self.used_feature == GRADIENT:
+            self.used_feature_combobox.value = GRADIENT_INTENSITY
 
     @used_feature_combobox.connect
     def _on_feature_changed(self, feature):
@@ -1358,10 +969,13 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._viewer.add_layer(Image(data, name=layer_name, **layer_args))
 
     def _mask_received(self, data, offset):
-        offset = offset.round().astype(int)
-        bb_slice = tuple(slice(offs, offs + extent) for offs, extent in zip(offset, data.shape))
-        self.labels_layer.data[bb_slice][data > 0] = self.labels_layer.data.max()+1
-        self.labels_layer.refresh()
+        if self._run_target is None:
+            return
+        labels_layer, label, bbox = self._run_target
+        write_object_mask(labels_layer, label, data, offset, bbox)
+        if labels_layer in self._viewer.layers:
+            # the layers added during the run took the selection; Ctrl+Z undoes the result on the active labels layer
+            self._viewer.layers.selection.select_only(labels_layer)
 
     def _distance_map_received(self, layer_name, anchor_idx, data, layer_args):
         if layer_name in self._viewer.layers:
@@ -1479,49 +1093,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     #     estimator.hook_stage_iteration_event(stage, self.data_updater(layer_name))
     #     estimator.hook_stage_finished_event(stage, self.data_finalizer(layer_name))
 
-    def _drag_points_callback(self, layer, event):
-        if layer.mode != "select":
-            return
-        yield
-        if event.type == "mouse_move":
-            if len(layer.selected_data) > 2 or len(layer.selected_data) == 0:
-                return
-            if len(layer.selected_data) == 2:
-                selection_iter = iter(layer.selected_data)
-                idx1 = next(selection_iter)
-                idx2 = next(selection_iter)
-                if idx1 // 2 != idx2 // 2:
-                    return
-            else:
-                index = next(iter(layer.selected_data))
-                if index % 2 == 0:
-                    idx1 = index
-                    idx2 = index + 1
-                else:
-                    idx1 = index - 1
-                    idx2 = index
-            p1 = layer.data[idx1]
-            p2 = layer.data[idx2]
-            bb = pts_2_bb(p1, p2, self.image_layer.data.shape)
-            bb_slice = bb_2_slice(bb)
-            image = self.image_layer.data[bb_slice]
-            crop_mask = generate_sphere_mask(image.shape)
-            self.image_layer.visible = False
-            cropped_image = self._viewer.add_image(
-                image*crop_mask,
-                colormap=self.image_layer.colormap,
-                translate=bb.min(0)*self.image_layer.scale,
-                scale=self.image_layer.scale,
-                rendering="attenuated_mip"
-            )
-            self._viewer.layers.selection.active = layer
-        yield
-        while event.type == "mouse_move":
-            yield
-        self._viewer.layers.remove(cropped_image)
-        self._update_blurred_layer()
-        self.image_layer.visible = True
-
     @blurring_type_combobox.connect
     def _on_blur_selection(self, blur_method):
         self.blur_sigma_slider.visible = blur_method == GAUSSIAN_BLURRING
@@ -1553,13 +1124,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _toggle_blur_demo(self):
         is_checked = not self.try_blurring_button.native.isChecked()
         self.try_blurring_button.native.setChecked(is_checked)
-        if len(self.points_layer.data) < 2:
-            return
+        pair = self._anchor_pair()
         image_layer = self.image_layer
-        if image_layer is None:
+        if pair is None or image_layer is None:
             return
         if is_checked:
-            bb = pts_2_bb(self.points_layer.data[0], self.points_layer.data[1], image_layer.data.shape, image_layer.scale)
+            bb = pts_2_bb(pair[0], pair[1], image_layer.data.shape, image_layer.scale)
             bb = bb.round().astype(int)
             bb_slice = bb_2_slice(bb)
             blurred_image = image_layer.data[bb_slice]
@@ -1593,7 +1163,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
         image_layer = self.image_layer
         if image_layer is None:
             return
-        bb = pts_2_bb(self.points_layer.data[0], self.points_layer.data[1], image_layer.data.shape, image_layer.scale)
+        pair = self._anchor_pair()
+        if pair is None:
+            return
+        bb = pts_2_bb(pair[0], pair[1], image_layer.data.shape, image_layer.scale)
         bb = bb.round().astype(int)
         offset = bb.min(0)
         bb_slice = bb_2_slice(bb)
@@ -1614,54 +1187,265 @@ class _MinimalSurfaceWidget(MagicTemplate):
         is_enabled = self.image_layer is not None and self.image_layer.ndim==3
         for container in self._collapsible_group:
             container.enabled = is_enabled
-        self.ClippingWidget.enabled = is_enabled
         self.call_button.enabled = is_enabled
         self.suggest_anchors_button.enabled = is_enabled
+        self.clear_anchors_button.enabled = is_enabled
+        self.anchor_distance_slider.enabled = is_enabled and self._anchor_base is not None
+        self.place_anchors_checkbox.enabled = is_enabled
+        self.anchor_placement_combobox.enabled = is_enabled
         self.suggestion_mode_combobox.enabled = is_enabled
         for widget in (self.fan_rays_spinbox, self.fan_max_radius_jump_spinbox,
                        self.fan_min_relative_strength_spinbox):
             widget.enabled = is_enabled
 
     @image_layer_combobox.connect
-    def _set_slice_widget_image(self, _=None):
-        self.ImageSliceWidget.layer = self.image_layer if self.image_layer is None or self.image_layer.ndim == 3 else None
-
-    @image_layer_combobox.connect
     def _update_custom_feature_image(self, _=None):
         if self.image_layer is not None and self.image_layer.ndim != 2:
             self.feature_editor.variables["image"] = self.image_layer.data
 
-    def _on_slice_clicked(self, layer, event):
-        start_point, end_point = layer.get_ray_intersections(
-            position=event.position,
-            view_direction=event.view_direction,
-            dims_displayed=event.dims_displayed,
-            world=True,
-        )
+    # --- objects and their anchors
+
+    def _on_selected_object_changed(self, event):
+        if getattr(event, "viewer", None) is not self._viewer:
+            return
+        self._update_object_state()
+
+    def _update_object_state(self):
+        """Follows the selected object: the image, the anchors that are shown, the status and the plane."""
+        selected = self._selected_object()
+        if selected is None:
+            self.object_status_label.value = "none selected"
+            self._show_anchors(None, np.zeros((0, 3)), "")
+            self._apply_placement_mode()
+            self._reset_anchor_base(None)
+            return
+        image_layer = selected.image_layer
+        if image_layer.ndim == 3 and not image_layer.rgb and image_layer is not self.image_layer:
+            self.image_layer = image_layer
+        anchors = anchor_store(selected.bbox_layer).get(selected.label)
+        self.object_status_label.value = "%d (%d/2 anchors)" % (selected.label, len(anchors))
+        world = np.asarray([image_layer.data_to_world(point) for point in anchors]).reshape(-1, 3) \
+            if image_layer.ndim == 3 else np.zeros((0, 3))
+        self._show_anchors(image_layer, world, "Anchors of object %d [display only]" % selected.label)
+        self._apply_placement_mode(selected)
+        self._reset_anchor_base(selected)
+
+    def _refresh_anchors_display(self, selected):
+        """Shows the current anchors of the object, while they are dragged or scaled."""
+        image_layer = selected.image_layer
+        anchors = anchor_store(selected.bbox_layer).get(selected.label)
+        self.object_status_label.value = "%d (%d/2 anchors)" % (selected.label, len(anchors))
+        world = np.asarray([image_layer.data_to_world(point) for point in anchors]).reshape(-1, 3)
+        self._show_anchors(image_layer, world, "Anchors of object %d [display only]" % selected.label)
+
+    def _reset_anchor_base(self, selected):
+        """The distance slider works relative to the anchors as they are now: it goes back to 100%."""
+        pair = None
+        if selected is not None:
+            anchors = anchor_store(selected.bbox_layer).get(selected.label)
+            pair = anchors.copy() if len(anchors) == 2 else None
+        self._anchor_base = pair
+        with self.anchor_distance_slider.changed.blocked():
+            self.anchor_distance_slider.value = 100.
+        self.anchor_distance_slider.enabled = pair is not None and self.call_button.enabled
+
+    @anchor_distance_slider.connect
+    def _on_anchor_distance_changed(self, percent):
+        selected = self._selected_object()
+        if selected is None or self._anchor_base is None:
+            return
+        center = (selected.bbox_min + selected.bbox_max) / 2
+        points = center + percent / 100. * (self._anchor_base - center)
+        shape = np.asarray(selected.image_layer.data.shape[:3])
+        anchor_store(selected.bbox_layer).set(selected.label, np.clip(points, 0, shape - 1))
+        self._refresh_anchors_display(selected)
+
+    def _show_anchors(self, image_layer, world_points, name):
+        """Shows the anchors of the selected object on a Points layer that the plugin owns."""
+        layer = self._anchors_layer
+        if layer is not None and layer not in self._viewer.layers:
+            layer = self._anchors_layer = None
+        if layer is None:
+            if len(world_points) == 0:
+                return
+            selection = self._viewer.layers.selection
+            previous, active = set(selection), selection.active
+            layer = Points(
+                world_points, ndim=3, name=name, size=self._anchor_size(image_layer),
+                face_color=ANCHOR_COLORS[:len(world_points)], metadata={SCAFFOLD_KEY: True}
+            )
+            self._viewer.add_layer(layer)
+            layer.editable = False
+            # adding a layer selects it; the layers of the object (labels, image) stay the ones that are selected
+            selection.clear()
+            selection.update(previous)
+            if active in previous:
+                selection.active = active
+            self._viewer.layers.events.inserted.connect(keep_layer_on_top(layer))
+            self._viewer.layers.events.moved.connect(keep_layer_on_top(layer))
+            self._anchors_layer = layer
+            return
+        layer.visible = len(world_points) > 0
+        if len(world_points) == 0:
+            return
+        layer.name = name
+        layer.size = self._anchor_size(image_layer)
+        layer.data = world_points
+        layer.face_color = ANCHOR_COLORS[:len(world_points)]
+        layer.editable = False
+
+    @staticmethod
+    def _anchor_size(image_layer):
+        if image_layer is None:
+            return 2
+        extent = np.asarray(image_layer.data.shape[:3]) * np.asarray(image_layer.scale)[-3:]
+        return max(2., .02 * extent.max())
+
+    def _clear_anchors(self):
+        selected = self._selected_object()
+        if selected is None:
+            warnings.warn("Select an object in the object list first")
+            return
+        anchor_store(selected.bbox_layer).clear(selected.label)
+        self._update_object_state()
+
+    @anchor_placement_combobox.connect
+    def _on_placement_changed(self, mode=None):
+        self._apply_placement_mode()
+
+    def _apply_placement_mode(self, selected=None):
+        """Shows the image of the selected object with the plane depiction in the "Image plane" placement mode."""
+        selected = selected or self._selected_object()
+        target = None
+        if selected is not None and self.anchor_placement_combobox.value == IMAGE_PLANE and selected.image_layer.ndim == 3:
+            target = selected.image_layer
+        previous, self._plane_image_layer = self._plane_image_layer, target
+        if previous is not None and previous is not target:
+            try:
+                previous.depiction = "volume"
+            except (AttributeError, ValueError, RuntimeError):  # the layer was removed
+                pass
+        if target is None:
+            return
+        if target.depiction != "plane":
+            target.depiction = "plane"
+        center = (selected.bbox_min + selected.bbox_max) / 2
+        position = np.asarray(target.plane.position)
+        if np.any(position < selected.bbox_min - .5) or np.any(position > selected.bbox_max + .5):
+            target.plane.position = tuple(float(c) for c in center)
+
+    def _placing_anchors(self, event):
+        """The selected object if a click like ``event`` places its anchors, else None."""
+        if not self.place_anchors_checkbox.value or self._viewer.dims.ndisplay != 3:
+            return None
+        if event.type != "mouse_press" or event.button not in (1, 2) or len(event.modifiers) > 0:
+            return None
+        try:
+            if not self.native.isVisibleTo(self.native.window()):  # another tab is shown, or the toolbox is closed
+                return None
+        except RuntimeError:  # the widget was deleted
+            return None
+        selected = self._selected_object()
+        if selected is None or selected.image_layer.ndim != 3 or selected.image_layer.rgb:
+            return None
+        return selected
+
+    def _anchor_under_cursor(self, selected, event):
+        """The index of the visible anchor of the object that the cursor ray of ``event`` passes through, or None.
+
+        An anchor behind the surface that the ray hits is hidden by it, so it is not grabbed: clicking the object
+        from the other side places a new anchor there.
+        """
+        image_layer = selected.image_layer
+        anchors = anchor_store(selected.bbox_layer).get(selected.label)
+        if len(anchors) == 0:
+            return None
+        world = np.asarray([image_layer.data_to_world(point) for point in anchors])
+        position = np.asarray(event.position)[-3:]
+        direction = np.asarray(event.view_direction)[-3:]
+        max_depth = None
+        hit = self._pick_anchor(selected, event.position, event.view_direction, event.dims_displayed)
+        if hit is not None:
+            extent = (selected.bbox_max - selected.bbox_min + 1) * np.asarray(image_layer.scale)[-3:]
+            tolerance = max(2., .1 * np.linalg.norm(extent))  # the anchors are not exactly where this picks
+            max_depth = (np.asarray(image_layer.data_to_world(hit)) - position) @ (direction / np.linalg.norm(direction))
+            max_depth += tolerance
+        return nearest_point_to_ray(world, position, direction, .75 * self._anchor_size(image_layer), max_depth)
+
+    def _on_canvas_mouse(self, viewer, event):
+        selected = self._placing_anchors(event)
+        if selected is None:
+            return
+        if event.button == 1:
+            grabbed = self._anchor_under_cursor(selected, event)
+            if grabbed is not None:
+                yield from self._drag_anchor(selected, grabbed, event)
+                return
+        button = event.button
+        position, view_direction, dims_displayed = event.position, event.view_direction, event.dims_displayed
         dragging = False
-        point = None
-        if (start_point is not None) and (end_point is not None):
-            point = np.add(start_point, end_point)/2
-            point = layer.data_to_world(point)
         yield
-        while event.type == "mouse_move":
+        while event.type == "mouse_move":  # rotating the view
             dragging = True
             yield
-        if dragging:
+        if not dragging:
+            self.place_anchor(button, position, view_direction, dims_displayed)
+
+    def _drag_anchor(self, selected, index, event):
+        """Moves an anchor to where the cursor ray hits the surface (like placing it) until the mouse is released."""
+        store = anchor_store(selected.bbox_layer)
+        reference = None
+        if self.anchor_placement_combobox.value != IMAGE_PLANE:
+            reference = box_reference(selected.image_layer.data, selected.bbox_min, selected.bbox_max)
+        camera = viewer_camera(self._viewer)
+        saved = camera.mouse_pan, camera.mouse_zoom
+        camera.mouse_pan = camera.mouse_zoom = False  # the view does not rotate with the anchor
+        try:
+            yield
+            while event.type == "mouse_move":
+                point = self._pick_anchor(selected, event.position, event.view_direction, event.dims_displayed,
+                                          reference)
+                if point is not None:
+                    anchors = store.get(selected.label)
+                    anchors[index] = point
+                    store.set(selected.label, anchors)
+                    self._refresh_anchors_display(selected)
+                yield
+        finally:
+            camera.mouse_pan, camera.mouse_zoom = saved
+        self._update_object_state()
+
+    def place_anchor(self, button, position, view_direction, dims_displayed):
+        """A click in the 3D view: the left button places an anchor of the selected object, the right removes one."""
+        selected = self._selected_object()
+        if selected is None:
+            show_info("Select an object in the object list first")
             return
-        if event.button == 2:
-            self.points_layer.remove_selected()
-            return
-        if point is not None:
-            if QApplication.keyboardModifiers() & Qt.AltModifier:
-                for i, slider in enumerate(self.ImageSliceWidget.clipping_widget.sliders):
-                    range = slider.value
-                    range_center = (range[0] + range[1])/2
-                    new_center = int(point[i])
-                    offset = new_center-range_center
-                    slider.value = (range[0]+offset, range[1]+offset)
-            else:
-                self.points_layer.add(self.points_layer.world_to_data(point))
+        store = anchor_store(selected.bbox_layer)
+        if button == 2:
+            store.pop_last(selected.label)
+        else:
+            point = self._pick_anchor(selected, position, view_direction, dims_displayed)
+            if point is None:
+                show_info("No anchor here: the ray does not hit the %s inside the bounding box of object %d"
+                          % ("image plane" if self.anchor_placement_combobox.value == IMAGE_PLANE else "image data",
+                             selected.label))
+                return
+            store.add(selected.label, point)
+        self._update_object_state()
+
+    def _pick_anchor(self, selected, position, view_direction, dims_displayed, reference=None):
+        """The anchor under the cursor ray (data coordinates of the image of the object), or None."""
+        image_layer = selected.image_layer
+        start, end = image_layer.get_ray_intersections(
+            position=position, view_direction=view_direction, dims_displayed=list(dims_displayed), world=True)
+        if start is None or end is None:
+            return None
+        if self.anchor_placement_combobox.value == IMAGE_PLANE and image_layer.depiction == "plane":
+            return pick_on_plane(start, end, image_layer.plane.position, image_layer.plane.normal,
+                                 selected.bbox_min, selected.bbox_max)
+        return pick_along_ray(image_layer.data, start, end, selected.bbox_min, selected.bbox_max,
+                              reference=reference)
 
 if minimal_surface is not None:
     import SimpleITK as sitk

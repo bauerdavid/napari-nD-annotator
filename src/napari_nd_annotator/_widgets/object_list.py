@@ -10,7 +10,7 @@ from qtpy.QtGui import QImage, QPixmap, QHideEvent, QShowEvent
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
     QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox, QCheckBox
 from napari import Viewer
-from napari.layers import Image, Labels
+from napari.layers import Image, Labels, Layer
 from napari.utils.events import EventEmitter
 from scipy.ndimage import find_objects
 
@@ -28,6 +28,7 @@ except ImportError:
 import itertools
 import csv
 import weakref
+from typing import NamedTuple, Optional
 
 import PIL.Image as PilImage
 
@@ -35,10 +36,43 @@ import time
 
 
 _OBJECT_LISTS = weakref.WeakSet()
+SELECTED_EDGE_COLOR = (1., 0., 0., 1.)  # the edge color of the bounding box of the selected object
 
 # Emitted (with ``viewer=``) whenever the selected object of an object list, or its bounding box, changes, so that
 # widgets working on the selected object (see `selected_object`) can follow it.
 selected_object_changed = EventEmitter(source=None, type_name="selected_object_changed")
+
+
+class SelectedObject(NamedTuple):
+    """The object selected in the object list: its label id, the inclusive corners of its bounding box (data
+    coordinates of ``image_layer``) and the layers of the object list it belongs to."""
+    label: int
+    bbox_min: np.ndarray
+    bbox_max: np.ndarray
+    image_layer: Layer
+    labels_layer: Optional[Layer]
+    bbox_layer: Layer
+
+
+def selected_object_info(viewer) -> Optional[SelectedObject]:
+    """The object selected in the object list of ``viewer``, or None."""
+    viewer = unwrap_viewer(viewer)
+    for object_list in list(_OBJECT_LISTS):
+        try:
+            if object_list.viewer is not viewer or object_list.selected_idx is None:
+                continue
+            item = object_list.item(object_list.selected_idx)
+            image_layer = object_list.image_layer
+            labels_layer = object_list.mask_layer
+            bbox_layer = object_list.bounding_box_layer
+        except RuntimeError:  # the widget was deleted
+            continue
+        if item is None or image_layer is None or bbox_layer is None:
+            continue
+        bounding_box = np.asarray(item.bounding_box)
+        return SelectedObject(item.idx, bounding_box[0].copy(), bounding_box[1].copy(), image_layer, labels_layer,
+                              bbox_layer)
+    return None
 
 
 def selected_object(viewer):
@@ -47,20 +81,8 @@ def selected_object(viewer):
     The bounding box corners are inclusive and in data (index) coordinates of ``image_layer``, the image layer
     of the object list. Lets other widgets work on the selected object without a reference to the object list.
     """
-    viewer = unwrap_viewer(viewer)
-    for object_list in list(_OBJECT_LISTS):
-        try:
-            if object_list.viewer is not viewer or object_list.selected_idx is None:
-                continue
-            item = object_list.item(object_list.selected_idx)
-            image_layer = object_list.image_layer
-        except RuntimeError:  # the widget was deleted
-            continue
-        if item is None or image_layer is None:
-            continue
-        bounding_box = np.asarray(item.bounding_box)
-        return item.idx, bounding_box[0].copy(), bounding_box[1].copy(), image_layer
-    return None
+    selected = selected_object_info(viewer)
+    return None if selected is None else selected[:4]
 
 
 def slice_len(slice_, count=None):
@@ -389,9 +411,11 @@ if BoundingBoxLayer:
                 return
             if self._bounding_box_layer is not None:
                 self._bounding_box_layer.events.set_data.disconnect(self._on_bounding_boxes_removed)
+                self._bounding_box_layer.events.current_edge_color.disconnect(self._on_current_edge_color)
             self._bounding_box_layer = new_layer
             if new_layer is not None:
                 new_layer.events.set_data.connect(self._on_bounding_boxes_removed)
+                new_layer.events.current_edge_color.connect(self._on_current_edge_color)
                 if self.bounding_box_change not in self._bounding_box_layer.mouse_drag_callbacks:
                     self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
                 if self._on_bb_double_click not in self._bounding_box_layer.mouse_double_click_callbacks:
@@ -601,9 +625,20 @@ if BoundingBoxLayer:
                     self.bounding_box_layer.edge_color[self.selected_idx] = self.previous_edge_color
                 self.selected_idx = selected_idx
                 self.previous_edge_color = self.bounding_box_layer.edge_color[selected_idx].copy()
-                self.bounding_box_layer.edge_color[selected_idx] = (1., 0., 0., 1.)
+                self.bounding_box_layer.edge_color[selected_idx] = SELECTED_EDGE_COLOR
                 self.bounding_box_layer.data = self.bounding_box_layer.data
             self.notify_selection_changed()
+
+        def _on_current_edge_color(self, event=None):
+            # Selecting a box in the layer copies its edge color to the color of the boxes drawn next. The highlight
+            # of the selected object is not the color of its box: it must not be inherited by the new ones.
+            layer = self._bounding_box_layer
+            if layer is None or self.selected_idx is None or self.previous_edge_color is None:
+                return
+            if not np.allclose(layer._current_edge_color, SELECTED_EDGE_COLOR):
+                return
+            layer._current_edge_color = np.asarray(self.previous_edge_color, dtype=float).reshape(1, -1)
+            layer.events.current_edge_color()
 
         def _on_bounding_boxes_removed(self, event=None):
             # bounding boxes deleted from the layer (e.g. with its delete button)
@@ -629,8 +664,10 @@ if BoundingBoxLayer:
                 return []
             b_data = np.asarray(self._bounding_box_layer.data)
             if self.image_layer is not None:
-                # the bounding boxes are in world coordinates, the item bounding boxes in data (index) ones
-                b_data = (b_data - self.image_layer.translate) / self.image_layer.scale
+                # the data of the bounding box layer is in its own coordinates (the layer may have a scale and
+                # a translate), the item bounding boxes are in data (index) coordinates of the image layer
+                b_data = np.asarray([[self.image_layer.world_to_data(self._bounding_box_layer.data_to_world(point))
+                                      for point in box] for box in b_data])
             b_data = np.round(b_data).astype(int)
             return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
@@ -688,8 +725,9 @@ if BoundingBoxLayer:
             while event.type == "mouse_move":
                 yield
             self._mouse_down = False
-            new_data = np.asarray(layer.data)
-            # the bounding boxes are in world coordinates
+            # the data of the layer is in its own coordinates, the image extent is in world coordinates
+            new_data = np.asarray([[layer.data_to_world(point) for point in box] for box in layer.data]) \
+                .reshape((len(layer.data), -1, layer.ndim))
             if self.image_layer:
                 im_size = self.image_layer.data.shape
                 if self.image_layer.rgb:
@@ -703,7 +741,8 @@ if BoundingBoxLayer:
                     or np.any(np.all(new_data < world_min, 1))):
                 layer.data = previous_data
             if len(new_data) > len(previous_data):
-                layer.data[-1][:] = np.clip(layer.data[-1], world_min, world_max - self.image_layer.scale)
+                clipped = np.clip(new_data[-1], world_min, world_max - self.image_layer.scale)
+                layer.data[-1][:] = [layer.world_to_data(point) for point in clipped]
                 layer.data = layer.data
             self.update_items()
             if self.projections_widget is not None:
@@ -928,7 +967,9 @@ if BoundingBoxLayer:
         def bounding_boxes_from_labels(self):
             if self.labels.layer is None:
                 return
-            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
+            # the corners below are image indices, so the layer shares the transform of the image
+            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
+                                        scale=self.image_layer.scale, translate=self.image_layer.translate)
             bb_corners = find_objects(self.labels.layer.data)
             ids = []
             bbs = []

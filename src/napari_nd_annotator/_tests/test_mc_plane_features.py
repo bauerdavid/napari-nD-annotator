@@ -227,17 +227,10 @@ def test_gradients_follow_the_display_order_3d(viewer, calls, order):
 
 
 @pytest.mark.parametrize("order", [(0, 1, 2, 3), (3, 2, 1, 0), (1, 3, 0, 2), (2, 0, 3, 1), (0, 3, 2, 1), (3, 0, 1, 2)])
-def test_gradients_follow_the_display_order_4d(viewer, calls, monkeypatch, order):
+def test_gradients_follow_the_display_order_4d(viewer, calls, order):
     data = _volume((3, 5, 7, 9))
 
-    def ignore_minimal_surface(annotator):
-        # the Minimal Surface widget cannot handle 4D layers (it raises while the labels layer is added)
-        minimal_surface = annotator.ToolsWidget.minimal_surface_widget
-        if minimal_surface is None:  # not available with this napari version
-            return
-        clipping_widget = minimal_surface.ImageSliceWidget.clipping_widget
-        monkeypatch.setattr(type(clipping_widget), "_update_ranges", lambda self: None)
-    scene = _scene(viewer, data, prepare=ignore_minimal_surface)
+    scene = _scene(viewer, data)
     mc = scene.mc
     point = (1, 2, 3, 4)
     for axis, value in enumerate(point):

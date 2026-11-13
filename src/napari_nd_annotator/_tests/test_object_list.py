@@ -134,6 +134,52 @@ def test_bounding_box_is_in_data_coordinates(scene):
     np.testing.assert_array_equal(object_list.item(0).bounding_box, [BBOX_MIN, BBOX_MAX])
 
 
+def test_new_boxes_do_not_inherit_the_highlight_of_the_selected_object(viewer, scene):
+    """Selecting a box in the layer copies its edge color to the boxes drawn next, which must not be the highlight."""
+    _, labels, object_list = scene
+    layer = object_list.bounding_box_layer
+    green = np.array(layer.edge_color[0])
+    _select_object(viewer, labels, object_list)
+    np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])  # the selected object is highlighted
+    layer.selected_data = {0}  # clicking the highlighted box
+    assert layer.current_edge_color != "red"
+    np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])  # it stays highlighted
+    layer.selected_data = set()
+    corners = np.where(list(itertools.product((False, True), repeat=3)), [8, 30, 35], [7, 20, 30]) * SCALE + TRANSLATE
+    layer.add(corners)  # what drawing a box does
+    np.testing.assert_allclose(layer.edge_color[1], green)
+    np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])
+    # unselecting the object gives its box the color it had
+    object_list.select_item(object_list.item(0))
+    np.testing.assert_allclose(layer.edge_color[0], green)
+
+
+BOX_LAYER_TRANSFORMS =[((3., 1., 1.), (0., 0., 0.)), ((3., 1., 1.), (5., 2., 3.)), ((1.5, 2., .5), (-4., 1., 0.))]
+
+
+@pytest.fixture(params=BOX_LAYER_TRANSFORMS, ids=["scale", "scale+translate", "other"])
+def scaled_box_layer(viewer, scene, request):
+    """The bounding box layer of ``scene`` replaced by one with a scale and translate of its own."""
+    from napari_bbox import BoundingBoxLayer
+    image, labels, object_list = scene
+    scale, translate = request.param
+    bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent", scale=scale, translate=translate)
+    viewer.add_layer(bbox_layer)
+    corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX, BBOX_MIN) * SCALE + TRANSLATE
+    # the same box in world space as the one of the scene, in the data coordinates of the box layer
+    bbox_layer.data = [(corners - translate) / scale]
+    bbox_layer.features = {"label": np.array([OBJECT_ID])}
+    object_list.bounding_box_layer = bbox_layer
+    _process_events()
+    return image, labels, object_list, bbox_layer
+
+
+def test_box_layer_with_its_own_scale_and_translate(scaled_box_layer):
+    """The data of the box layer is in the coordinates of the box layer, not in world coordinates."""
+    _, _, object_list, _ = scaled_box_layer
+    np.testing.assert_array_equal(object_list.item(0).bounding_box, [BBOX_MIN, BBOX_MAX])
+
+
 def test_selecting_an_object_creates_no_layers_and_copies_no_data(viewer, scene):
     image, labels, object_list = scene
     layers, image_data, labels_data = list(viewer.layers), image.data, labels.data
