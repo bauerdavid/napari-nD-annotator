@@ -35,6 +35,7 @@ import time
 
 
 _OBJECT_LISTS = weakref.WeakSet()
+SELECTED_EDGE_COLOR = (1., 0., 0., 1.)  # the edge color of the bounding box of the selected object
 
 # Emitted (with ``viewer=``) whenever the selected object of an object list, or its bounding box, changes, so that
 # widgets working on the selected object (see `selected_object`) can follow it.
@@ -389,9 +390,11 @@ if BoundingBoxLayer:
                 return
             if self._bounding_box_layer is not None:
                 self._bounding_box_layer.events.set_data.disconnect(self._on_bounding_boxes_removed)
+                self._bounding_box_layer.events.current_edge_color.disconnect(self._on_current_edge_color)
             self._bounding_box_layer = new_layer
             if new_layer is not None:
                 new_layer.events.set_data.connect(self._on_bounding_boxes_removed)
+                new_layer.events.current_edge_color.connect(self._on_current_edge_color)
                 if self.bounding_box_change not in self._bounding_box_layer.mouse_drag_callbacks:
                     self._bounding_box_layer.mouse_drag_callbacks.append(self.bounding_box_change)
                 if self._on_bb_double_click not in self._bounding_box_layer.mouse_double_click_callbacks:
@@ -601,9 +604,20 @@ if BoundingBoxLayer:
                     self.bounding_box_layer.edge_color[self.selected_idx] = self.previous_edge_color
                 self.selected_idx = selected_idx
                 self.previous_edge_color = self.bounding_box_layer.edge_color[selected_idx].copy()
-                self.bounding_box_layer.edge_color[selected_idx] = (1., 0., 0., 1.)
+                self.bounding_box_layer.edge_color[selected_idx] = SELECTED_EDGE_COLOR
                 self.bounding_box_layer.data = self.bounding_box_layer.data
             self.notify_selection_changed()
+
+        def _on_current_edge_color(self, event=None):
+            # Selecting a box in the layer copies its edge color to the color of the boxes drawn next. The highlight
+            # of the selected object is not the color of its box: it must not be inherited by the new ones.
+            layer = self._bounding_box_layer
+            if layer is None or self.selected_idx is None or self.previous_edge_color is None:
+                return
+            if not np.allclose(layer._current_edge_color, SELECTED_EDGE_COLOR):
+                return
+            layer._current_edge_color = np.asarray(self.previous_edge_color, dtype=float).reshape(1, -1)
+            layer.events.current_edge_color()
 
         def _on_bounding_boxes_removed(self, event=None):
             # bounding boxes deleted from the layer (e.g. with its delete button)
