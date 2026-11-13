@@ -179,6 +179,7 @@ class EstimationWorker(QObject):
     annotation_needed_signal = Signal(object, object)
     slice_annotations_done = Signal(int)
     object_annotated = Signal(int)
+    bounding_box_changed = Signal(object)  # layers must only be changed in the main thread
     MANUAL_ANNOTATION = "Manual"
     THRESHOLD_ANNOTATION = "Threshold"
     MINIMAL_CONTOUR_ANNOTATION = "Minimal contour"
@@ -519,7 +520,7 @@ class EstimationWorker(QObject):
                     show_info("Stopped calculation")
                     break
                 if self.bb_layer is not None:
-                    self.bb_layer.data = [bounding_box]
+                    self.bounding_box_changed.emit(bounding_box)
 
                 offset = np.clip(bounding_box.min(0), 0, np.asarray(self.image.shape) - 1)
                 # start = time.time()
@@ -794,6 +795,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
             estimation_worker.bb_layer = BoundingBoxLayer(
                 [[[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]], scale=(z_scale, 1., 1.))
             self._viewer.add_layer(estimation_worker.bb_layer)
+
+            def show_bounding_box(bounding_box, layer=estimation_worker.bb_layer):
+                if layer in self._viewer.layers:
+                    layer.data = [bounding_box]
+
+            estimation_worker.bounding_box_changed.connect(show_bounding_box)
             estimation_thread.finished.connect(lambda: self._viewer.layers.remove(estimation_worker.bb_layer))
         estimation_thread.start()
         # viewer.add_image(data)
