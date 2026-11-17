@@ -134,6 +134,27 @@ def test_bounding_box_is_in_data_coordinates(scene):
     np.testing.assert_array_equal(object_list.item(0).bounding_box, [BBOX_MIN, BBOX_MAX])
 
 
+@pytest.mark.parametrize("lower,upper", [((12, 10, 12), (15, 25, 30)),   # beyond the end of the image
+                                         ((-9, 10, 12), (-4, 25, 30)),   # before its start
+                                         ((8, 30, 35), (14, 45, 60)),    # partly inside
+                                         ((2, 50, 60), (7, 70, 80))],    # next to it, in the displayed plane
+                         ids=["after", "before", "partly", "beside"])
+def test_boxes_reaching_outside_the_image_do_not_break_the_list(viewer, scene, lower, upper):
+    """Boxes may belong to another image (e.g. after switching the image of the object list)."""
+    image, labels, object_list = scene
+    bbox_layer = object_list.bounding_box_layer
+    corners = np.where(list(itertools.product((False, True), repeat=3)), upper, lower) * SCALE + TRANSLATE
+    bbox_layer.data = list(bbox_layer.data) + [corners.astype(float)]
+    bbox_layer.features = {"label": np.array([OBJECT_ID, OBJECT_ID + 1])}
+    object_list.update_items()  # used to raise an IndexError (the icon was cut out of the image outside of it)
+    _process_events()
+    assert object_list.count() == 2
+    for ndisplay in (2, 3):
+        viewer.dims.ndisplay = ndisplay
+        object_list.item(1).update_icon()
+        assert object_list.item(1).icon.ndim == 3
+
+
 def test_new_boxes_do_not_inherit_the_highlight_of_the_selected_object(viewer, scene):
     """Selecting a box in the layer copies its edge color to the boxes drawn next, which must not be the highlight."""
     _, labels, object_list = scene

@@ -333,11 +333,21 @@ if BoundingBoxLayer:
 
         def update_icon(self):
             visible_dims = list(self.viewer.dims.displayed)[-2:]
+            # a box may reach outside the layers (e.g. it was drawn on another image): only the part inside is shown
+            shape = np.full(self.bounding_box.shape[1], np.iinfo(np.int64).max)
+            for layer in (self.image_layer, self.mask_layer):
+                if layer is not None:
+                    layer_shape = np.asarray(layer.data.shape[:self.bounding_box.shape[1]])
+                    shape[:len(layer_shape)] = np.minimum(shape[:len(layer_shape)], layer_shape)
             bbox_idx = tuple(
-                slice(max(self.bounding_box[0, d], 0), self.bounding_box[1, d]+1) if d in visible_dims
-                else self.bounding_box[:, d].mean().astype(int)
+                slice(int(np.clip(self.bounding_box[0, d], 0, shape[d])),
+                      int(np.clip(self.bounding_box[1, d] + 1, 0, shape[d]))) if d in visible_dims
+                else int(np.clip(self.bounding_box[:, d].mean(), 0, max(shape[d] - 1, 0)))
                 for d in range(self.bounding_box.shape[1])
             )
+            if any(type(idx) is slice and idx.stop <= idx.start for idx in bbox_idx):
+                self.icon = np.zeros((1, 1, 3), dtype=np.uint8)  # nothing of the box is inside the layers
+                return
             if self.image_layer is None:
                 icon = np.zeros([slice_len(bbox_idx[d]) for d in range(len(bbox_idx)) if type(bbox_idx[d]) is slice] + [3])
             else:
