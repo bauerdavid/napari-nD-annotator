@@ -1,4 +1,5 @@
 import warnings
+from contextlib import contextmanager
 
 from magicgui.widgets import PushButton
 from time import sleep
@@ -21,7 +22,13 @@ from qtpy.QtWidgets import (
     QLabel,
     QPushButton,
     QWidget,
-    QApplication
+    QApplication,
+    QAbstractButton,
+    QAbstractSlider,
+    QAbstractSpinBox,
+    QComboBox,
+    QScrollArea,
+    QTabBar,
 )
 
 import napari
@@ -33,11 +40,11 @@ from napari.utils.notifications import show_info
 from ._utils import ProgressWidget, QDoubleSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
 from ._utils.clipping import SCAFFOLD_KEY
-from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer
+from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer, \
+    viewer_qt_viewer
 from ..surface_anchors import suggest_anchors_in_image
 from ..object_anchors import anchor_store, box_reference, nearest_point_to_ray, pick_along_ray, pick_on_plane
 from .object_list import selected_object_changed, selected_object_info
-from ._utils.collapsible_widget import CollapsibleContainerGroup, correct_container_size
 from .minimal_contour_widget import MinimalContourWidget, delay_function
 
 
@@ -145,6 +152,16 @@ def write_object_mask(labels_layer, label, mask, offset, bbox=None):
         return
     indices = tuple(index + start for index, start in zip(changed, low))
     labels_layer.data_setitem(indices, updated[changed])
+
+
+def annotated_voxels(label_data, label):
+    """The voxels of the objects that are already annotated, other than ``label``, as a boolean array.
+
+    None if there are none.
+    """
+    annotated = np.asarray(label_data)
+    annotated = (annotated != 0) & (annotated != label)
+    return annotated if annotated.any() else None
 
 
 def gradient_intensity_features(image, delta=.1):
@@ -610,71 +627,139 @@ class EstimationWorker(QObject):
         return points @ self.rotation_matrix.T + self.translation_matrix
 
 
-@magicclass(name="Minimal Surface", widget_type="scrollable", properties={"x_enabled": False})
+@magicclass(name="Minimal Surface")
 class _MinimalSurfaceWidget(MagicTemplate):
+    # The object and the two buttons that are always visible, whatever the settings below are doing
     image_layer_combobox = field(Image, label="Image")
     object_status_label = field(widget_type="Label", label="Object")
-    place_anchors_checkbox = field(bool, label="Place anchors in 3D").with_options(
-        value=True,
-        tooltip="In the 3D view, click (without dragging) inside the bounding box of the selected object to place its"
-                " anchors on the surface, right-click to remove the last one. A third click starts a new pair."
-                " Drag an anchor to move it along the surface. Only while this tab is shown and the object list has"
-                " an object selected."
+
+    @magicclass(layout="horizontal", labels=False)
+    class ActionButtons(MagicTemplate):
+        ...
+
+    suggest_anchors_button = field(widget_type=PushButton, name="Suggest anchors", location=ActionButtons).with_options(
+        tooltip="Propose the two anchor points from the bounding box selected in the object list."
+                " Click in the 3D view to place them again, then run."
     )
-    anchor_placement_combobox = field(widget_type="ComboBox", label="Placement").with_options(
+    call_button = field(widget_type=PushButton, name="Run", location=ActionButtons)
+
+    # The settings are in tabs, so none of them has to be expanded or scrolled to
+    @magicclass(widget_type="tabbed", name="Settings")
+    class Tabs(MagicTemplate):
+        @magicclass(widget_type="scrollable", name="Anchors")
+        class AnchorsTab(MagicTemplate):
+            @magicclass(widget_type="groupbox", name="Placing")
+            class PlacingGroup(MagicTemplate):
+                ...
+
+            @magicclass(widget_type="groupbox", name="Suggestion")
+            class SuggestionGroup(MagicTemplate):
+                ...
+
+        @magicclass(widget_type="scrollable", name="Image")
+        class ImageTab(MagicTemplate):
+            @magicclass(widget_type="groupbox", name="Features")
+            class FeaturesGroup(MagicTemplate):
+                ...
+
+            @magicclass(widget_type="groupbox", name="Blurring")
+            class BlurringGroup(MagicTemplate):
+                def try_blurring(self): ...
+
+            @magicclass(widget_type="groupbox", name="Other objects")
+            class OtherObjectsGroup(MagicTemplate):
+                ...
+
+        @magicclass(widget_type="scrollable", name="Advanced")
+        class AdvancedTab(MagicTemplate):
+            @magicclass(widget_type="groupbox", name="Slice annotation")
+            class SliceAnnotationGroup(MagicTemplate):
+                ...
+
+            @magicclass(widget_type="groupbox", name="Shortest paths")
+            class ShortestPathsGroup(MagicTemplate):
+                ...
+
+    # Anchors: everything that places, suggests or moves them
+    place_anchors_checkbox = field(bool, label="Edit in 3D view", location=Tabs.AnchorsTab.PlacingGroup).with_options(
+        value=True,
+        tooltip="In the 3D view, drag an anchor to move it along the surface. Click (without dragging) inside the"
+                " bounding box of the selected object to place its anchors on the surface, right-click to remove the"
+                " last one. A third click starts a new pair. If the object layer is in a box editing mode, plain"
+                " clicks keep editing the boxes: hold Alt to place or remove anchors then (grabbing an existing"
+                " anchor always works). Only while this tab is shown and the object list has an object selected."
+    )
+    anchor_placement_combobox = field(widget_type="ComboBox", label="Placement", location=Tabs.AnchorsTab.PlacingGroup).with_options(
         choices=ANCHOR_PLACEMENTS,
         tooltip="Ray pick: the anchor is where the ray under the cursor first enters the image data inside the"
                 " bounding box. Image plane: the anchor is where the ray crosses the plane of the image layer"
                 " (shown with the plane depiction: Shift+drag moves it, double click sets its position)."
     )
-    clear_anchors_button = field(widget_type=PushButton, name="Clear anchors").with_options(
-        tooltip="Remove the anchors of the selected object"
-    )
-    anchor_distance_slider = field(float, label="Anchor distance (%)", widget_type="FloatSlider").with_options(
+    anchor_distance_slider = field(float, label="Distance (%)", widget_type="FloatSlider", location=Tabs.AnchorsTab.PlacingGroup).with_options(
         min=25., max=200., step=1., value=100.,
         tooltip="Moves the two anchors of the selected object further from (above 100) or closer to (below 100) the"
                 " center of its bounding box, along the line from the center to each anchor, relative to where they"
                 " were when you suggested, placed or dragged them."
     )
-
-    @magicclass(widget_type="collapsible", name="Image Features")
-    class ImageFeaturesWidget(MagicTemplate):
-        ...
-
-    @magicclass(widget_type="collapsible", name="Blurring")
-    class BlurringWidget(MagicTemplate):
-        def try_blurring(self): ...
-
-    @magicclass(widget_type="collapsible", name="Slice Annotation Method")
-    class SliceAnnotationWidget(MagicTemplate):
-        ...
-
-    suggestion_mode_combobox = field(widget_type="ComboBox", label="Suggestion mode").with_options(
+    clear_anchors_button = field(widget_type=PushButton, name="Clear anchors", location=Tabs.AnchorsTab.PlacingGroup).with_options(
+        tooltip="Remove the anchors of the selected object"
+    )
+    suggestion_mode_combobox = field(widget_type="ComboBox", label="Mode", location=Tabs.AnchorsTab.SuggestionGroup).with_options(
         choices=list(SUGGESTION_MODES),
         tooltip="Axis: the anchors are on the boundary along the longest axis of the bounding box."
                 " Fan: casts rays in all directions and takes the farthest pair of boundary points,"
                 " also for objects that are tilted in the box (can be less robust next to touching objects)."
     )
-    fan_rays_spinbox = field(int, label="Fan: rays").with_options(
+    fan_rays_spinbox = field(int, label="Rays", location=Tabs.AnchorsTab.SuggestionGroup).with_options(
         min=16, max=2000, step=16, value=256,
         tooltip="Number of directions the fan casts rays in from the center of the bounding box"
     )
-    fan_max_radius_jump_spinbox = field(float, label="Fan: max radius jump").with_options(
+    fan_max_radius_jump_spinbox = field(float, label="Max radius jump", location=Tabs.AnchorsTab.SuggestionGroup).with_options(
         min=1., max=5., step=.1, value=1.3,
         tooltip="A ray whose boundary is farther from the center than this factor times that of its neighboring"
                 " rays is ignored (leak into a neighbor or a noisy far edge). Lower: stricter, but too low"
                 " cuts off the tips of elongated objects"
     )
-    fan_min_relative_strength_spinbox = field(float, label="Fan: min relative strength").with_options(
+    fan_min_relative_strength_spinbox = field(float, label="Min relative strength", location=Tabs.AnchorsTab.SuggestionGroup).with_options(
         min=0., max=2., step=.1, value=.8,
         tooltip="Rays with a boundary weaker than this fraction of the typical one are ignored."
                 " Higher: only the clearest boundaries count"
     )
-    suggest_anchors_button = field(widget_type=PushButton, name="Suggest anchors").with_options(
-        tooltip="Propose the two anchor points from the bounding box selected in the object list."
-                " Click in the 3D view to place them again, then run."
+
+    # Image: what the surface is computed on
+    used_feature_combobox = field(widget_type="ComboBox", label="Feature", location=Tabs.ImageTab.FeaturesGroup).with_choices(FEATURE_KEYS)
+    feature_editor = field(ScriptExecuteWidget, location=Tabs.ImageTab.FeaturesGroup).with_options(editor_key="minimal_surface_features")
+    alpha = vfield(float, label="α", widget_type="FloatSlider", location=Tabs.ImageTab.FeaturesGroup).with_options(min=0, max=1, value=0.01)
+    beta = vfield(float, label="β", location=Tabs.ImageTab.FeaturesGroup).with_options(min=.01, max=500., value=5)
+    iterations = vfield(int, widget_type="Slider", location=Tabs.ImageTab.FeaturesGroup).with_options(min=1, max=10000, value=10000)
+    z_scale = vfield(float, label="Z scale", location=Tabs.ImageTab.FeaturesGroup).with_options(min=0.01, max=20., value=1.)
+
+    blur_image_checkbox = field(bool, label="Blur image", location=Tabs.ImageTab.BlurringGroup)
+    blurring_type_combobox = (field(str, widget_type="ComboBox", label="Type", location=Tabs.ImageTab.BlurringGroup)
+                              .with_choices([GAUSSIAN_BLURRING, CAD_BLURRING]))
+    blur_sigma_slider = field(float, widget_type="FloatSlider", label="Sigma", location=Tabs.ImageTab.BlurringGroup).with_options(max=20)
+    conductance_spinbox = field(float, label="Conductance", location=Tabs.ImageTab.BlurringGroup).with_options(max=100, value=9)
+    cad_iterations_spinbox = field(int, label="Iterations", location=Tabs.ImageTab.BlurringGroup).with_options(min=1, max=20, value=5)
+
+    ignore_annotated_checkbox = field(bool, label="Ignore annotated", location=Tabs.ImageTab.OtherObjectsGroup).with_options(
+        value=True,
+        tooltip="Objects that are already annotated (labeled in the labels layer of the object list, other than the"
+                " selected one) are left out: the anchors are not suggested on them, and their voxels are set to zero"
+                " in the image the surface is computed on, so the surface does not follow them. The selected object"
+                " is not masked, as the result may replace it."
     )
-    call_button = field(widget_type=PushButton, name="Run")
+
+    # Advanced: rarely changed
+    slice_annotation_method = vfield(str, label="Method", location=Tabs.AdvancedTab.SliceAnnotationGroup).with_options(
+        choices=annotation_methods(),
+        tooltip="How the contour of the object in the plane where the fronts of the two anchors meet is found."
+                " Manual, Threshold, Minimal contour: you annotate it. Automatic (distances): from the distances of"
+                " the anchors in the plane, which is instant (falls back to the phase field if they give nothing"
+                " usable). Automatic (phase field): evolves a phase field in the plane, which takes seconds."
+    )
+    distance_map_combobox = field(Image, label="Distance map (anchor 1)", location=Tabs.AdvancedTab.ShortestPathsGroup)
+    second_distance_map_combobox = field(Image, label="Distance map (anchor 2)", location=Tabs.AdvancedTab.ShortestPathsGroup)
+    start_points_combobox = field(Points, label="Start points", location=Tabs.AdvancedTab.ShortestPathsGroup)
 
     def _suggest_anchors(self):
         if self.call_button.text != "Run":
@@ -693,6 +778,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         result = suggest_anchors_in_image(
             image_layer.data, bbox_min, bbox_max, resample=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
             blur_func=self._blur_image if self.is_blurring_enabled else None,
+            ignore_mask=self._annotated_mask(selected),
             **self._suggestion_options()
         )
         if not result.found:
@@ -706,6 +792,18 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if result.confidence < .2:
             message += ", low: check the points"
         show_info(message)
+
+    def _annotated_mask(self, selected):
+        """The voxels of the objects that are annotated already, other than the selected one, or None.
+
+        None also if the option is off, or the labels layer of the object list does not match the image.
+        """
+        if not self.ignore_annotated_checkbox.value:
+            return None
+        labels, image = selected.labels_layer, selected.image_layer
+        if labels is None or tuple(labels.data.shape) != tuple(image.data.shape):
+            return None
+        return annotated_voxels(labels.data, selected.label)
 
     def _suggestion_options(self):
         method = SUGGESTION_MODES[self.suggestion_mode_combobox.value]
@@ -761,9 +859,14 @@ class _MinimalSurfaceWidget(MagicTemplate):
             return
         self._run_target = (labels, selected.label, (selected.bbox_min, selected.bbox_max))
         image_data = image.data
+        annotated = self._annotated_mask(selected)
+        if annotated is not None:
+            # the surface is computed on a copy without the other objects; the selected one stays, it may be replaced
+            image_data = np.array(image_data)
+            image_data[annotated] = 0
         if self.slice_annotation_method in EstimationWorker.AUTOMATIC_METHODS and self.used_feature == GRADIENT:
             warnings.warn("The automatic slice annotation needs a feature that tells the object from the background:"
-                          " choose 'Gradient + intensity' (or a custom feature) under Image Features")
+                          " choose 'Gradient + intensity' (or a custom feature) as the feature in the Image tab")
             return
         phi_func = {GRADIENT: None, GRADIENT_INTENSITY: gradient_intensity_features}.get(
             self.used_feature, self._run_feature_extractor)
@@ -805,38 +908,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         estimation_thread.start()
         # viewer.add_image(data)
 
-    @magicclass(widget_type="collapsible", name="Shortest Paths")
-    class ShortestPathsWidget(MagicTemplate):
-        ...
-
-    used_feature_combobox = field(widget_type="ComboBox", location=ImageFeaturesWidget).with_choices(FEATURE_KEYS)
-    feature_editor = field(ScriptExecuteWidget, location=ImageFeaturesWidget).with_options(editor_key="minimal_surface_features")
-    alpha = vfield(float, label="\u03B1", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(min=0, max=1, value=0.01)
-    beta = vfield(float, label="\u03B2", location=ImageFeaturesWidget).with_options(min=.01, max=500., value=5)
-    iterations = vfield(int, widget_type="Slider", location=ImageFeaturesWidget).with_options(min=1, max=10000, value=10000)
-    z_scale = vfield(float, location=ImageFeaturesWidget).with_options(min=0.01, max=20., value=1.)
-
-    distance_map_combobox = field(Image, label="Distance map (anchor 1)", location=ShortestPathsWidget)
-    second_distance_map_combobox = field(Image, label="Distance map (anchor 2)", location=ShortestPathsWidget)
-    start_points_combobox = field(Points, label="Start points", location=ShortestPathsWidget)
-
-    blur_image_checkbox = field(bool, label="Blur image", location=BlurringWidget)
-    blurring_type_combobox = (field(str, widget_type="ComboBox", location=BlurringWidget)
-                              .with_choices([GAUSSIAN_BLURRING, CAD_BLURRING]))
-    blur_sigma_slider = field(float, widget_type="FloatSlider", location=BlurringWidget).with_options(max=20)
-    conductance_spinbox = field(float, location=BlurringWidget).with_options(max=100, value=9)
-    cad_iterations_spinbox = field(int, label="Iterations", location=BlurringWidget).with_options(min=1, max=20, value=5)
-
-    slice_annotation_method = vfield(str, location=SliceAnnotationWidget).with_options(
-        choices=annotation_methods(),
-        tooltip="How the contour of the object in the plane where the fronts of the two anchors meet is found."
-                " Manual, Threshold, Minimal contour: you annotate it. Automatic (distances): from the distances of"
-                " the anchors in the plane, which is instant (falls back to the phase field if they give nothing"
-                " usable). Automatic (phase field): evolves a phase field in the plane, which takes seconds."
-    )
-
     def __init__(self):
-        self._collapsible_group = CollapsibleContainerGroup()
         self._viewer = None
         self._run_target = None
         self._anchors_layer = None
@@ -864,18 +936,14 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.call_button.clicked.connect(self._start_estimation)
         self.suggest_anchors_button.clicked.connect(self._suggest_anchors)
         self.clear_anchors_button.clicked.connect(self._clear_anchors)
-        self.native.setMinimumWidth(self.native.children()[1].widget().sizeHint().width()
-                                    + self.native.children()[1].verticalScrollBar().sizeHint().width()
-                                    + 2 * self.native.children()[1].widget().layout().getContentsMargins()[2])
-        for container in [self.ImageFeaturesWidget, self.BlurringWidget, self.SliceAnnotationWidget, self.ShortestPathsWidget]:
-            container._widget._expand_btn.setChecked(False)
-            # container._widget._inner_qwidget.setStyleSheet("padding: 0 10 0 10")
-            container.collapsed = True
-            self._collapsible_group.addItem(container)
         self._on_feature_changed(self.used_feature)
         self._on_suggestion_mode_changed(self.suggestion_mode_combobox.value)
         self.try_blurring_button.native.setCheckable(True)
         self._on_blur_checked(self.blur_image_checkbox.value)
+        self._keep_canvas_focus()
+        for scroll_area in self.native.findChildren(QScrollArea):  # the tabs fit the width of the toolbox
+            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll_area.setWidgetResizable(True)
 
         self._ensure_3d_image()
 
@@ -945,7 +1013,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._update_custom_feature_image()
         self._update_object_state()
 
-    @set_design(text="Try", location=BlurringWidget,)
+    @set_design(text="Try", location=Tabs.ImageTab.BlurringGroup)
     def try_blurring(self):
         self._toggle_blur_demo()
 
@@ -957,7 +1025,6 @@ class _MinimalSurfaceWidget(MagicTemplate):
     @used_feature_combobox.connect
     def _on_feature_changed(self, feature):
         self.feature_editor.visible = feature == "Custom"
-        correct_container_size(self.ImageFeaturesWidget)
 
     def _add_image(self, layer_name, data, layer_args):
         if 'opacity' not in layer_args:
@@ -999,7 +1066,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             layer = self._viewer.add_points(points, name=layer_name, ndim=3, size=2, **layer_args)
         self.start_points_combobox.value = layer
 
-    @set_design(text="Show shortest paths", location=ShortestPathsWidget)
+    @set_design(text="Show shortest paths", location=Tabs.AdvancedTab.ShortestPathsGroup)
     def show_shortest_paths(self):
         points_layer = self.start_points_combobox.value
         distance_map_layers = [self.distance_map_combobox.value, self.second_distance_map_combobox.value]
@@ -1098,12 +1165,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.blur_sigma_slider.visible = blur_method == GAUSSIAN_BLURRING
         self.conductance_spinbox.visible = blur_method == CAD_BLURRING
         self.cad_iterations_spinbox.visible = blur_method == CAD_BLURRING
-        correct_container_size(self.BlurringWidget)
 
     @blur_image_checkbox.connect
     def _on_blur_checked(self, is_checked):
         self.blurring_type_combobox.visible = is_checked
-        correct_container_size(self.BlurringWidget)
         self._on_blur_selection(self.blurring_type_combobox.value if is_checked else "")
 
     def _blur_image(self, image):
@@ -1185,18 +1250,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if self.image_layer.ndim == 2:
             warnings.warn("Minimal Surface works only with 3D images!")
         is_enabled = self.image_layer is not None and self.image_layer.ndim==3
-        for container in self._collapsible_group:
-            container.enabled = is_enabled
         self.call_button.enabled = is_enabled
         self.suggest_anchors_button.enabled = is_enabled
-        self.clear_anchors_button.enabled = is_enabled
+        self.Tabs.enabled = is_enabled
         self.anchor_distance_slider.enabled = is_enabled and self._anchor_base is not None
-        self.place_anchors_checkbox.enabled = is_enabled
-        self.anchor_placement_combobox.enabled = is_enabled
-        self.suggestion_mode_combobox.enabled = is_enabled
-        for widget in (self.fan_rays_spinbox, self.fan_max_radius_jump_spinbox,
-                       self.fan_min_relative_strength_spinbox):
-            widget.enabled = is_enabled
 
     @image_layer_combobox.connect
     def _update_custom_feature_image(self, _=None):
@@ -1334,11 +1391,62 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if np.any(position < selected.bbox_min - .5) or np.any(position > selected.bbox_max + .5):
             target.plane.position = tuple(float(c) for c in center)
 
+    def _keep_canvas_focus(self):
+        """The keyboard stays with the canvas, whatever of this widget was clicked.
+
+        A button or a checkbox that has the focus swallows the Space key, so it cannot be held to pan the view (and
+        the boxes of the layer in edit mode are edited instead). These widgets do not take the focus, and the canvas
+        gets it back after they are used.
+        """
+        for widget_type in (QAbstractButton, QAbstractSlider, QComboBox, QTabBar):
+            for widget in self.native.findChildren(widget_type):
+                widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        for button in self.native.findChildren(QAbstractButton):
+            button.clicked.connect(self._focus_canvas)
+        for combobox in self.native.findChildren(QComboBox):
+            combobox.activated.connect(self._focus_canvas)
+        for spinbox in self.native.findChildren(QAbstractSpinBox):  # these keep the focus while the value is typed
+            spinbox.editingFinished.connect(self._focus_canvas)
+        for slider in self.native.findChildren(QAbstractSlider):
+            slider.sliderReleased.connect(self._focus_canvas)
+
+    def _focus_canvas(self, *_):
+        if self._viewer is None:
+            return
+        try:
+            viewer_qt_viewer(self._viewer).canvas.native.setFocus()
+        except (AttributeError, RuntimeError):  # no window, or it is closing
+            pass
+
+    @contextmanager
+    def _layer_mouse_callbacks_blocked(self):
+        """The active layer does not get the mouse presses that begin while this is active.
+
+        Used by the gestures that belong to the anchors, which would also edit the boxes of the object layer
+        (select, move, resize, add) if it is in edit mode.
+        """
+        layer = self._viewer.layers.selection.active
+        callbacks = getattr(layer, "mouse_drag_callbacks", None)
+        saved = list(callbacks) if callbacks else []
+        if saved:
+            callbacks.clear()
+        try:
+            yield
+        finally:
+            for callback in saved:  # the layer may have changed its mode and callbacks meanwhile
+                if callback not in callbacks:
+                    callbacks.append(callback)
+
+    def _active_layer_edits_with_mouse(self):
+        """True if the active layer is in a mode where its mouse clicks and drags edit it (not pan / zoom)."""
+        mode = getattr(self._viewer.layers.selection.active, "mode", None)
+        return mode is not None and str(getattr(mode, "value", mode)) != "pan_zoom"
+
     def _placing_anchors(self, event):
         """The selected object if a click like ``event`` places its anchors, else None."""
         if not self.place_anchors_checkbox.value or self._viewer.dims.ndisplay != 3:
             return None
-        if event.type != "mouse_press" or event.button not in (1, 2) or len(event.modifiers) > 0:
+        if event.type != "mouse_press" or event.button not in (1, 2) or set(event.modifiers) - {"Alt"}:
             return None
         try:
             if not self.native.isVisibleTo(self.native.window()):  # another tab is shown, or the toolbox is closed
@@ -1373,23 +1481,30 @@ class _MinimalSurfaceWidget(MagicTemplate):
         return nearest_point_to_ray(world, position, direction, .75 * self._anchor_size(image_layer), max_depth)
 
     def _on_canvas_mouse(self, viewer, event):
+        """Who gets a mouse press in the 3D view, the anchors or the active layer, is decided here, so a gesture
+        never does both: an anchor under the cursor is always grabbed (the layer does not get the press); a click
+        elsewhere places or removes anchors, unless the active layer is in a mode where the mouse edits it (the
+        boxes' select / add mode): then plain clicks stay with the layer, and holding Alt gives them to the anchors.
+        """
         selected = self._placing_anchors(event)
         if selected is None:
             return
-        if event.button == 1:
-            grabbed = self._anchor_under_cursor(selected, event)
+        grabbed = self._anchor_under_cursor(selected, event) if event.button == 1 else None
+        if grabbed is None and "Alt" not in event.modifiers and self._active_layer_edits_with_mouse():
+            return
+        with self._layer_mouse_callbacks_blocked():
             if grabbed is not None:
                 yield from self._drag_anchor(selected, grabbed, event)
                 return
-        button = event.button
-        position, view_direction, dims_displayed = event.position, event.view_direction, event.dims_displayed
-        dragging = False
-        yield
-        while event.type == "mouse_move":  # rotating the view
-            dragging = True
+            button = event.button
+            position, view_direction, dims_displayed = event.position, event.view_direction, event.dims_displayed
+            dragging = False
             yield
-        if not dragging:
-            self.place_anchor(button, position, view_direction, dims_displayed)
+            while event.type == "mouse_move":  # rotating the view
+                dragging = True
+                yield
+            if not dragging:
+                self._place_anchor(button, position, view_direction, dims_displayed)
 
     def _drag_anchor(self, selected, index, event):
         """Moves an anchor to where the cursor ray hits the surface (like placing it) until the mouse is released."""
@@ -1415,7 +1530,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             camera.mouse_pan, camera.mouse_zoom = saved
         self._update_object_state()
 
-    def place_anchor(self, button, position, view_direction, dims_displayed):
+    def _place_anchor(self, button, position, view_direction, dims_displayed):
         """A click in the 3D view: the left button places an anchor of the selected object, the right removes one."""
         selected = self._selected_object()
         if selected is None:

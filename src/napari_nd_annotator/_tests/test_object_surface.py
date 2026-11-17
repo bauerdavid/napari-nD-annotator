@@ -276,9 +276,11 @@ def test_settings_saved_with_the_old_widget_still_load(viewer, annotator, tmp_pa
     assert not hasattr(ms, "use_correction") and not hasattr(ms, "labels_layer_combobox")
     data = serialize(annotator)
     saved = data["ToolsWidget"]["Minimal Surface"]
-    # the settings are stored both flat and by container
-    for container in (saved, saved["Image Features"]):
-        container.update({"use_correction": False, "alpha": 0.2, "z_scale": 3.})
+    # the settings are stored both flat and by container; the containers were collapsible ones, now they are tabs
+    assert "alpha" in saved and "alpha" in saved["Settings"]["Image"]["Features"]
+    saved.update({"use_correction": False, "alpha": 0.2, "z_scale": 3.})
+    saved["Image Features"] = {"use_correction": False, "alpha": 0.2, "z_scale": 3.}
+    saved["Blurring"] = {"blur_image_checkbox": False}
     saved["labels_layer_combobox"] = 1
     path = tmp_path / "settings"
     path.write_text(json.dumps(data))
@@ -287,6 +289,189 @@ def test_settings_saved_with_the_old_widget_still_load(viewer, annotator, tmp_pa
 
 
 
+
+
+def test_the_buttons_are_always_visible_and_the_settings_are_grouped_in_tabs(viewer, scene):
+    image_layer, object_list, ms = scene
+    tabs = ms.Tabs.native
+    # the two buttons are not in a tab, so they need no expanding or scrolling
+    for button in (ms.suggest_anchors_button, ms.call_button):
+        assert not tabs.isAncestorOf(button.native)
+    assert [widget.name for widget in ms.Tabs] == ["Anchors", "Image", "Advanced"]
+    # everything about the anchors is together, what the surface is computed on is together
+    for widget in (ms.place_anchors_checkbox, ms.anchor_placement_combobox, ms.anchor_distance_slider,
+                   ms.clear_anchors_button, ms.suggestion_mode_combobox, ms.fan_rays_spinbox):
+        assert ms.Tabs.AnchorsTab.native.isAncestorOf(widget.native), widget.name
+    for widget in (ms.used_feature_combobox, ms.blur_image_checkbox, ms.blur_sigma_slider,
+                   ms.ignore_annotated_checkbox):
+        assert ms.Tabs.ImageTab.native.isAncestorOf(widget.native), widget.name
+
+
+def test_widgets_do_not_keep_the_keyboard_focus_from_the_canvas(viewer, scene, monkeypatch):
+    # a button that has the focus swallows the Space key, which napari would take for panning
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QAbstractButton, QComboBox, QTabBar
+    from napari_nd_annotator._helper_functions import viewer_qt_viewer
+    image_layer, object_list, ms = scene
+    for widget_type in (QAbstractButton, QComboBox, QTabBar):
+        for widget in ms.native.findChildren(widget_type):
+            assert widget.focusPolicy() == Qt.FocusPolicy.NoFocus, widget
+    canvas = viewer_qt_viewer(viewer).canvas.native
+    focused = []
+    monkeypatch.setattr(canvas, "setFocus", lambda *args: focused.append(True))
+    ms.suggest_anchors_button.native.click()  # warns that nothing is selected
+    ms.clear_anchors_button.native.click()
+    assert len(focused) == 2
+
+
+def _gesture(ms, viewer, layer, position, direction, button=1, modifiers=(), moves=()):
+    """A press (and moves, release) as napari dispatches it: the viewer callbacks first, then those of the layer."""
+    event = SimpleNamespace(type="mouse_press", button=button, modifiers=modifiers, position=tuple(position),
+                            view_direction=tuple(np.asarray(direction, dtype=float)), dims_displayed=(0, 1, 2))
+    callback = ms._on_canvas_mouse(viewer, event)
+    next(callback, None)
+    for layer_callback in list(layer.mouse_drag_callbacks):
+        layer_callback(layer, event)
+    for move_position in moves:
+        event.type, event.position = "mouse_move", tuple(move_position)
+        next(callback, None)
+    event.type = "mouse_release"
+    for _ in callback:
+        pass
+
+
+@pytest.fixture
+def box_editing_scene(viewer, object_scene):
+    """The object scene with the object layer active, in the mode that selects and moves its boxes."""
+    image_layer, object_list, ms = object_scene
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    layer = object_list.bounding_box_layer
+    viewer.layers.selection.active = layer
+    layer.mode = "select"
+    presses = []
+    layer.mouse_drag_callbacks[:] = [lambda layer, event: presses.append(event.position)]
+    return viewer, ms, layer, presses
+
+
+def test_plain_clicks_edit_the_boxes_when_the_object_layer_is_in_edit_mode(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    before = _anchors(ms).copy()
+    # beside the anchors: the box tool gets the click, no anchor is placed or removed
+    _gesture(ms, viewer, layer, (20, 36, -20), (0, 0, 1))
+    _gesture(ms, viewer, layer, (20, 36, -20), (0, 0, 1), button=2)
+    assert len(presses) == 2
+    np.testing.assert_allclose(_anchors(ms), before)
+
+
+def test_anchors_can_be_placed_and_removed_with_alt_in_edit_mode(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    _gesture(ms, viewer, layer, (0, 0, 0), (0, 0, 1), button=2, modifiers=("Alt",))
+    assert len(_anchors(ms)) == 1
+    _gesture(ms, viewer, layer, (20, 30, 80), (0, 0, -1), modifiers=("Alt",))
+    points = _anchors(ms)
+    assert len(points) == 2 and np.all(_distance_from_ball_surface(points) < 1.5)
+    assert presses == []  # the boxes did not get any of it
+
+
+def test_an_anchor_that_is_dragged_is_not_also_the_box_that_is_edited(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    callbacks = list(layer.mouse_drag_callbacks)
+    before = _anchors(ms).copy()
+    _gesture(ms, viewer, layer, (20, 30, -20), (0, 0, 1), moves=[(20, 36, -20)])
+    after = _anchors(ms)
+    assert abs(after[0][1] - 36) < 1e-6 and np.allclose(after[1], before[1])  # the anchor moved
+    assert presses == []  # the box tool did not see the press
+    assert layer.mouse_drag_callbacks == callbacks  # and it gets the next ones
+
+
+def test_the_layer_keeps_its_callbacks_when_the_gesture_is_interrupted(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    callbacks = list(layer.mouse_drag_callbacks)
+    event = SimpleNamespace(type="mouse_press", button=1, modifiers=("Alt",), position=(20, 30, -20),
+                            view_direction=(0., 0., 1.), dims_displayed=(0, 1, 2))
+    gesture = ms._on_canvas_mouse(viewer, event)
+    next(gesture)
+    assert layer.mouse_drag_callbacks == []
+    gesture.close()  # e.g. the layer was removed in the middle of it
+    assert layer.mouse_drag_callbacks == callbacks
+
+
+def test_annotated_voxels():
+    from napari_nd_annotator._widgets.minimal_surface_widget import annotated_voxels
+    labels = np.zeros((4, 4, 4), dtype=np.uint16)
+    assert annotated_voxels(labels, 3) is None
+    labels[0] = 3  # only the object itself
+    assert annotated_voxels(labels, 3) is None
+    labels[1], labels[2] = 5, 7
+    annotated = annotated_voxels(labels, 3)
+    assert annotated.dtype == bool and annotated.sum() == 2 * 16 and not annotated[0].any() and not annotated[3].any()
+
+
+def test_suggestion_ignores_the_annotated_objects(viewer, scene, monkeypatch):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = scene
+    labels = object_list.mask_layer
+    labels.data[:5, :5, :5] = 8
+    labels.data[20, 30, 30] = LABEL  # the selected object itself
+    seen = []
+    original = msw.suggest_anchors_in_image
+    monkeypatch.setattr(msw, "suggest_anchors_in_image",
+                        lambda *a, **k: seen.append(k["ignore_mask"]) or original(*a, **k))
+    _select(viewer, object_list)
+    ms._suggest_anchors()
+    assert ms.ignore_annotated_checkbox.value
+    assert seen[0].sum() == 125 and seen[0][0, 0, 0] and not seen[0][20, 30, 30]
+    ms.ignore_annotated_checkbox.value = False
+    ms._suggest_anchors()
+    assert seen[1] is None
+
+
+def test_suggest_anchors_in_image_zeroes_the_ignored_voxels(monkeypatch):
+    from napari_nd_annotator import surface_anchors
+    crops = []
+    monkeypatch.setattr(surface_anchors, "edge_cost_from_image",
+                        lambda crop, *args: crops.append(crop.copy()) or np.ones(crop.shape))
+    image = np.full((20, 20, 20), 5, dtype=np.uint16)
+    ignore = np.zeros(image.shape, dtype=bool)
+    ignore[:10] = True
+    surface_anchors.suggest_anchors_in_image(image, np.array([4., 4, 4]), np.array([12., 12, 12]), margin=2)
+    surface_anchors.suggest_anchors_in_image(image, np.array([4., 4, 4]), np.array([12., 12, 12]), margin=2,
+                                             ignore_mask=ignore)
+    without, with_mask = crops
+    assert without.min() == 5 and with_mask.dtype == image.dtype
+    assert with_mask[:8].max() == 0 and with_mask[8:].min() == 5  # the crop starts at 2: its first 8 slices are < 10
+    assert image.min() == 5  # the data of the image is not touched
+
+
+def test_run_computes_the_surface_without_the_other_objects(viewer, scene, surface_tab, monkeypatch):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = scene
+    labels = object_list.mask_layer
+    labels.data[:5, :5, :5] = 8
+    labels.data[20, 30, 30] = LABEL
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    images = []
+    original = msw.EstimationWorker.initialize
+
+    def spy(worker, image, *args, **kwargs):
+        images.append(image)
+        return original(worker, image, *args, **kwargs)
+
+    monkeypatch.setattr(msw.EstimationWorker, "initialize", spy)
+    monkeypatch.setattr(msw.EstimationWorker, "run", lambda worker: worker.all_done.emit())
+    ms._start_estimation()
+    ms.ignore_annotated_checkbox.value = False
+    ms._start_estimation()
+    _process_events()
+    ignoring, keeping = images
+    assert np.all(ignoring[:5, :5, :5] == 0) and ignoring[20, 30, 30] == image_layer.data[20, 30, 30]
+    assert np.array_equal(ignoring[5:], image_layer.data[5:])
+    assert keeping is image_layer.data  # not copied when nothing is masked
+    assert image_layer.data[:5, :5, :5].any()  # the layer itself was not changed
 
 
 def test_writing_the_mask_in_3D_does_not_upset_the_interpolation_widget(viewer, object_scene):

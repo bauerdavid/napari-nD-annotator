@@ -219,7 +219,7 @@ def edge_cost_from_image(image, alpha=.01, beta=5., blur_func=None):
 
 
 def suggest_anchors_in_image(image, bbox_min, bbox_max, scale=1., alpha=.01, beta=5., blur_func=None, margin=10,
-                             resample=None, **kwargs):
+                             resample=None, ignore_mask=None, **kwargs):
     """:func:`suggest_surface_anchors` for a raw image: phi is computed only on the bounding box plus ``margin``.
 
     ``bbox_min``/``bbox_max`` are in the data (index) coordinates of ``image``, so are the returned points.
@@ -230,6 +230,10 @@ def suggest_anchors_in_image(image, bbox_min, bbox_max, scale=1., alpha=.01, bet
     ``resample`` (one factor per axis, e.g. ``(z_scale, 1, 1)``) resamples the crop with a cubic spline first, as the
     minimal surface run does for anisotropic images; the blur and the edge cost then act on isotropic voxels and
     ``scale`` is ignored. Use either ``scale`` or ``resample``.
+
+    ``ignore_mask`` (a boolean array of the shape of ``image``, e.g. the voxels of the objects that are annotated
+    already) sets the voxels under it to zero in the crop, before anything else, so the anchors are not suggested
+    on them.
     """
     shape = np.asarray(image.shape)
     bbox_min = np.asarray(bbox_min, dtype=float)
@@ -238,7 +242,10 @@ def suggest_anchors_in_image(image, bbox_min, bbox_max, scale=1., alpha=.01, bet
     crop_hi = np.minimum(np.ceil(np.maximum(bbox_min, bbox_max)) + margin + 1, shape).astype(int)
     if np.any(crop_lo >= crop_hi):
         return AnchorSuggestion(reason="bounding box is outside of the image")
-    crop = np.asarray(image[tuple(slice(a, b) for a, b in zip(crop_lo, crop_hi))])
+    crop_slice = tuple(slice(a, b) for a, b in zip(crop_lo, crop_hi))
+    crop = np.asarray(image[crop_slice])
+    if ignore_mask is not None:
+        crop = np.where(np.asarray(ignore_mask[crop_slice]), np.zeros((), dtype=crop.dtype), crop)
     # crop index -> index of the (resampled) crop that the edge cost is computed on
     factor = np.ones(len(shape))
     if resample is not None and not np.allclose(resample, 1):
