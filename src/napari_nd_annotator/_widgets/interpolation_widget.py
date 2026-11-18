@@ -416,6 +416,9 @@ class InterpolationWidget(MagicTemplate):
     def _interpolate_all(self):
         if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
             return
+        if self.dimension is None:  # e.g. a 3D layer in the 3D view: there is no slicing dimension
+            self._reset_contours()
+            return
         slices_with_data = np.argwhere(np.any(
             self.active_labels_layer.data == self.active_labels_layer.selected_label,
             axis=tuple(layer_dims_displayed(self.active_labels_layer))
@@ -429,10 +432,10 @@ class InterpolationWidget(MagicTemplate):
     @thread_worker
     def _interpolate_from_slice(self, idx, direction):
         assert direction in [-1, 1], "direction should be either -1 or 1"
-        if self.active_labels_layer is None:
+        dimension = self.dimension
+        if self.active_labels_layer is None or dimension is None:
             return
 
-        dimension = self.dimension
         n_contour_points = self.n_contour_points
         selected_label = self.active_labels_layer.selected_label
         data = (self.active_labels_layer.data == selected_label).astype(np.uint8)
@@ -517,7 +520,7 @@ class InterpolationWidget(MagicTemplate):
                 self._stored_contours[idx] = []
 
     def _execute_interpolation(self, idx):
-        if idx is None or not 0 <= idx < self.active_labels_layer.data.shape[self.dimension]:
+        if idx is None or self.dimension is None or not 0 <= idx < self.active_labels_layer.data.shape[self.dimension]:
             return
         for direction in [-1, 1]:
             self._start_interpolation(idx, direction)
@@ -611,7 +614,9 @@ class InterpolationWidget(MagicTemplate):
                 and ("minimal_contour" not in layer._overlays or not layer._overlays["minimal_contour"].enabled)):
             return
         self._is_painting = True
-        if layer.mode in ["erase", "paint"]:
+        # Without a single slicing dimension (e.g. a 3D layer in the 3D view) there are no interpolated
+        # contours to bake in: let napari paint on its own.
+        if layer.mode in ["erase", "paint"] and self.dimension is not None:
             cur_slice = layer_slice_indices(layer)
             cnt_list = self._contours_at(cur_slice[self.dimension])
             if len(cnt_list) > 0:
@@ -657,6 +662,8 @@ class InterpolationWidget(MagicTemplate):
             self._labels_update_tmp = (event.data, event.offset)
             return
         self._recompute_pending = False
+        if self._active_labels_layer is None or self.dimension is None:
+            return
         idx = layer_slice_indices(self._active_labels_layer)[self.dimension]
         self._drop_interpolation_of_annotated_slice(idx)
         self._execute_interpolation(idx)
@@ -668,7 +675,7 @@ class InterpolationWidget(MagicTemplate):
         would leave the interpolated contour displayed on its own slice until the slice is changed.
         """
         layer = self._active_labels_layer
-        if layer is None or idx is None or not 0 <= idx < layer.data.shape[self.dimension]:
+        if layer is None or idx is None or self.dimension is None or not 0 <= idx < layer.data.shape[self.dimension]:
             return
         slice_indices = list(layer_slice_indices(layer))
         slice_indices[self.dimension] = idx
