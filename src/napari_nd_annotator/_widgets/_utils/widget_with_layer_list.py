@@ -127,6 +127,9 @@ class WidgetWithLayerList(PersistentWidget):
                 self.viewer.layers.events.renamed.connect(self._on_layer_renamed)
             self._moved_layer = None
             self._layer_name = None
+            # once the layer was chosen (by the user or by the code) it is not replaced behind the user's back
+            self._pinned = False
+            self._auto_picking = False
             self._on_layer_list_change()
 
         @property
@@ -140,6 +143,10 @@ class WidgetWithLayerList(PersistentWidget):
 
         @layer.setter
         def layer(self, layer):
+            self._pinned = True
+            self._set_layer(layer)
+
+        def _set_layer(self, layer):
             if layer is None:
                 self._layer_name = None
                 self.combobox.setCurrentIndex(0)
@@ -158,10 +165,12 @@ class WidgetWithLayerList(PersistentWidget):
 
         def on_layer_index_change(self, index):
             if index == 0:
-                if self.combobox.count() > 1:
+                if self.combobox.count() > 1 and self._layer_name is not None:
                     self.combobox.setCurrentText(self._layer_name)
                     return
             elif index > 0:
+                if not self._auto_picking:
+                    self._pinned = True  # chosen in the combobox
                 self._layer_name = self.combobox.itemText(index)
 
         def _on_layer_list_change(self, *_):
@@ -186,13 +195,20 @@ class WidgetWithLayerList(PersistentWidget):
                 if layer.name == self._layer_name:
                     self.combobox.setCurrentText(layer.name)
             self.combobox.blockSignals(False)
+            if self._layer_name not in [layer.name for layer in layers]:
+                self._layer_name = None  # the layer is gone: no other one is taken instead (see below)
             if self._layer_name != self.combobox.currentText():
                 self.combobox.currentTextChanged.emit(self.combobox.currentText())
                 self.combobox.currentIndexChanged.emit(self.combobox.currentIndex())
-            if self.combobox.count() > 1 and (self.combobox.currentIndex() == 0 or self.layer not in layers):
-                self.layer = layers[0]
+            if self._layer_name is None and not self._pinned and len(layers) == 1:
+                # the only candidate; with several the user (or the selected layer) decides
+                self._auto_picking = True
+                try:
+                    self._set_layer(layers[0])
+                finally:
+                    self._auto_picking = False
             elif self.combobox.count() == 1:
-                self.layer = None
+                self._set_layer(None)
 
         def _on_layer_renamed(self, *_):
             filtered = self._get_layers_of_type()

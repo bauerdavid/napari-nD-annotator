@@ -21,7 +21,8 @@ from ._utils.shortcuts import VIEWER, bind_all, unbind_all
 from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size, viewer_qt_viewer
 from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
-from .working_set import install as install_working_set, link_layers
+from .working_set import (LinkError, active_working_set, auto_link, install as install_working_set, link_layers,
+                          set_boxes, set_source_image)
 from .working_set_status import WorkingSetStatus
 
 try:
@@ -701,12 +702,7 @@ if BoundingBoxLayer:
                 warnings.warn("Image and labels layer should be selected!")
                 return
             if selected_idx == self.selected_idx:
-                self.selected_idx = None
-                item.unselect()
-                self.clearSelection()
-                self.clearFocus()
-                self.bounding_box_layer.edge_color[selected_idx] = self.previous_edge_color
-                self.bounding_box_layer.data = self.bounding_box_layer.data
+                self._clear_selected_object(selected_idx, item)
             else:
                 self._warn_if_layers_mismatch()
                 item.on_select()
@@ -716,6 +712,26 @@ if BoundingBoxLayer:
                 self.previous_edge_color = self.bounding_box_layer.edge_color[selected_idx].copy()
                 self.bounding_box_layer.edge_color[selected_idx] = SELECTED_EDGE_COLOR
                 self.bounding_box_layer.data = self.bounding_box_layer.data
+            self.notify_selection_changed()
+
+        def _clear_selected_object(self, row, item):
+            self.selected_idx = None
+            item.unselect()
+            self.clearSelection()
+            self.clearFocus()
+            layer = self.bounding_box_layer
+            if layer is not None and self.previous_edge_color is not None and row < len(layer.edge_color):
+                layer.edge_color[row] = self.previous_edge_color
+                layer.data = layer.data
+
+        def unselect_object(self):
+            """Unselects the selected object (if any): the view is restored, the clipping and the projections end."""
+            row = self.selected_idx
+            item = self.item(row) if row is not None else None
+            if item is None:
+                self.selected_idx = None
+                return
+            self._clear_selected_object(row, item)
             self.notify_selection_changed()
 
         def _warn_if_layers_mismatch(self):
@@ -919,6 +935,7 @@ if BoundingBoxLayer:
             layout = QVBoxLayout()
             self.viewer = viewer
             self.prev_n_layers = len(viewer.layers)
+            self._following = False
             self.channels_dim = None
             self.list_widget = None
             self.reset_index()
@@ -991,6 +1008,8 @@ if BoundingBoxLayer:
             if self.bounding_box.layer is not None:
                 self.create_list_widget()
             self.installEventFilter(self)
+            viewer.layers.selection.events.active.connect(self._follow_active_layer)
+            self._follow_active_layer()
 
         def _on_surroundings_toggled(self, _=None):
             if self.list_widget is not None:
@@ -1006,6 +1025,7 @@ if BoundingBoxLayer:
                 self.create_list_widget()
             self.list_widget.bounding_box_layer = self.bounding_box.layer
             self.reset_index_after_existing_labels()
+            self._write_links()
 
         def reset_index_after_existing_labels(self):
             if "label" in self.bounding_box.layer.features and len(self.bounding_box.layer.features):
@@ -1016,9 +1036,55 @@ if BoundingBoxLayer:
         def mask_index_change(self, _=None):
             if self.list_widget is not None and self.list_widget.mask_layer is not self.labels.layer:
                 self.list_widget.mask_layer = self.labels.layer
+            self._write_links()
 
         def img_index_change(self, _=None):
             self.update_channels_dim()
+            self._write_links()
+
+        def _write_links(self):
+            """The layers chosen here belong together: the labels layer gets the image and the boxes as its links.
+
+            Layers that do not fit are not linked (the status line says so).
+            """
+            if self._following:
+                return
+            image, labels, boxes = self.image.layer, self.labels.layer, self.bounding_box.layer
+            if labels is None:
+                return
+            try:
+                if image is not None:
+                    set_source_image(labels, image, self.viewer)
+                if boxes is not None:
+                    set_boxes(labels, boxes, self.viewer)
+            except LinkError:
+                pass
+
+        def _follow_active_layer(self, event=None):
+            """The list works on the labels layer that is selected: its image and its boxes (see `working_set`)."""
+            if self._following:
+                return
+            try:
+                target = active_working_set(self.viewer)
+                if target is None or target.labels is None or target.labels is self.labels.layer:
+                    return
+                if target.image is None:
+                    auto_link(self.viewer, target.labels)
+                    target = active_working_set(self.viewer)
+                if target is None or target.image is None:
+                    return  # nothing to follow to: the status line says that the labels layer has no source image
+            except RuntimeError:  # the widget was deleted
+                self.viewer.layers.selection.events.active.disconnect(self._follow_active_layer)
+                return
+            self._following = True
+            try:
+                self.remove_list_widget()  # (the objects of the previous labels layer are no longer selected)
+                self.image.layer = target.image
+                self.labels.layer = target.labels
+                self.bounding_box.layer = target.boxes
+                self.bb_index_change()
+            finally:
+                self._following = False
 
         @property
         def image_layer(self):
@@ -1032,9 +1098,10 @@ if BoundingBoxLayer:
             if self.image_layer is None:
                 warnings.warn("Select an image layer first: the bounding box layer takes its dimensions and scale")
                 return
-            self.viewer.add_layer(
-                BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
-                                 scale=self.image_layer.scale, translate=self.image_layer.translate))
+            layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
+                                     scale=self.image_layer.scale, translate=self.image_layer.translate)
+            self.viewer.add_layer(layer)
+            self.bounding_box.layer = layer
 
         def update_channels_dim(self):
             if self.image_layer is None:
@@ -1058,7 +1125,12 @@ if BoundingBoxLayer:
 
         def remove_list_widget(self):
             if self.list_widget is not None:
-                self.list_widget.release_clipper()
+                # nothing of the list may stay behind: not the selected object, nor the callbacks on the box layer
+                list_widget, self.list_widget = self.list_widget, None
+                list_widget.unselect_object()
+                list_widget.release_clipper()
+                list_widget.bounding_box_layer = None
+                _OBJECT_LISTS.discard(list_widget)
             while self.list_widget_container.count() > 1:
                 self.list_widget_container.removeWidget(self.list_widget_container.widget(1))
             self.list_widget_container.setCurrentIndex(0)

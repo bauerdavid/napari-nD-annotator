@@ -6,7 +6,8 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QLabel, QSizePolicy
 
 from .._helper_functions import unwrap_viewer
-from .working_set import (LAST_USED, SELECTED_OBJECT, WorkingSet, install, working_set, working_set_changed)
+from .working_set import (LAST_USED, SELECTED_OBJECT, WorkingSet, install, linked_image, working_set,
+                          working_set_changed)
 
 PROBLEM_COLOR = "#e05050"
 
@@ -29,6 +30,11 @@ def problems(result: WorkingSet, viewer=None):
         if image_shape is not None and image_shape != labels_shape:
             found.append("The labels layer '%s' %s and the image '%s' %s have different shapes."
                          % (labels.name, labels_shape, image.name, image_shape))
+    if result.boxes is not None and image is not None:
+        boxes_image = linked_image(result.boxes, viewer)
+        if boxes_image is not None and boxes_image is not image:
+            found.append("The boxes '%s' belong to the image '%s', not to '%s'." % (result.boxes.name, boxes_image.name,
+                                                                                  image.name))
     active = viewer.layers.selection.active if viewer is not None else None
     if isinstance(active, Labels) and labels is not None and active is not labels:
         found.append("The active labels layer '%s' is not the one of the %s ('%s')."

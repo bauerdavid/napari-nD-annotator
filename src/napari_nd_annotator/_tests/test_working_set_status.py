@@ -120,3 +120,15 @@ def test_a_labels_layer_without_a_source_does_not_ask_for_one_from_a_helper_laye
                         lambda self, layer: asked.append(layer) or False)
     _select(viewer, viewer.add_points(np.zeros((1, 3)), name="points"))
     assert asked == [] and minimal_contour.labels_layer is None
+
+
+def test_boxes_of_another_image_are_reported(viewer):
+    from napari_bbox import BoundingBoxLayer
+    image = viewer.add_image(np.zeros(SHAPE), name="image")
+    other = viewer.add_image(np.zeros(SHAPE), name="other")
+    labels = viewer.add_labels(np.zeros(SHAPE, dtype=np.uint16), name="labels")
+    boxes = BoundingBoxLayer(ndim=3, name="boxes", edge_color="green", face_color="transparent")
+    viewer.add_layer(boxes)
+    ws.link_layers(image=other, boxes=boxes)
+    found = problems(ws.WorkingSet(image=image, labels=labels, boxes=boxes), viewer)
+    assert len(found) == 1 and "'other'" in found[0] and "'image'" in found[0]

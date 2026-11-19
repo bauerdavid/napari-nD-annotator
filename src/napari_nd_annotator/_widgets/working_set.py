@@ -22,8 +22,10 @@ Links to layers that were removed from the viewer are dropped (see `install`). `
 import weakref
 from typing import Any, NamedTuple, Optional
 
+import numpy as np
 from napari.layers import Image, Labels, Layer
 from napari.utils.events import EventEmitter
+from napari.utils.notifications import show_info
 
 from .._helper_functions import unwrap_viewer
 
@@ -93,6 +95,79 @@ def link_layers(image=None, labels=None, boxes=None):
         labels.metadata[OBJECT_BOXES] = boxes
 
 
+class LinkError(ValueError):
+    """Layers that cannot be linked (the message says why)."""
+
+
+def incompatibility(image, labels):
+    """Why ``image`` cannot be the source image of ``labels`` (a sentence), or None if it can."""
+    if getattr(image, "multiscale", False):
+        return "The image '%s' is multiscale." % image.name
+    image_shape, labels_shape = tuple(image.data.shape[:image.ndim]), tuple(labels.data.shape)
+    if image.ndim != labels.ndim or image_shape != labels_shape:
+        return "The image '%s' %s and the labels layer '%s' %s have different shapes." % (
+            image.name, image_shape, labels.name, labels_shape)
+    return None
+
+
+def align_scale(reference, layer):
+    """Gives ``layer`` the scale of ``reference`` (the voxel indices of the two have to mean the same place)."""
+    reference_scale = np.asarray(reference.scale, dtype=float)
+    count = min(len(reference_scale), layer.ndim)
+    new_scale = np.array(layer.scale, dtype=float)
+    new_scale[-count:] = reference_scale[-count:]
+    if np.allclose(new_scale, layer.scale):
+        return
+    old_scale = tuple(float(s) for s in layer.scale)
+    layer.scale = new_scale
+    show_info("The scale of layer '%s' was %s, set to %s like '%s'" % (
+        layer.name, old_scale, tuple(float(s) for s in new_scale), reference.name))
+
+
+def set_source_image(labels, image, viewer=None):
+    """Makes ``image`` the source image of ``labels`` (and of its box layer); raises `LinkError` if they do not fit.
+
+    The labels layer and its boxes take the scale of the image.
+    """
+    reason = incompatibility(image, labels)
+    if reason is not None:
+        raise LinkError(reason)
+    boxes = linked_boxes(labels, viewer)
+    link_layers(image=image, labels=labels, boxes=boxes)
+    for layer in (labels, boxes):
+        if layer is not None:
+            align_scale(image, layer)
+
+
+def set_boxes(labels, boxes, viewer=None):
+    """Makes ``boxes`` the box layer of the objects of ``labels``; raises `LinkError` if they do not fit."""
+    if boxes.ndim != labels.ndim:
+        raise LinkError("The box layer '%s' has %d dimensions, the labels layer '%s' has %d."
+                        % (boxes.name, boxes.ndim, labels.name, labels.ndim))
+    image = linked_image(labels, viewer)
+    link_layers(image=image, labels=labels, boxes=boxes)
+    if image is not None:
+        align_scale(image, boxes)
+
+
+def auto_link(viewer, labels):
+    """Gives a labels layer without a source image the only image that fits it (shape and scale), and says so.
+
+    Returns the image, or None if there is no link and no single fitting image (the user has to choose).
+    """
+    image = linked_image(labels, viewer)
+    if image is not None or labels.metadata.get(SOURCE_IMAGE) is not None:
+        return image
+    fitting = [layer for layer in viewer.layers if isinstance(layer, Image)
+               and incompatibility(layer, labels) is None and np.allclose(layer.scale, labels.scale)]
+    if len(fitting) != 1:
+        return None
+    set_source_image(labels, fitting[0], viewer)
+    show_info("The source image of the labels layer '%s' is '%s' (the only image of the same shape and scale)"
+              % (labels.name, fitting[0].name))
+    return fitting[0]
+
+
 def _prune_links(viewer, removed):
     for layer in viewer.layers:
         for key in (SOURCE_IMAGE, OBJECT_BOXES):
@@ -149,6 +224,22 @@ def _from_image(viewer, image, last):
         by_image = _boxes_of_image(viewer, image)
         boxes = by_image[0] if len(by_image) == 1 else None
     return WorkingSet(image, labels, boxes, None, ACTIVE_LAYER)
+
+
+def active_working_set(viewer):
+    """The working set of the active layer if that is a labels layer, or a box layer that a labels layer refers to.
+
+    None for any other active layer: the selected object and the layers used last are not looked at (this is what
+    the tools follow when the user selects a labels layer).
+    """
+    viewer = unwrap_viewer(viewer)
+    active = viewer.layers.selection.active
+    if isinstance(active, Labels):
+        return _from_labels(viewer, active)
+    if _is_boxes(active):
+        result = _from_boxes(viewer, active)
+        return result if result.labels is not None else None
+    return None
 
 
 def is_helper_layer(layer):

@@ -41,7 +41,7 @@ from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from .object_list import selected_object, selected_object_changed
-from .working_set import install as install_working_set, is_helper_layer, link_layers, linked_image, working_set
+from .working_set import auto_link, install as install_working_set, is_helper_layer, link_layers, linked_image, working_set
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -1070,6 +1070,7 @@ class MinimalContourWidget(MagicTemplate):
         if not self._labels_layer:
             self._show_no_labels_layer_selected_txt()
             return
+        auto_link(self.viewer, self._labels_layer)  # the only image that fits a labels layer without a source
         if "source_image_layer" not in self._labels_layer.metadata:
             image_layers = list(map(lambda layer: layer.name, filter(lambda layer: isinstance(layer, Image), self.viewer.layers)))
             if len(image_layers) == 0:
