@@ -41,6 +41,7 @@ from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from .object_list import selected_object, selected_object_changed
+from .working_set import install as install_working_set, link_layers, linked_image
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -156,7 +157,7 @@ class SelectedLayerTracker:
     def _add_metadata(self, event):
         if self._prev_active is None or type(event.value) is not Labels:
             return
-        event.value.metadata["source_image_layer"] = self._prev_active
+        link_layers(image=self._prev_active, labels=event.value)
         self._prev_active = None
 
 
@@ -351,7 +352,7 @@ class MinimalContourWidget(MagicTemplate):
 
     @property
     def image_layer(self):
-        return self.labels_layer.metadata.get("source_image_layer", None) if self.labels_layer is not None else None
+        return linked_image(self.labels_layer, self._viewer) if self.labels_layer is not None else None
 
     @property
     def image_data(self):
@@ -1032,10 +1033,10 @@ class MinimalContourWidget(MagicTemplate):
                 self.viewer.layers.remove(labels_layer)
             new_labels = self.viewer.add_labels(
                 np.zeros(source_layer.data.shape[:source_layer.ndim], dtype=dtype), name=name)
-            new_labels.metadata["source_image_layer"] = source_layer
+            link_layers(image=source_layer, labels=new_labels)
             self.viewer.layers.selection.select_only(new_labels)
             return True
-        labels_layer.metadata["source_image_layer"] = source_layer
+        link_layers(image=source_layer, labels=labels_layer)
         return True
 
     @set_design(location=SourceImageWidget, text="Change")
@@ -1132,6 +1133,7 @@ class MinimalContourWidget(MagicTemplate):
 
     def _initialize(self, viewer: napari.Viewer):
         viewer = self._viewer = unwrap_viewer(viewer)
+        install_working_set(viewer)
         self._initialize_helper_layers()
         # feature files of older versions that were left behind (this version writes none)
         clean_legacy_tmp()

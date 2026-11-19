@@ -21,6 +21,7 @@ from ._utils.shortcuts import VIEWER, bind_all, unbind_all
 from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size, viewer_qt_viewer
 from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
+from .working_set import install as install_working_set, link_layers
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -269,7 +270,7 @@ if BoundingBoxLayer:
                 mask_layer.translate = translate(self.mask_layer)
                 mask_layer.brush_size = self.mask_layer.brush_size
                 if image_layer is not None:
-                    mask_layer.metadata["source_image_layer"] = image_layer
+                    link_layers(image=image_layer, labels=mask_layer)
                 self.viewer.add_layer(mask_layer)
             else:
                 mask_layer = None
@@ -289,10 +290,16 @@ if BoundingBoxLayer:
             self.parent.watch_mask_layer(self.mask_layer)
 
         def _give_labels_a_source_image(self):
-            # the minimal contour tool works on the source image of the labels layer, and asks for one when there is none
-            image_layer, mask_layer = self.image_layer, self.mask_layer
-            if "source_image_layer" not in mask_layer.metadata and image_layer.ndim == mask_layer.ndim                     and tuple(image_layer.data.shape[:image_layer.ndim]) == tuple(mask_layer.data.shape):
-                mask_layer.metadata["source_image_layer"] = image_layer
+            # The tools find the layers that belong together through the links (see working_set): the boxes are indices
+            # of the image, and the labels layer has it as its source (the minimal contour tool asks for one when there
+            # is none) if the shapes match. The pair chosen in the object list is the one the tools work on.
+            image_layer, mask_layer, bbox_layer = self.image_layer, self.mask_layer, self.parent.bounding_box_layer
+            same_shape = (image_layer.ndim == mask_layer.ndim
+                          and tuple(image_layer.data.shape[:image_layer.ndim]) == tuple(mask_layer.data.shape))
+            if same_shape:
+                link_layers(image=image_layer, labels=mask_layer, boxes=bbox_layer)
+            else:
+                link_layers(image=image_layer, boxes=bbox_layer)
 
         def update_clipping(self):
             self.parent.clipper.set_box(self.bounding_box[0], self.bounding_box[1])
@@ -402,6 +409,7 @@ if BoundingBoxLayer:
             self._indices = None
             self.indices = indices
             self.viewer = viewer
+            install_working_set(viewer)
             self.name_template = name_template
             self.channels_dim = channels_dim
             self.image_layer = image_layer
