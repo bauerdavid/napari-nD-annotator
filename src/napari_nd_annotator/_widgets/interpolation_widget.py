@@ -32,6 +32,7 @@ from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
 from ._utils.shortcuts import LABELS, bind_all
+from .working_set import is_helper_layer, working_set
 from .resources import interpolate_style_path, loading_icon_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization, \
     layer_get_order, layer_dims_displayed, layer_dims_order, viewer_qt_viewer, unwrap_viewer, viewer_main_window
@@ -596,7 +597,11 @@ class InterpolationWidget(MagicTemplate):
         self.interpolate_button.enabled = True
 
     def _on_active_layer_changed(self, *_):
-        self.active_labels_layer = self.viewer.layers.selection.active
+        active = self.viewer.layers.selection.active
+        labels = working_set(self.viewer).labels  # (also remembers the working set)
+        if is_helper_layer(active) and isinstance(labels, Labels) and labels in self.viewer.layers:
+            active = labels  # a helper layer (boxes, points...) being active does not switch the tool off
+        self.active_labels_layer = active
         if self.active_labels_layer is None or self.active_labels_layer.ndim == 2:
             self.interpolate_button.enabled = False
             return

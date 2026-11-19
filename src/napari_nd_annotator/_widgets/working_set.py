@@ -151,6 +151,12 @@ def _from_image(viewer, image, last):
     return WorkingSet(image, labels, boxes, None, ACTIVE_LAYER)
 
 
+def is_helper_layer(layer):
+    """True for the layers that are neither images nor labels (boxes, points, shapes...): selecting one of them is
+    not leaving the data being annotated, so the tools keep working on the labels layer of the working set."""
+    return layer is not None and not isinstance(layer, (Image, Labels))
+
+
 def _still_valid(viewer, working_set):
     layers = [layer for layer in (working_set.image, working_set.labels, working_set.boxes) if layer is not None]
     return bool(layers) and all(layer in viewer.layers for layer in layers)

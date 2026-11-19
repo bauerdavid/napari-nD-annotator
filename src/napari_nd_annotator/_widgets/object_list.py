@@ -22,6 +22,7 @@ from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size
 from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
 from .working_set import install as install_working_set, link_layers
+from .working_set_status import WorkingSetStatus
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -924,6 +925,8 @@ if BoundingBoxLayer:
             self.bounding_box.combobox.currentIndexChanged.connect(self.bb_index_change)
             self.image.combobox.currentIndexChanged.connect(self.img_index_change)
             self.labels.combobox.currentIndexChanged.connect(self.mask_index_change)
+            self.working_set_status = WorkingSetStatus(viewer)
+            layout.addWidget(self.working_set_status)
             layout.addWidget(self.bounding_box.combobox)
             layout.addWidget(self.image.combobox)
             layout.addWidget(self.labels.combobox)

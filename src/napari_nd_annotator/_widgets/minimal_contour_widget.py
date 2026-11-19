@@ -41,7 +41,7 @@ from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from .object_list import selected_object, selected_object_changed
-from .working_set import install as install_working_set, link_layers, linked_image
+from .working_set import install as install_working_set, is_helper_layer, link_layers, linked_image, working_set
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -1049,11 +1049,23 @@ class MinimalContourWidget(MagicTemplate):
             self.SourceImageWidget.source_image_txt.value = "Source: %s" % (
                 self.image_layer.name if self.image_layer is not None else "None")
 
+    def _working_set_labels_layer(self):
+        """The labels layer of the working set, if it has a source image (it is not asked for one here)."""
+        labels = working_set(self.viewer).labels
+        if isinstance(labels, Labels) and labels in self.viewer.layers and linked_image(labels, self.viewer) is not None:
+            return labels
+        return None
+
     def _on_active_layer_changed(self, *_):
         if self.viewer is None:
             return
         active_layer = self.viewer.layers.selection.active
-        self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
+        # a helper layer (the layer of the bounding boxes, points...) being active does not switch the tool off:
+        # it keeps working on the labels layer of the working set. The image being active does (see is_helper_layer)
+        if isinstance(active_layer, Labels):
+            self._labels_layer = active_layer
+        else:
+            self._labels_layer = self._working_set_labels_layer() if is_helper_layer(active_layer) else None
         self._on_label_change()
         if not self._labels_layer:
             self._show_no_labels_layer_selected_txt()
