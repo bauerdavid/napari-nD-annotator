@@ -131,7 +131,7 @@ https://user-images.githubusercontent.com/36735863/188876826-1771acee-93ba-4905-
 ### Minimal surface
 The `Minimal Surface` tab segments a whole 3D object from two points on its surface (see [Minimal surface](#minimal-surface) for the optional dependency). It works on the object selected in the object list, an object being a bounding box with a label id:
 
-The image, the selected object (with how many of its two anchors are set) and the `Suggest anchors` and `Run` buttons are always visible at the top of the tab. The settings are in three tabs below them, so nothing has to be expanded or scrolled to: `Anchors` (placing, moving and suggesting the anchors), `Image` (the features the surface follows, blurring, and whether to ignore the objects that are annotated already) and `Advanced` (the slice annotation method, shortest paths).
+The image (shown, not chosen: it is the image of the selected object), the selected object (with how many of its two anchors are set) and the `Suggest anchors` and `Run` buttons are always visible at the top of the tab. The settings are in three tabs below them, so nothing has to be expanded or scrolled to: `Anchors` (placing, moving and suggesting the anchors), `Image` (the features the surface follows, blurring, and whether to ignore the objects that are annotated already) and `Advanced` (the slice annotation method, shortest paths).
 
  1. Select an object in the object list (create its bounding box with the `Object List` widget).
  2. Set the two anchors of the object, roughly opposite each other on its surface:

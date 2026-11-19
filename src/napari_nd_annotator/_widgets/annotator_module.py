@@ -2,7 +2,6 @@ import json
 import traceback
 from pathlib import Path
 from typing import Union, Optional
-import itertools
 
 import napari
 from magicclass import magicclass, MagicTemplate, vfield, set_design, field
@@ -11,19 +10,12 @@ from magicgui._util import debounce
 from napari.layers.labels._labels_utils import sphere_indices
 from qtpy.QtCore import QObject, QEvent, Qt
 from qtpy.QtWidgets import QSizePolicy
-from napari.layers import Labels, Image
-from napari.qt.threading import create_worker
+from napari.layers import Labels
 import numpy as np
 from skimage.draw import draw
-from scipy.ndimage import binary_fill_holes, find_objects
 import math
 import warnings
 from dataclasses import field as dfield
-
-try:
-    from napari_bbox import BoundingBoxLayer
-except ImportError:
-    BoundingBoxLayer = None
 
 from .interpolation_widget import InterpolationWidget
 from .minimal_contour_widget import MinimalContourWidget
@@ -38,7 +30,6 @@ from ._utils.callbacks import (
     increment_selected_label,
     decrement_selected_label,
     lock_layer,
-    LOCK_CHAR
 )
 from ._utils.help_dialog import HelpDialog
 from ._utils.shortcuts import LABELS, bind_all, unbind_all
@@ -68,17 +59,13 @@ class AnnotatorWidget(MagicTemplate):
         self._viewer = unwrap_viewer(viewer)
         self.persist = persist
         self._active_labels_layer = None
-        self._active_bbox_layer = None
 
         self._viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
         self._viewer.layers.selection.events.connect(lock_layer)
-        self._viewer.layers.events.inserted.connect(self._move_bbox_to_top)
-        self._viewer.layers.events.moved.connect(self._move_bbox_to_top)
 
         # self.native.installEventFilter(self) # TODO fix
         self._set_fill_objects(self.autofill_objects)
         self._on_layer_selection_change()
-        # self._init_bbox_layer()
 
     def __post_init__(self):
         if self.persist:
@@ -151,7 +138,6 @@ class AnnotatorWidget(MagicTemplate):
         self._active_labels_layer = labels_layer
         self._set_fill_objects(self.autofill_objects)
         self._set_labels_callbacks()
-        # self._init_bbox_layer()
 
     def _unset_labels_callbacks(self):
         if self.active_labels_layer is None:
@@ -161,9 +147,6 @@ class AnnotatorWidget(MagicTemplate):
     def _set_labels_callbacks(self):
         if self.active_labels_layer is None:
             return
-        if self._start_update_bbox not in self.active_labels_layer.events.selected_label.callbacks:
-            self.active_labels_layer.events.selected_label.connect(self._start_update_bbox)
-            self.active_labels_layer.events.data.connect(self._start_update_bbox)
         bind_all(self.active_labels_layer, LABELS, {
             "extend_mask": extend_mask,
             "reduce_mask": reduce_mask,
@@ -174,52 +157,6 @@ class AnnotatorWidget(MagicTemplate):
             "increase_brush": increase_brush_size,
             "decrease_brush": decrease_brush_size,
         })
-
-    def _move_bbox_to_top(self, e=None):
-        if self._active_bbox_layer not in self._viewer.layers:
-            return
-        layer_list = self._viewer.layers
-        with layer_list.events.moved.blocker(self._move_bbox_to_top):
-            try:
-                for i in reversed(range(len(layer_list))):
-                    layer = layer_list[i]
-                    if layer == self._active_bbox_layer:
-                        break
-                    if type(layer) not in [Labels, Image]:
-                        continue
-                    bbox_index = layer_list.index(self._active_bbox_layer)
-                    if i == bbox_index+1:
-                        layer_list.move(i, bbox_index)
-                    else:
-                        layer_list.move(bbox_index, i)
-                    break
-            except KeyError:
-                ...
-
-    def _start_update_bbox(self, event):
-        if self._active_bbox_layer is None:
-            return
-        worker = create_worker(self._update_bbox, event.source)
-        worker.finished.connect(self._active_bbox_layer.refresh)
-        worker.start()
-
-    def _update_bbox(self, layer):
-        if self._active_bbox_layer is None:
-            return
-        if len(self._active_bbox_layer.data) > 0:
-            self._active_bbox_layer.data = []
-        label = layer.selected_label
-        data = layer.data
-        mask = data == label
-        bb_corners = find_objects(mask, max_label=1)[0]
-        if bb_corners is None:
-            return
-        min_ = [slice_.start for slice_ in bb_corners]
-        max_ = [slice_.stop - 1 for slice_ in bb_corners]
-        bb = np.asarray(np.where(list(itertools.product((False, True), repeat=layer.ndim)), max_, min_))
-        self._active_bbox_layer.add(bb)
-        self._active_bbox_layer.properties["label"][0] = label
-        self._active_bbox_layer.refresh_text()
 
     @autofill_objects.connect
     def _set_fill_objects(self, state):
@@ -322,28 +259,3 @@ class AnnotatorWidget(MagicTemplate):
         """Show keyboard shortcuts."""
         dialog = HelpDialog(self.native)
         dialog.show()
-
-    def _init_bbox_layer(self):
-        if self.active_labels_layer is None or BoundingBoxLayer is None:
-            return
-        if self._active_bbox_layer in self.viewer.layers:
-            if (self.active_labels_layer is not None and self._active_bbox_layer.ndim == self.active_labels_layer.ndim
-                    or self.active_labels_layer is None and self._active_bbox_layer.ndim == 2):
-                return
-            with self.viewer.layers.selection.events.changed.blocker(self._on_layer_selection_change):
-                self.viewer.layers.remove(self._active_bbox_layer)
-        self._active_bbox_layer = BoundingBoxLayer(name="%s active object" % LOCK_CHAR, face_color="transparent",
-                                                  edge_color="green", ndim=self.active_labels_layer.ndim if self.active_labels_layer else 2)
-        self._active_bbox_layer.opacity = 1.
-        self._active_bbox_layer.current_properties |= {"label": 0}
-        self._active_bbox_layer.text = {
-            "text": "{label:d}",
-            "size": 10,
-            "color": "green"
-        }
-        with self.viewer.layers.selection.events.changed.blocker(self._on_layer_selection_change):
-            prev_selection = self.viewer.layers.selection.copy()
-            self.viewer.add_layer(self._active_bbox_layer)
-            if len(prev_selection) == 1 and self._active_bbox_layer not in prev_selection:
-                self.viewer.layers.selection = prev_selection
-

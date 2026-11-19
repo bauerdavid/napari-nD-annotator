@@ -389,6 +389,7 @@ if BoundingBoxLayer:
             # the image, labels and bounding box layers share one scale (see `_sync_scales`)
             self._scale_watched = []
             self._syncing_scales = False
+            self._mismatch_warned = set()  # see `_warn_if_layers_mismatch`
             # the icon of the selected object follows the edits of the labels (throttled, painting is fast)
             self._icon_timer = QTimer(self)
             self._icon_timer.setSingleShot(True)
@@ -427,6 +428,11 @@ if BoundingBoxLayer:
             if self._bounding_box_layer is not None:
                 self._bounding_box_layer.events.set_data.disconnect(self._on_bounding_boxes_removed)
                 self._bounding_box_layer.events.current_edge_color.disconnect(self._on_current_edge_color)
+                # the list no longer works on that layer: drawing boxes on it must not reach the list
+                if self.bounding_box_change in self._bounding_box_layer.mouse_drag_callbacks:
+                    self._bounding_box_layer.mouse_drag_callbacks.remove(self.bounding_box_change)
+                if self._on_bb_double_click in self._bounding_box_layer.mouse_double_click_callbacks:
+                    self._bounding_box_layer.mouse_double_click_callbacks.remove(self._on_bb_double_click)
             self._bounding_box_layer = new_layer
             self._sync_scales()
             if new_layer is not None:
@@ -693,6 +699,7 @@ if BoundingBoxLayer:
                 self.bounding_box_layer.edge_color[selected_idx] = self.previous_edge_color
                 self.bounding_box_layer.data = self.bounding_box_layer.data
             else:
+                self._warn_if_layers_mismatch()
                 item.on_select()
                 if self.selected_idx is not None:
                     self.bounding_box_layer.edge_color[self.selected_idx] = self.previous_edge_color
@@ -701,6 +708,27 @@ if BoundingBoxLayer:
                 self.bounding_box_layer.edge_color[selected_idx] = SELECTED_EDGE_COLOR
                 self.bounding_box_layer.data = self.bounding_box_layer.data
             self.notify_selection_changed()
+
+        def _warn_if_layers_mismatch(self):
+            """Says once per image and labels pair that they do not have the same shape.
+
+            The tools work on voxel indices of the image and write them to the labels layer, so a labels layer of
+            another shape gets the annotation in the wrong place (or the minimal contour asks for a source image).
+            """
+            image, labels = self._image_layer, self._mask_layer
+            if image is None or labels is None:
+                return
+            image_shape = tuple(image.data.shape[:image.ndim])
+            labels_shape = tuple(labels.data.shape)
+            if image_shape == labels_shape:
+                return
+            key = (id(image), id(labels), image_shape, labels_shape)
+            if key in self._mismatch_warned:
+                return
+            self._mismatch_warned.add(key)
+            show_info("The labels layer '%s' %s and the image layer '%s' %s have different shapes: the objects"
+                      " cannot be annotated reliably. Use a labels layer made for this image."
+                      % (labels.name, labels_shape, image.name, image_shape))
 
         def _on_current_edge_color(self, event=None):
             # Selecting a box in the layer copies its edge color to the color of the boxes drawn next. The highlight
@@ -799,6 +827,9 @@ if BoundingBoxLayer:
                 yield
             self._mouse_down = False
             # the data of the layer is in its own coordinates, the image extent is in world coordinates
+            if len(layer.data) == 0:  # e.g. the last box was deleted: nothing to clip
+                self.update_items()
+                return
             new_data = np.asarray([[layer.data_to_world(point) for point in box] for box in layer.data]) \
                 .reshape((len(layer.data), -1, layer.ndim))
             if self.image_layer:
@@ -812,9 +843,11 @@ if BoundingBoxLayer:
                 world_max = np.full(new_data.shape[-1], np.inf)
             if len(new_data) > 0 and (np.any(np.all(new_data > world_max, 1))\
                     or np.any(np.all(new_data < world_min, 1))):
+                # a box that is entirely outside the image is dropped
                 layer.data = previous_data
-            if len(new_data) > len(previous_data):
-                clipped = np.clip(new_data[-1], world_min, world_max - self.image_layer.scale)
+            elif len(new_data) > len(previous_data):
+                voxel = self.image_layer.scale if self.image_layer else 0
+                clipped = np.clip(new_data[-1], world_min, world_max - voxel)
                 layer.data[-1][:] = [layer.world_to_data(point) for point in clipped]
                 layer.data = layer.data
             self.update_items()
@@ -985,10 +1018,12 @@ if BoundingBoxLayer:
             return self.labels.layer
 
         def create_bb_layer(self, _):
-            if self.image_layer is not None:
-                self.viewer.add_layer(
-                    BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
-                                     scale=self.image_layer.scale, translate=self.image_layer.translate))
+            if self.image_layer is None:
+                warnings.warn("Select an image layer first: the bounding box layer takes its dimensions and scale")
+                return
+            self.viewer.add_layer(
+                BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
+                                 scale=self.image_layer.scale, translate=self.image_layer.translate))
 
         def update_channels_dim(self):
             if self.image_layer is None:
@@ -1060,6 +1095,10 @@ if BoundingBoxLayer:
 
         def bounding_boxes_from_labels(self):
             if self.labels.layer is None:
+                warnings.warn("Select a labels layer first")
+                return
+            if self.image_layer is None:
+                warnings.warn("Select an image layer first: the bounding box layer takes its dimensions and scale")
                 return
             # the corners below are image indices, so the layer shares the transform of the image
             bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",

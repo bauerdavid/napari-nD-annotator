@@ -643,7 +643,10 @@ class EstimationWorker(QObject):
 @magicclass(name="Minimal Surface")
 class _MinimalSurfaceWidget(MagicTemplate):
     # The object and the two buttons that are always visible, whatever the settings below are doing
-    image_layer_combobox = field(Image, label="Image")
+    # The image is the one of the selected object: shown, not chosen. The (hidden) combobox only remembers the last
+    # 3D image, which is used while no object is selected.
+    image_layer_combobox = field(Image, label="Image").with_options(visible=False)
+    image_status_label = field(widget_type="Label", label="Image")
     object_status_label = field(widget_type="Label", label="Object")
 
     @magicclass(layout="horizontal", labels=False)
@@ -824,15 +827,13 @@ class _MinimalSurfaceWidget(MagicTemplate):
     @property
     def z_scale(self):
         """The z scale of the image of the selected object (or the chosen image): from its layer scale."""
-        selected = self._selected_object()
-        layer = selected.image_layer if selected is not None else self.image_layer
+        layer = self.image_layer
         if layer is None or layer.ndim < 3 or layer.rgb:
             return 1.
         return z_scale_from_layer_scale(layer.scale)
 
     def _update_z_scale_label(self, *_):
-        selected = self._selected_object()
-        layer = selected.image_layer if selected is not None else self.image_layer
+        layer = self.image_layer
         self.z_scale_label.value = "%.3g (from the image layer scale)" % self.z_scale
         self._watch_scale_of(layer)
 
@@ -1005,7 +1006,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._ensure_3d_image()
 
     # widgets that hold a layer: layers are not serializable
-    _NOT_SERIALIZED = ("image_layer_combobox", "object_status_label", "z_scale_label", "distance_map_combobox",
+    _NOT_SERIALIZED = ("image_layer_combobox", "image_status_label", "object_status_label", "z_scale_label", "distance_map_combobox",
                        "second_distance_map_combobox", "start_points_combobox")
 
     def __magicclass_serialize__(self):
@@ -1026,10 +1027,18 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     @property
     def image_layer(self):
+        """The image the tool works on: the image of the selected object, else the last 3D image it worked on.
+
+        What Run and Suggest anchors use is always the image of the selected object; this is the same layer.
+        """
+        selected = self._selected_object()
+        if selected is not None:
+            return selected.image_layer
         return self.image_layer_combobox.value
 
     @image_layer.setter
     def image_layer(self, new_layer):
+        """Sets the image used while no object is selected (an object selected later brings its own image)."""
         self.image_layer_combobox.value = new_layer
 
     @property
@@ -1303,6 +1312,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
     @image_layer_combobox.connect
     def _ensure_3d_image(self, _=None):
         self._update_z_scale_label()
+        self._update_image_status()
         if self.image_layer is None:
             return
         if self.image_layer.ndim == 2:
@@ -1312,6 +1322,17 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self.suggest_anchors_button.enabled = is_enabled
         self.Tabs.enabled = is_enabled
         self.anchor_distance_slider.enabled = is_enabled and self._anchor_base is not None
+
+    def _update_image_status(self):
+        selected = self._selected_object()
+        layer = self.image_layer
+        if layer is None:
+            text = "none"
+        elif selected is not None:
+            text = "%s (of the selected object)" % layer.name
+        else:
+            text = "%s (no object selected)" % layer.name
+        self.image_status_label.value = text
 
     @image_layer_combobox.connect
     def _update_custom_feature_image(self, _=None):
@@ -1330,7 +1351,9 @@ class _MinimalSurfaceWidget(MagicTemplate):
         try:
             self._update_object_state_()
         finally:
-            self._update_z_scale_label()
+            # the image is the one of the selected object: what depends on it follows
+            self._ensure_3d_image()
+            self._update_custom_feature_image()
 
     def _update_object_state_(self):
         selected = self._selected_object()
@@ -1341,8 +1364,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
             self._reset_anchor_base(None)
             return
         image_layer = selected.image_layer
-        if image_layer.ndim == 3 and not image_layer.rgb and image_layer is not self.image_layer:
-            self.image_layer = image_layer
+        if image_layer.ndim == 3 and not image_layer.rgb and image_layer is not self.image_layer_combobox.value:
+            self.image_layer = image_layer  # remembered for when no object is selected
         anchors = anchor_store(selected.bbox_layer).get(selected.label)
         self.object_status_label.value = "%d (%d/2 anchors)" % (selected.label, len(anchors))
         world = np.asarray([image_layer.data_to_world(point) for point in anchors]).reshape(-1, 3) \

@@ -107,9 +107,17 @@ def test_button_is_connected_and_follows_the_image_dimension(viewer, scene):
     assert ms.suggest_anchors_button.enabled
     ms.suggest_anchors_button.native.click()
     assert len(_anchors(ms)) == 2
+    # the image is the one of the selected object: choosing another one does not change what runs
     flat = viewer.add_image(np.zeros((20, 20)), name="flat")
     ms.image_layer = flat
+    assert ms.image_layer is image_layer
+    assert ms.suggest_anchors_button.enabled
+    assert "ball" in ms.image_status_label.value and "selected object" in ms.image_status_label.value
+    # without a selected object the chosen image is the one in use
+    _select(viewer, object_list)  # unselects the object
+    assert ms.image_layer is flat
     assert not ms.suggest_anchors_button.enabled
+    assert "flat" in ms.image_status_label.value
 
 
 @pytest.mark.parametrize("mode", ["Axis", "Fan (farthest pair)"])
