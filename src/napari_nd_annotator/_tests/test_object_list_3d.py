@@ -123,7 +123,7 @@ def test_clipping_follows_the_bounding_box(viewer, scene):
     _select_3d(viewer, labels, object_list)
     shift = np.array([1, 2, 3])
     corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX + shift, BBOX_MIN + shift)
-    object_list.bounding_box_layer.data = [(corners * SCALE + TRANSLATE).astype(float)]
+    object_list.bounding_box_layer.data = [corners.astype(float)]  # the boxes share the transform of the image
     object_list.update_items()
     _process_events()
     for layer in (image, labels):
@@ -267,7 +267,7 @@ def test_the_clipped_region_is_what_the_3d_canvas_shows(viewer, scene):
     # the camera looks along the first axis, the object is a quarter of the last one
     box_min, box_max = [0, 0, 0], [9, 39, 9]
     corners = np.where(list(itertools.product((False, True), repeat=3)), box_max, box_min)
-    object_list.bounding_box_layer.data = [(corners * SCALE + TRANSLATE).astype(float)]
+    object_list.bounding_box_layer.data = [corners.astype(float)]  # the boxes share the transform of the image
     object_list.update_items()
     _process_events()
 

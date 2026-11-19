@@ -18,8 +18,7 @@ from scipy.ndimage import find_objects
 from ._utils import WidgetWithLayerList
 from ._utils.clipping import LayerClipper, displayed_layer_dims
 from ._utils.shortcuts import VIEWER, bind_all, unbind_all
-from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size, viewer_qt_viewer
-from ..object_fit import fit_box_to_object
+from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size
 from .projections import DataBox, SliceDisplayWidget
 
 try:
@@ -386,6 +385,9 @@ if BoundingBoxLayer:
             # the camera and slice position before the first object was selected, restored when it is unselected
             self._saved_view = None
             self._watched_mask_layer = None
+            # the image, labels and bounding box layers share one scale (see `_sync_scales`)
+            self._scale_watched = []
+            self._syncing_scales = False
             # the icon of the selected object follows the edits of the labels (throttled, painting is fast)
             self._icon_timer = QTimer(self)
             self._icon_timer.setSingleShot(True)
@@ -425,6 +427,7 @@ if BoundingBoxLayer:
                 self._bounding_box_layer.events.set_data.disconnect(self._on_bounding_boxes_removed)
                 self._bounding_box_layer.events.current_edge_color.disconnect(self._on_current_edge_color)
             self._bounding_box_layer = new_layer
+            self._sync_scales()
             if new_layer is not None:
                 new_layer.events.set_data.connect(self._on_bounding_boxes_removed)
                 new_layer.events.current_edge_color.connect(self._on_current_edge_color)
@@ -454,6 +457,7 @@ if BoundingBoxLayer:
             if clipped:
                 self.release_selection()
             self._image_layer = new_layer
+            self._sync_scales()
             for i in range(self.count()):
                 item = self.item(i)
                 item.image_layer = new_layer
@@ -472,6 +476,7 @@ if BoundingBoxLayer:
             if clipped:
                 self.release_selection()
             self._mask_layer = new_layer
+            self._sync_scales()
             for i in range(self.count()):
                 item = self.item(i)
                 item.mask_layer = new_layer
@@ -545,6 +550,61 @@ if BoundingBoxLayer:
                 emitter = getattr(layer.events, event_name, None)
                 if emitter is not None:
                     emitter.connect(self._on_mask_changed)
+
+        def _scale_layers(self):
+            return [layer for layer in (self._image_layer, self._mask_layer, self._bounding_box_layer)
+                    if layer is not None]
+
+        def _sync_scales(self, source=None):
+            """Gives the image, labels and bounding box layers of the list the same scale.
+
+            Bounding box corners and label voxels are image indices, so layers with different scales would show,
+            clip and measure the object in different places. ``source`` (the layer whose scale was just changed)
+            sets the scale of the others; without it the image layer does. The scale is kept equal from then on:
+            changing the scale of any of the three changes the others.
+            """
+            layers = self._scale_layers()
+            previous, self._scale_watched = self._scale_watched, []
+            for layer in previous:
+                if not any(layer is other for other in layers):
+                    try:
+                        layer.events.scale.disconnect(self._on_scale_changed)
+                    except (ValueError, KeyError, RuntimeError):
+                        pass
+            for layer in layers:
+                if not any(layer is other for other in self._scale_watched):  # the same layer may have two roles
+                    if not any(layer is other for other in previous):
+                        layer.events.scale.connect(self._on_scale_changed)
+                    self._scale_watched.append(layer)
+            if source is None:
+                source = self._image_layer if self._image_layer is not None else (layers[0] if layers else None)
+            if source is None or self._syncing_scales:
+                return
+            reference = np.asarray(source.scale, dtype=float)
+            self._syncing_scales = True
+            try:
+                for layer in layers:
+                    if layer is source:
+                        continue
+                    count = min(len(reference), layer.ndim)
+                    new_scale = np.array(layer.scale, dtype=float)
+                    new_scale[-count:] = reference[-count:]
+                    if not np.allclose(new_scale, layer.scale):
+                        old_scale = tuple(float(s) for s in layer.scale)
+                        layer.scale = new_scale
+                        show_info(
+                            "The scale of layer '%s' was %s, set to %s like '%s': the image, labels and bounding box"
+                            " layers of the object list need the same scale"
+                            % (layer.name, old_scale, tuple(float(s) for s in new_scale), source.name))
+            finally:
+                self._syncing_scales = False
+
+        def _on_scale_changed(self, event):
+            try:
+                if not self._syncing_scales:
+                    self._sync_scales(event.source)
+            except RuntimeError:  # the widget was deleted
+                pass
 
         def unwatch_mask_layer(self):
             layer, self._watched_mask_layer = self._watched_mask_layer, None
@@ -861,26 +921,6 @@ if BoundingBoxLayer:
             buttons_layout.addWidget(from_labels_button)
             buttons_widget.setLayout(buttons_layout)
             layout.addWidget(buttons_widget)
-            fit_widget = QWidget()
-            fit_layout = QHBoxLayout()
-            fit_layout.setContentsMargins(0, 0, 0, 0)
-            self.fit_button = QPushButton("Fit to object")
-            self.fit_button.setToolTip(
-                "Grows or shrinks the box of the selected object to the object under it, in every dimension, also"
-                " along the ones the box does not span: draw a rough box on any slice that shows the object (even"
-                " its top), the extent along the other dimensions is found automatically.")
-            self.fit_button.clicked.connect(self.fit_selected_box)
-            self.fit_polarity_combobox = QComboBox()
-            self.fit_polarity_combobox.addItems(["Auto", "Bright", "Dark"])
-            self.fit_polarity_combobox.setToolTip(
-                "Auto: the object is brighter or darker than its surroundings, whichever the content of the box is closer"
-                " to. Choose it when the object is hollow or the surroundings are mixed.")
-            for widget in (self.fit_button, self.fit_polarity_combobox):
-                widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # keep the keyboard (e.g. Space to pan) on the canvas
-            fit_layout.addWidget(self.fit_button, 1)
-            fit_layout.addWidget(self.fit_polarity_combobox)
-            fit_widget.setLayout(fit_layout)
-            layout.addWidget(fit_widget)
             self.setLayout(layout)
             self.name_template = "Object"
             if self.bounding_box.layer is not None:
@@ -926,7 +966,8 @@ if BoundingBoxLayer:
         def create_bb_layer(self, _):
             if self.image_layer is not None:
                 self.viewer.add_layer(
-                    BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent"))
+                    BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
+                                     scale=self.image_layer.scale, translate=self.image_layer.translate))
 
         def update_channels_dim(self):
             if self.image_layer is None:
@@ -1017,44 +1058,6 @@ if BoundingBoxLayer:
             bb_layer.features["label"] = np.asarray(ids, dtype=int)
             self.viewer.add_layer(bb_layer)
             self.bounding_box.layer = bb_layer
-
-        def fit_selected_box(self, _=None):
-            """Fit the box of the selected object to the object under it (see :func:`fit_box_to_object`)."""
-            self._focus_canvas()
-            list_widget, image_layer = self.list_widget, self.image_layer
-            if list_widget is None or list_widget.selected_idx is None:
-                warnings.warn("Select an object in the list first")
-                return
-            if image_layer is None or image_layer.rgb or self.channels_dim is not None:
-                warnings.warn("Fitting the box needs a single channel image layer")
-                return
-            row = list_widget.selected_idx
-            item = list_widget.item(row)
-            fit = fit_box_to_object(image_layer.data, item.bounding_box[0], item.bounding_box[1],
-                                    scale=image_layer.scale, polarity=self.fit_polarity_combobox.currentText().lower())
-            if not fit.found:
-                warnings.warn("Cannot fit the box of object %d: %s" % (item.idx, fit.reason))
-                return
-            corners = np.where(list(itertools.product((False, True), repeat=image_layer.ndim)),
-                               fit.box_max, fit.box_min)
-            layer = list_widget.bounding_box_layer
-            new_box = np.asarray([layer.world_to_data(image_layer.data_to_world(point)) for point in corners])
-            data = [np.asarray(box) for box in layer.data]
-            data[row] = new_box
-            layer.data = data
-            list_widget.update_items()
-            message = "Fitted the box of object %d to %s (%s object)" % (
-                item.idx, " x ".join(str(int(n)) for n in fit.box_max - fit.box_min + 1), fit.polarity)
-            if fit.reaches_limit:
-                message += ": the object is larger than the region searched around the box (or merged with a" \
-                           " neighbor), check it and fit again from a bigger box"
-            show_info(message)
-
-        def _focus_canvas(self):
-            try:
-                viewer_qt_viewer(self.viewer).canvas.native.setFocus()
-            except (AttributeError, RuntimeError):
-                pass
 
         def reset_index(self, starting_index=1):
             if self.list_widget is not None:

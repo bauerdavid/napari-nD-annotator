@@ -154,6 +154,19 @@ def write_object_mask(labels_layer, label, mask, offset, bbox=None):
     labels_layer.data_setitem(indices, updated[changed])
 
 
+def z_scale_from_layer_scale(scale):
+    """The ratio of the voxel size along z and in the plane for the ``scale`` of a 3D layer (1 if it is isotropic).
+
+    The surface is computed on the image resampled along z by this factor. The in-plane size is the geometric mean of
+    the y and x scales, as only the z anisotropy is corrected.
+    """
+    z, y, x = (float(s) for s in np.asarray(scale, dtype=float)[-3:])
+    in_plane = (abs(y) * abs(x)) ** .5
+    if in_plane == 0 or z == 0:
+        return 1.
+    return round(abs(z) / in_plane, 6)
+
+
 def annotated_voxels(label_data, label):
     """The voxels of the objects that are already annotated, other than ``label``, as a boolean array.
 
@@ -732,7 +745,11 @@ class _MinimalSurfaceWidget(MagicTemplate):
     alpha = vfield(float, label="α", widget_type="FloatSlider", location=Tabs.ImageTab.FeaturesGroup).with_options(min=0, max=1, value=0.01)
     beta = vfield(float, label="β", location=Tabs.ImageTab.FeaturesGroup).with_options(min=.01, max=500., value=5)
     iterations = vfield(int, widget_type="Slider", location=Tabs.ImageTab.FeaturesGroup).with_options(min=1, max=10000, value=10000)
-    z_scale = vfield(float, label="Z scale", location=Tabs.ImageTab.FeaturesGroup).with_options(min=0.01, max=20., value=1.)
+    z_scale_label = field(widget_type="Label", label="Z scale", location=Tabs.ImageTab.FeaturesGroup).with_options(
+        tooltip="The ratio of the voxel size along z and in the plane, from the scale of the image layer (not set by"
+                " hand: change the scale of the image layer, the labels and bounding box layers of the object list"
+                " follow it). The surface is computed on the image resampled along z by this factor."
+    )
 
     blur_image_checkbox = field(bool, label="Blur image", location=Tabs.ImageTab.BlurringGroup)
     blurring_type_combobox = (field(str, widget_type="ComboBox", label="Type", location=Tabs.ImageTab.BlurringGroup)
@@ -776,7 +793,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if self.used_feature == CUSTOM:
             show_info("The suggestion uses the gradient feature, not the custom one")
         result = suggest_anchors_in_image(
-            image_layer.data, bbox_min, bbox_max, resample=(self.z_scale, 1., 1.), alpha=self.alpha, beta=self.beta,
+            image_layer.data, bbox_min, bbox_max, resample=(self._z_scale_of(image_layer), 1., 1.), alpha=self.alpha,
+            beta=self.beta,
             blur_func=self._blur_image if self.is_blurring_enabled else None,
             ignore_mask=self._annotated_mask(selected),
             **self._suggestion_options()
@@ -792,6 +810,45 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if result.confidence < .2:
             message += ", low: check the points"
         show_info(message)
+
+    def _z_scale_of(self, image_layer):
+        """The z scale of ``image_layer`` (see `z_scale_from_layer_scale`); warns if y and x differ."""
+        if image_layer is None or image_layer.ndim < 3 or image_layer.rgb:
+            return 1.
+        y, x = np.asarray(image_layer.scale, dtype=float)[-2:]
+        if not np.isclose(y, x, rtol=1e-3):
+            warnings.warn("The y and x scales of layer '%s' differ (%g, %g): only the z anisotropy is corrected"
+                          % (image_layer.name, y, x))
+        return z_scale_from_layer_scale(image_layer.scale)
+
+    @property
+    def z_scale(self):
+        """The z scale of the image of the selected object (or the chosen image): from its layer scale."""
+        selected = self._selected_object()
+        layer = selected.image_layer if selected is not None else self.image_layer
+        if layer is None or layer.ndim < 3 or layer.rgb:
+            return 1.
+        return z_scale_from_layer_scale(layer.scale)
+
+    def _update_z_scale_label(self, *_):
+        selected = self._selected_object()
+        layer = selected.image_layer if selected is not None else self.image_layer
+        self.z_scale_label.value = "%.3g (from the image layer scale)" % self.z_scale
+        self._watch_scale_of(layer)
+
+    def _watch_scale_of(self, layer):
+        """Refreshes the z scale shown when the scale of ``layer`` (the image in use) changes."""
+        watched = getattr(self, "_scale_watched_layer", None)
+        if watched is layer:
+            return
+        if watched is not None:
+            try:
+                watched.events.scale.disconnect(self._update_z_scale_label)
+            except (ValueError, KeyError, RuntimeError):
+                pass
+        self._scale_watched_layer = layer
+        if layer is not None:
+            layer.events.scale.connect(self._update_z_scale_label)
 
     def _annotated_mask(self, selected):
         """The voxels of the objects that are annotated already, other than the selected one, or None.
@@ -871,7 +928,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         phi_func = {GRADIENT: None, GRADIENT_INTENSITY: gradient_intensity_features}.get(
             self.used_feature, self._run_feature_extractor)
         points_data = anchors.copy()
-        z_scale = self.z_scale
+        z_scale = self._z_scale_of(image)
         alpha = self.alpha
         beta = self.beta
         n_iter = self.iterations
@@ -948,7 +1005,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._ensure_3d_image()
 
     # widgets that hold a layer: layers are not serializable
-    _NOT_SERIALIZED = ("image_layer_combobox", "object_status_label", "distance_map_combobox",
+    _NOT_SERIALIZED = ("image_layer_combobox", "object_status_label", "z_scale_label", "distance_map_combobox",
                        "second_distance_map_combobox", "start_points_combobox")
 
     def __magicclass_serialize__(self):
@@ -1245,6 +1302,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     @image_layer_combobox.connect
     def _ensure_3d_image(self, _=None):
+        self._update_z_scale_label()
         if self.image_layer is None:
             return
         if self.image_layer.ndim == 2:
@@ -1269,6 +1327,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def _update_object_state(self):
         """Follows the selected object: the image, the anchors that are shown, the status and the plane."""
+        try:
+            self._update_object_state_()
+        finally:
+            self._update_z_scale_label()
+
+    def _update_object_state_(self):
         selected = self._selected_object()
         if selected is None:
             self.object_status_label.value = "none selected"

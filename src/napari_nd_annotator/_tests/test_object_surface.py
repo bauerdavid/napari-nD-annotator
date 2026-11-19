@@ -285,10 +285,57 @@ def test_settings_saved_with_the_old_widget_still_load(viewer, annotator, tmp_pa
     path = tmp_path / "settings"
     path.write_text(json.dumps(data))
     annotator._load(path)
-    assert ms.alpha == pytest.approx(.2) and ms.z_scale == pytest.approx(3.)
+    # the z scale is not a setting any more: it comes from the scale of the image layer
+    assert ms.alpha == pytest.approx(.2) and ms.z_scale == pytest.approx(1.)
 
 
+@pytest.mark.parametrize("scale, expected", [
+    ((1., 1., 1.), 1.), ((3., 1., 1.), 3.), ((2., .5, .5), 4.), ((1., 2., 2.), .5), ((4., 2., 8.), 1.), ((0., 1., 1.), 1.),
+    ((9., 9., 3., 1., 1.), 3.),  # the last three axes
+])
+def test_z_scale_from_layer_scale(scale, expected):
+    from napari_nd_annotator._widgets.minimal_surface_widget import z_scale_from_layer_scale
+    assert z_scale_from_layer_scale(scale) == pytest.approx(expected)
 
+
+def test_the_z_scale_follows_the_scale_of_the_image_layer(viewer, scene, monkeypatch):
+    image_layer, object_list, ms = scene
+    assert ms.z_scale == 1.
+    image_layer.scale = (3., 1., 1.)
+    assert ms.z_scale == pytest.approx(3.)
+    assert ms.z_scale_label.value.startswith("3 ")
+    # the suggestion resamples by it
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    calls = []
+    original = msw.suggest_anchors_in_image
+    monkeypatch.setattr(msw, "suggest_anchors_in_image", lambda *args, **kwargs: calls.append(kwargs) or original(*args, **kwargs))
+    _select(viewer, object_list)
+    ms._suggest_anchors()
+    assert calls and tuple(calls[0]["resample"]) == pytest.approx((3., 1., 1.))
+    # and so does a run (the image resampled along z)
+    assert ms._z_scale_of(image_layer) == pytest.approx(3.)
+
+
+def test_the_layers_of_the_object_list_get_the_scale_of_the_image(viewer, scene):
+    image_layer, object_list, ms = scene
+    labels, boxes = object_list.mask_layer, object_list.bounding_box_layer
+    # changing the scale of any of the three changes the others
+    image_layer.scale = (3., 1., 1.)
+    assert tuple(labels.scale) == (3., 1., 1.) and tuple(boxes.scale) == (3., 1., 1.)
+    boxes.scale = (2., .5, .5)
+    assert tuple(image_layer.scale) == (2., .5, .5) and tuple(labels.scale) == (2., .5, .5)
+    labels.scale = (1., 1., 1.)
+    assert tuple(image_layer.scale) == (1., 1., 1.) and tuple(boxes.scale) == (1., 1., 1.)
+    assert ms.z_scale == pytest.approx(1.)
+    # a layer that is chosen later takes the scale of the image
+    image_layer.scale = (5., 1., 1.)
+    other_labels = viewer.add_labels(np.zeros(SHAPE, dtype=np.uint16), name="other labels", scale=(7., 7., 7.),
+                                     metadata={"source_image_layer": image_layer})  # (else a dialog asks for it)
+    object_list.mask_layer = other_labels
+    assert tuple(other_labels.scale) == (5., 1., 1.)
+    # the replaced layer is not followed any more
+    image_layer.scale = (6., 1., 1.)
+    assert tuple(other_labels.scale) == (6., 1., 1.) and tuple(labels.scale) == (5., 1., 1.)
 
 
 def test_the_buttons_are_always_visible_and_the_settings_are_grouped_in_tabs(viewer, scene):

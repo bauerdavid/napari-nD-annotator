@@ -157,7 +157,8 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
 
         ms = annotator.ToolsWidget.minimal_surface_widget
 
-        layer = viewer.add_image(_ball_image(dtype), name="ball")
+        # the z scale of the surface is the anisotropy of the image layer
+        layer = viewer.add_image(_ball_image(dtype), name="ball", scale=(z_scale, 1., 1.))
         ms.image_layer = layer
         qtbot.waitUntil(lambda: ms.image_layer is layer, timeout=5000)
         from napari_nd_annotator._widgets import minimal_surface_widget as msw
@@ -165,7 +166,7 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
         if method not in msw.annotation_methods():
             pytest.skip("this minimal_surface build has no automatic slice annotation")
         ms.slice_annotation_method = method
-        ms.z_scale = z_scale
+        assert ms.z_scale == pytest.approx(z_scale)
         labels = viewer.add_labels(np.zeros(BALL_SHAPE, dtype=np.uint16), name="labels")
         # the object was segmented before, and another object is next to it
         labels.data[0:3, 0:3, 0:3] = OBJECT_LABEL

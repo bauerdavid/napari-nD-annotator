@@ -53,10 +53,10 @@ def scene(viewer):
                              scale=SCALE, translate=TRANSLATE)
     labels = viewer.add_labels(np.zeros((10, 40, 40), dtype=np.uint16), name="labels",
                                scale=SCALE, translate=TRANSLATE, metadata={"source_image_layer": image})
-    # bounding boxes are in world coordinates
+    # the three layers share the scale, so the corners of the boxes are image indices (data coordinates)
     corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX, BBOX_MIN)
-    corners = corners*SCALE + TRANSLATE
-    bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent")
+    bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent",
+                                  scale=SCALE, translate=TRANSLATE)
     viewer.add_layer(bbox_layer)
     bbox_layer.data = [corners.astype(float)]
     bbox_layer.features = {"label": np.array([OBJECT_ID])}
@@ -100,7 +100,7 @@ def _add_objects(object_list, extra_labels):
     boxes = [np.asarray(box) for box in bbox_layer.data]
     for i, label in enumerate(extra_labels):
         corners = np.where(list(itertools.product((False, True), repeat=3)), [8, 30 + 3*i, 35], [7, 20 + 3*i, 30])
-        boxes.append(corners*SCALE + TRANSLATE)
+        boxes.append(corners)
     bbox_layer.data = boxes
     bbox_layer.features = {"label": np.array([OBJECT_ID] + list(extra_labels))}
     object_list.update_items()
@@ -117,7 +117,7 @@ def _delete_box(object_list, index):
 
 def _move_bounding_box(object_list, shift):
     corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX + shift, BBOX_MIN + shift)
-    object_list.bounding_box_layer.data = [(corners*SCALE + TRANSLATE).astype(float)]
+    object_list.bounding_box_layer.data = [corners.astype(float)]
     object_list.update_items()
     _process_events()
 
@@ -143,7 +143,7 @@ def test_boxes_reaching_outside_the_image_do_not_break_the_list(viewer, scene, l
     """Boxes may belong to another image (e.g. after switching the image of the object list)."""
     image, labels, object_list = scene
     bbox_layer = object_list.bounding_box_layer
-    corners = np.where(list(itertools.product((False, True), repeat=3)), upper, lower) * SCALE + TRANSLATE
+    corners = np.where(list(itertools.product((False, True), repeat=3)), upper, lower)
     bbox_layer.data = list(bbox_layer.data) + [corners.astype(float)]
     bbox_layer.features = {"label": np.array([OBJECT_ID, OBJECT_ID + 1])}
     object_list.update_items()  # used to raise an IndexError (the icon was cut out of the image outside of it)
@@ -166,7 +166,7 @@ def test_new_boxes_do_not_inherit_the_highlight_of_the_selected_object(viewer, s
     assert layer.current_edge_color != "red"
     np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])  # it stays highlighted
     layer.selected_data = set()
-    corners = np.where(list(itertools.product((False, True), repeat=3)), [8, 30, 35], [7, 20, 30]) * SCALE + TRANSLATE
+    corners = np.where(list(itertools.product((False, True), repeat=3)), [8, 30, 35], [7, 20, 30])
     layer.add(corners)  # what drawing a box does
     np.testing.assert_allclose(layer.edge_color[1], green)
     np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])
@@ -175,20 +175,22 @@ def test_new_boxes_do_not_inherit_the_highlight_of_the_selected_object(viewer, s
     np.testing.assert_allclose(layer.edge_color[0], green)
 
 
-BOX_LAYER_TRANSFORMS =[((3., 1., 1.), (0., 0., 0.)), ((3., 1., 1.), (5., 2., 3.)), ((1.5, 2., .5), (-4., 1., 0.))]
+# the scale of the boxes is the one of the image (the object list sets it), their translate may differ
+BOX_LAYER_TRANSFORMS = [((3., 1., 1.), (0., 0., 0.)), ((3., 1., 1.), (5., 2., 3.)), ((1.5, 2., .5), (-4., 1., 0.))]
 
 
-@pytest.fixture(params=BOX_LAYER_TRANSFORMS, ids=["scale", "scale+translate", "other"])
+@pytest.fixture(params=BOX_LAYER_TRANSFORMS, ids=["translate0", "translate=image", "other scale+translate"])
 def scaled_box_layer(viewer, scene, request):
-    """The bounding box layer of ``scene`` replaced by one with a scale and translate of its own."""
+    """The bounding box layer of ``scene`` replaced by one with a translate of its own (and any scale: it is set)."""
     from napari_bbox import BoundingBoxLayer
     image, labels, object_list = scene
     scale, translate = request.param
     bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent", scale=scale, translate=translate)
     viewer.add_layer(bbox_layer)
     corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX, BBOX_MIN) * SCALE + TRANSLATE
-    # the same box in world space as the one of the scene, in the data coordinates of the box layer
-    bbox_layer.data = [(corners - translate) / scale]
+    # the same box in world space as the one of the scene, in the data coordinates of the box layer once it has the
+    # scale of the image (the layer is given it when it is chosen, the data are not rescaled)
+    bbox_layer.data = [(corners - translate) / SCALE]
     bbox_layer.features = {"label": np.array([OBJECT_ID])}
     object_list.bounding_box_layer = bbox_layer
     _process_events()
@@ -231,7 +233,7 @@ def test_selection_moves_the_slice_and_the_camera_to_the_object(viewer, scene):
     _move_view_away(viewer, labels)
     _select_object(viewer, labels, object_list)
     # the middle slice of the object
-    assert 4 <= labels.world_to_data(viewer.dims.point)[0] <= 5
+    assert 4 - 1e-6 <= labels.world_to_data(viewer.dims.point)[0] <= 5 + 1e-6
     center = np.asarray(image.data_to_world((BBOX_MIN + BBOX_MAX) / 2))
     camera = viewer_camera(viewer)
     np.testing.assert_allclose(camera.center[-2:], center[1:])
@@ -432,7 +434,7 @@ def test_new_bounding_boxes_get_consecutive_labels(viewer, scene):
         callback = object_list.bounding_box_change(bbox_layer, event)
         next(callback)
         corners = np.where(list(itertools.product((False, True), repeat=3)), box_max, box_min)
-        bbox_layer.add(corners*SCALE + TRANSLATE)  # what drawing a box does
+        bbox_layer.add(corners)  # what drawing a box does
         event.type = "mouse_release"
         for _ in callback:
             pass
