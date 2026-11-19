@@ -102,6 +102,8 @@ Cropped layers of an object can still be created explicitly from the context men
 
 Bounding boxes can be created from the `Object list` widget. The dimensionality of the bounding box layer will be determined from the image layer. As bounding boxes are created, a small thumbnail will be displayed.
 
+`Fit to object` (under the object list) grows or shrinks the box of the selected object to the object under it, in every dimension, also along the ones that the box does not span. In the 2D view a box drawn on a slice has no extent along the other dimension, and finding the middle of a cell (or its size when drawing from its top) is hard: draw a rough box on any slice that shows the object, even the first one, and press the button. The object is the connected region around the box that is brighter (or darker) than a threshold half way between the content of the box and the background; the search region around the box is widened automatically (up to 8 times its size) when the box is small or deep inside a large object. The combo box next to the button sets whether the object is `Bright` or `Dark` (`Auto` decides by the content of the box). Limits: touching objects without a visible gap are fitted as one, and the box is replaced (no undo), so fit again from a box on the object you want. A message tells when the object reaches the border of the searched region, and nothing changes if the box is on the background.
+
 The proposed pipeline goes as follows:
 
  1. Create a bounding box layer
