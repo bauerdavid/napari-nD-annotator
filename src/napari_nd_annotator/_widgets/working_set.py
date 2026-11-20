@@ -150,6 +150,36 @@ def set_boxes(labels, boxes, viewer=None):
         align_scale(image, boxes)
 
 
+def unlink_boxes(labels):
+    """The labels layer has no box layer any more (the box layer itself is left alone)."""
+    labels.metadata.pop(OBJECT_BOXES, None)
+
+
+def new_labels_for(viewer, image):
+    """Adds an empty labels layer for ``image``: its shape, scale and translate, linked to it, and selects it."""
+    if getattr(image, "multiscale", False):
+        raise LinkError("The image '%s' is multiscale." % image.name)
+    labels = viewer.add_labels(np.zeros(tuple(image.data.shape[:image.ndim]), dtype=np.uint16),
+                               name="labels (%s)" % image.name, scale=image.scale, translate=image.translate)
+    link_layers(image=image, labels=labels)
+    viewer.layers.selection.select_only(labels)
+    return labels
+
+
+def new_boxes_for(viewer, labels):
+    """Adds a box layer for the objects of ``labels``, in the transform of its image, and links it."""
+    if BoundingBoxLayer is None:
+        raise LinkError("Bounding boxes need the napari-bbox plugin.")
+    image = linked_image(labels, viewer)
+    if image is None:
+        raise LinkError("The labels layer '%s' has no source image: the boxes take its scale." % labels.name)
+    boxes = BoundingBoxLayer(ndim=labels.ndim, name="objects (%s)" % labels.name, edge_color="green",
+                             face_color="transparent", scale=image.scale, translate=image.translate)
+    viewer.add_layer(boxes)
+    set_boxes(labels, boxes, viewer)
+    return boxes
+
+
 def auto_link(viewer, labels):
     """Gives a labels layer without a source image the only image that fits it (shape and scale), and says so.
 
@@ -185,26 +215,15 @@ def _labels_of_image(viewer, image):
     return [layer for layer in viewer.layers if isinstance(layer, Labels) and _linked(layer, SOURCE_IMAGE) is image]
 
 
-def _boxes_of_image(viewer, image):
-    return [layer for layer in viewer.layers if _is_boxes(layer) and _linked(layer, SOURCE_IMAGE) is image]
-
-
 def _from_labels(viewer, labels):
-    boxes = linked_boxes(labels, viewer)
-    image = linked_image(labels, viewer)
-    if boxes is None and image is not None:
-        candidates = _boxes_of_image(viewer, image)
-        boxes = candidates[0] if len(candidates) == 1 else None
-    return WorkingSet(image, labels, boxes, None, ACTIVE_LAYER)
+    return WorkingSet(linked_image(labels, viewer), labels, linked_boxes(labels, viewer), None, ACTIVE_LAYER)
 
 
 def _from_boxes(viewer, boxes):
     image = linked_image(boxes, viewer)
     candidates = [layer for layer in viewer.layers
                   if isinstance(layer, Labels) and _linked(layer, OBJECT_BOXES) is boxes]
-    if not candidates and image is not None:
-        candidates = _labels_of_image(viewer, image)
-    labels = candidates[0] if len(candidates) == 1 else None
+    labels = candidates[0] if len(candidates) == 1 else None  # (two labels layers may share the boxes: not guessed)
     if image is None and labels is not None:
         image = linked_image(labels, viewer)
     return WorkingSet(image, labels, boxes, None, ACTIVE_LAYER)
@@ -216,13 +235,7 @@ def _from_image(viewer, image, last):
         labels = last.labels  # the labels layer that was used with this image last
     else:
         labels = candidates[0] if len(candidates) == 1 else None  # more than one: ambiguous, none is guessed
-    if labels is not None:
-        boxes = linked_boxes(labels, viewer)
-    else:
-        boxes = None
-    if boxes is None:
-        by_image = _boxes_of_image(viewer, image)
-        boxes = by_image[0] if len(by_image) == 1 else None
+    boxes = linked_boxes(labels, viewer) if labels is not None else None
     return WorkingSet(image, labels, boxes, None, ACTIVE_LAYER)
 
 
@@ -297,6 +310,11 @@ def _emit_if_changed(viewer):
         return
     state["emitted"] = key
     working_set_changed(viewer=viewer, working_set=result)
+
+
+def notify(viewer):
+    """Tells the listeners of `working_set_changed` (after the links were changed), if the working set changed."""
+    _emit_if_changed(viewer)
 
 
 def _on_selected_object_changed(event):

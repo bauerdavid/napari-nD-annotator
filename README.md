@@ -102,6 +102,17 @@ Cropped layers of an object can still be created explicitly from the context men
 
 Bounding boxes can be created from the `Object list` widget. The dimensionality of the bounding box layer will be determined from the image layer. As bounding boxes are created, a small thumbnail will be displayed.
 
+#### The layers the tools work on
+The tools work on one *labels layer*: the one you select in the layer list (or in the `Labels` combobox at the top of the `Object list`, which selects it in the viewer). The labels layer knows its **image** (its source image: the voxels of the labels are indices of it) and its **boxes** (the bounding box layer with its objects), so selecting it is all there is to do: the `Object list` shows its boxes, Minimal contour works on its image, and Minimal surface on the selected object. The two relations are shown at the top of the `Object list` (and as a line at the top of the Annotation Toolbox) and changed there:
+
+ * `Image` > `Change...` lists the images that fit the labels layer (same shape, no multiscale; the others are greyed with the reason). The labels layer and its boxes take the scale of the image.
+ * `Boxes` > `Change...` lists the box layers with the dimensions of the labels layer (also `None`). One box layer can be used by several labels layers.
+ * `New` next to `Labels` makes an empty labels layer for the selected image, `New` next to `Boxes` a box layer for the labels layer.
+ * A labels layer without a source image gets the only image of the same shape and scale (a notification says so); with several images the choice is yours (`Image` > `Change...`).
+ * A warning in red tells what does not fit (labels and image of different shapes, boxes of another image, an active labels layer that is not the one of the selected object).
+
+Selecting another labels layer unselects the selected object and shows the boxes of the new one. Selecting the box layer (to draw boxes), a points layer or any layer that is not an image or labels leaves the layers as they are; selecting the image switches the minimal contour and interpolation tools off, as they work on a labels layer.
+
 `Fit to object` (under the object list) grows or shrinks the box of the selected object to the object under it, in every dimension, also along the ones that the box does not span. In the 2D view a box drawn on a slice has no extent along the other dimension, and finding the middle of a cell (or its size when drawing from its top) is hard: draw a rough box on any slice that shows the object, even the first one, and press the button. The object is the connected region around the box that is brighter (or darker) than a threshold half way between the content of the box and the background; the search region around the box is widened automatically (up to 8 times its size) when the box is small or deep inside a large object. The combo box next to the button sets whether the object is `Bright` or `Dark` (`Auto` decides by the content of the box). Limits: touching objects without a visible gap are fitted as one, and the box is replaced (no undo), so fit again from a box on the object you want. A message tells when the object reaches the border of the searched region, and nothing changes if the box is on the background.
 
 The proposed pipeline goes as follows:

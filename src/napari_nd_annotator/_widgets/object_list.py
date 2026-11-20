@@ -23,7 +23,8 @@ from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
 from .working_set import (LinkError, active_working_set, auto_link, install as install_working_set, link_layers,
                           set_boxes, set_source_image)
-from .working_set_status import WorkingSetStatus
+from .working_set import working_set_changed
+from .working_set_panel import WorkingSetPanel
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -942,11 +943,10 @@ if BoundingBoxLayer:
             self.bounding_box.combobox.currentIndexChanged.connect(self.bb_index_change)
             self.image.combobox.currentIndexChanged.connect(self.img_index_change)
             self.labels.combobox.currentIndexChanged.connect(self.mask_index_change)
-            self.working_set_status = WorkingSetStatus(viewer)
-            layout.addWidget(self.working_set_status)
-            layout.addWidget(self.bounding_box.combobox)
-            layout.addWidget(self.image.combobox)
-            layout.addWidget(self.labels.combobox)
+            # the layers are chosen here: the labels layer (the selection), and its image and boxes. The comboboxes
+            # of the three layers stay as the state of the list, they are not shown.
+            self.working_set_panel = WorkingSetPanel(viewer)
+            layout.addWidget(self.working_set_panel)
 
             self.list_widget_container = QStackedWidget()
             no_data_widget = QWidget()
@@ -1009,6 +1009,8 @@ if BoundingBoxLayer:
                 self.create_list_widget()
             self.installEventFilter(self)
             viewer.layers.selection.events.active.connect(self._follow_active_layer)
+            working_set_changed.connect(self._follow_active_layer)  # the links of the labels layer were changed
+            self._write_links()  # (the layers that were the only candidates belong together)
             self._follow_active_layer()
 
         def _on_surroundings_toggled(self, _=None):
@@ -1060,19 +1062,24 @@ if BoundingBoxLayer:
             except LinkError:
                 pass
 
+        def _is_set_to(self, target):
+            """The list works on the layers of ``target`` already (a labels layer without a source image is not asked)."""
+            return (target.labels is self.labels.layer and (target.image is None or target.image is self.image.layer)
+                    and target.boxes is self.bounding_box.layer)
+
         def _follow_active_layer(self, event=None):
             """The list works on the labels layer that is selected: its image and its boxes (see `working_set`)."""
             if self._following:
                 return
             try:
                 target = active_working_set(self.viewer)
-                if target is None or target.labels is None or target.labels is self.labels.layer:
+                if target is None or target.labels is None or self._is_set_to(target):
                     return
                 if target.image is None:
                     auto_link(self.viewer, target.labels)
                     target = active_working_set(self.viewer)
-                if target is None or target.image is None:
-                    return  # nothing to follow to: the status line says that the labels layer has no source image
+                if target is None or target.image is None or self._is_set_to(target):
+                    return  # nothing to follow to: the panel says that the labels layer has no source image
             except RuntimeError:  # the widget was deleted
                 self.viewer.layers.selection.events.active.disconnect(self._follow_active_layer)
                 return

@@ -61,21 +61,23 @@ def test_another_active_labels_layer_than_the_one_of_the_set_is_reported(viewer,
     assert problems(ws.WorkingSet(image=image, labels=labels, source=ws.ACTIVE_LAYER), viewer) == []
 
 
-def test_the_line_in_the_toolbox_and_the_object_list_follows_the_selection(viewer, annotator, scene):
+def test_the_line_in_the_toolbox_and_the_panel_in_the_object_list_follow_the_selection(viewer, annotator, scene):
     from napari_nd_annotator._widgets.object_list import ListWidgetBB
     image, labels = scene
     object_list = ListWidgetBB(viewer)
     viewer.window.add_dock_widget(object_list, name="Object list")
     _select(viewer, labels)
-    for widget in (annotator.working_set_status, object_list.working_set_status):
-        assert "Image: <b>image</b>" in widget.text() and "Labels: <b>labels</b>" in widget.text()
-    before = annotator.working_set_status.text()
+    assert "Image: <b>image</b>" in annotator.working_set_panel.status_text()
+    assert "Labels: <b>labels</b>" in annotator.working_set_panel.status_text()
+    panel = object_list.working_set_panel
+    assert panel.labels_combobox.currentText() == "labels" and panel.image_text.text().startswith("image")
+    before = annotator.working_set_panel.status_text()
     _select(viewer, viewer.add_points(np.zeros((1, 3)), name="points"))
-    assert annotator.working_set_status.text() == before  # a helper layer changes nothing
-    # another labels layer is reported
+    assert annotator.working_set_panel.status_text() == before  # a helper layer changes nothing
     other = viewer.add_labels(np.zeros(SHAPE, dtype=np.uint16), name="other", metadata={"source_image_layer": image})
     _select(viewer, other)
-    assert "'other'" in annotator.working_set_status.text() or "Labels: <b>other</b>" in annotator.working_set_status.text()
+    assert "Labels: <b>other</b>" in annotator.working_set_panel.status_text()
+    assert panel.labels_combobox.currentText() == "other"
 
 
 def test_a_helper_layer_does_not_switch_the_tools_off(viewer, annotator, scene):

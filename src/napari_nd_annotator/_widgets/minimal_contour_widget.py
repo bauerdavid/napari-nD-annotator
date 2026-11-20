@@ -993,9 +993,8 @@ class MinimalContourWidget(MagicTemplate):
         self.LabelOptionsWidget.visible = True
         self.ContourWidget.visible = True
         self.BlurWidget.visible = True
-        self.SourceImageWidget.visible = True
-        image_layer = self.image_layer
-        self.SourceImageWidget.source_image_txt.value = "Source: %s" % (image_layer.name if image_layer is not None else "None")
+        # the source image is shown (and changed) in the layers panel; the row is only for a labels layer without one
+        self.SourceImageWidget.visible = False
 
     def _select_source_image_dialog(self, labels_layer):
         """Show a dialog to select/change the source image layer for labels_layer.

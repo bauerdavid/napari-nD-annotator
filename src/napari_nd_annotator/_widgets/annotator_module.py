@@ -20,7 +20,7 @@ from dataclasses import field as dfield
 from .interpolation_widget import InterpolationWidget
 from .minimal_contour_widget import MinimalContourWidget
 from .minimal_surface_widget import MinimalSurfaceWidget
-from .working_set_status import WorkingSetStatus
+from .working_set_panel import WorkingSetPanel
 from ._utils.callbacks import (
     extend_mask,
     reduce_mask,
@@ -80,9 +80,9 @@ class AnnotatorWidget(MagicTemplate):
                 w.native.setFixedSize(20, 20)
                 w.native.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
                 self.native.layout().setAlignment(w.native, Qt.AlignRight)
-        # which layers the tools work on (the same line is at the top of the object list)
-        self.working_set_status = WorkingSetStatus(self._viewer)
-        self.native.layout().insertWidget(0, self.working_set_status)
+        # which layers the tools work on, and the menu to change them (the object list has the whole panel)
+        self.working_set_panel = WorkingSetPanel(self._viewer, compact=True)
+        self.native.layout().insertWidget(0, self.working_set_panel)
         self.ToolsWidget.interpolation_widget._initialize(self._viewer, self)
         self.ToolsWidget.minimal_contour_widget._initialize(self._viewer)
         if self.ToolsWidget.minimal_surface_widget is not None:
