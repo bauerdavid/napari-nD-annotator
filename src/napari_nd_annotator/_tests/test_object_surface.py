@@ -684,3 +684,32 @@ def test_distance_slider_follows_the_selected_object(viewer, scene, surface_tab)
     assert not np.allclose(_anchors(ms), suggested)
     ms.clear_anchors_button.native.click()
     assert not ms.anchor_distance_slider.enabled and ms.anchor_distance_slider.value == 100
+
+
+def test_annotating_a_slice_keeps_the_object_selected_and_the_selection(viewer, object_scene, annotator):
+    from napari_nd_annotator._widgets.minimal_surface_widget import EstimationWorker
+    from napari_nd_annotator._widgets.object_list import selected_object_info
+    image_layer, object_list, ms = object_scene
+    worker = EstimationWorker(viewer, annotator.ToolsWidget.minimal_contour_widget, ms)
+    worker.init_slice_annotation_fun = lambda: None
+    worker.finish_slice_annotation_fun = lambda: None
+    labels = object_list.mask_layer
+    viewer.layers.selection.select_only(image_layer)
+    _process_events()
+    selected = selected_object_info(viewer)
+    assert selected is not None
+    layer_count = len(viewer.layers)
+    worker.begin_slice_annotation(np.zeros((30, 40)), None)
+    _process_events()
+    # the slice labels layer is the active one, and the object is still selected in the list, which still shows its layers
+    assert viewer.layers.selection.active is worker.slice_labels_layer
+    assert worker.slice_labels_layer.metadata["source_image_layer"] is worker.slice_image_layer
+    still = selected_object_info(viewer)
+    assert still is not None and still.label == selected.label and still.labels_layer is labels
+    assert object_list.mask_layer is labels and ms.image_layer is image_layer
+    assert ms.call_button.text == "Run"
+    worker.finish_slice_annotation()
+    _process_events()
+    assert len(viewer.layers) == layer_count
+    assert selected_object_info(viewer) is not None and object_list.mask_layer is labels
+    assert list(viewer.layers.selection) == [image_layer] and viewer.layers.selection.active is image_layer

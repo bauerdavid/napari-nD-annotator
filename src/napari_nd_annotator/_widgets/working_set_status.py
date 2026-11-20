@@ -6,7 +6,7 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QLabel, QSizePolicy
 
 from .._helper_functions import unwrap_viewer
-from .working_set import (LAST_USED, SELECTED_OBJECT, WorkingSet, install, linked_image, working_set,
+from .working_set import (LAST_USED, SELECTED_OBJECT, WorkingSet, install, is_scratch, linked_image, working_set,
                           working_set_changed)
 
 PROBLEM_COLOR = "#e05050"
@@ -36,7 +36,7 @@ def problems(result: WorkingSet, viewer=None):
             found.append("The boxes '%s' belong to the image '%s', not to '%s'." % (result.boxes.name, boxes_image.name,
                                                                                   image.name))
     active = viewer.layers.selection.active if viewer is not None else None
-    if isinstance(active, Labels) and labels is not None and active is not labels:
+    if isinstance(active, Labels) and not is_scratch(active) and labels is not None and active is not labels:
         found.append("The active labels layer '%s' is not the one of the %s ('%s')."
                      % (active.name, "selected object" if result.source == SELECTED_OBJECT else "working set",
                         labels.name))

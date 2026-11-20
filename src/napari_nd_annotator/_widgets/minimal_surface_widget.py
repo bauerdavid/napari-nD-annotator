@@ -46,6 +46,7 @@ from ..surface_anchors import suggest_anchors_in_image
 from ..object_anchors import anchor_store, box_reference, nearest_point_to_ray, pick_along_ray, pick_on_plane
 from .object_list import selected_object_changed, selected_object_info
 from .minimal_contour_widget import MinimalContourWidget, delay_function
+from .working_set import SCRATCH
 
 
 try:
@@ -248,6 +249,7 @@ class EstimationWorker(QObject):
         self.bb_layer = None
         self.slice_image_layer = None
         self.slice_labels_layer = None
+        self.prev_selection = None
         self.slice_annotation = None
         self.manual_annotation_done = False
         self.z_scale = None
@@ -289,8 +291,15 @@ class EstimationWorker(QObject):
         self.finish_annotation_methods = {EstimationWorker.MANUAL_ANNOTATION: self.finish_manual_annotation, EstimationWorker.THRESHOLD_ANNOTATION: self.finish_threshold_annotation, EstimationWorker.MINIMAL_CONTOUR_ANNOTATION: self.finish_minimal_contour_annotation}
 
     def begin_slice_annotation(self, image_slice, distance_map_slice):
-        self.slice_image_layer = self.viewer.add_image(image_slice)
-        self.slice_labels_layer = self.viewer.add_labels(np.zeros_like(image_slice, dtype=int))
+        # the layers the user had selected come back when the annotation is done
+        selection = self.viewer.layers.selection
+        self.prev_selection = (list(selection), selection.active)
+        # the slice layers are scratch layers (see working_set): selecting them does not change the working set, so the
+        # selected object stays selected. The labels know their image, so nothing has to guess it
+        self.slice_image_layer = self.viewer.add_image(image_slice, metadata={SCRATCH: True})
+        self.slice_labels_layer = self.viewer.add_labels(
+            np.zeros_like(image_slice, dtype=int),
+            metadata={SCRATCH: True, "source_image_layer": self.slice_image_layer})
         self.prev_ndisplay = self.viewer.dims.ndisplay
         self.prev_camera_center = viewer_camera(self.viewer).center
         self.prev_camera_zoom = viewer_camera(self.viewer).zoom
@@ -338,6 +347,22 @@ class EstimationWorker(QObject):
             viewer_camera(self.viewer).angles = self.prev_camera_angles
         self.slice_labels_layer = None
         self.slice_image_layer = None
+        self._restore_selection()
+
+    def _restore_selection(self):
+        """Selects again what was selected before the slice layers were added."""
+        previous, self.prev_selection = self.prev_selection, None
+        if previous is None:
+            return
+        layers, active = previous
+        layers = [layer for layer in layers if layer in self.viewer.layers]
+        if not layers:
+            return
+        selection = self.viewer.layers.selection
+        selection.select_only(layers[0])
+        selection.update(layers)
+        if active in layers:
+            selection.active = active
 
     def manual_annotation(self):
         self.manual_annotation_dialog.show()

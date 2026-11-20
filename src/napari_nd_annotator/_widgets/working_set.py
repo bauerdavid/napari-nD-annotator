@@ -37,6 +37,7 @@ except ImportError:
 
 SOURCE_IMAGE = "source_image_layer"
 OBJECT_BOXES = "object_boxes_layer"
+SCRATCH = "scratch_layer"
 
 SELECTED_OBJECT = "selected object"
 ACTIVE_LAYER = "active layer"
@@ -276,14 +277,26 @@ def _from_image(viewer, image, last):
     return WorkingSet(image, labels, boxes, None, ACTIVE_LAYER)
 
 
+# A layer that a tool makes for a moment (the slice that is annotated, ...) is made with ``metadata={SCRATCH: True}``
+# (not marked afterwards: the viewer reacts to a new layer being selected before the caller gets it back).
+# A scratch layer is never part of a working set: selecting it neither changes what the object list shows nor
+# deselects the selected object, and nothing is linked to it by guessing.
+
+
+def is_scratch(layer):
+    return layer is not None and bool(layer.metadata.get(SCRATCH))
+
+
 def active_working_set(viewer):
     """The working set of the active layer if that is a labels layer, or a box layer that a labels layer refers to.
 
-    None for any other active layer: the selected object and the layers used last are not looked at (this is what
-    the tools follow when the user selects a labels layer).
+    None for any other active layer (and for a scratch layer): the selected object and the layers used last are not
+    looked at (this is what the tools follow when the user selects a labels layer).
     """
     viewer = unwrap_viewer(viewer)
     active = viewer.layers.selection.active
+    if is_scratch(active):
+        return None
     if isinstance(active, Labels):
         return _from_labels(viewer, active)
     if _is_boxes(active):
@@ -316,7 +329,9 @@ def working_set(viewer) -> WorkingSet:
     else:
         active = viewer.layers.selection.active
         result = None
-        if isinstance(active, Labels):
+        if is_scratch(active):
+            pass  # not a layer to work on: what was used last stays
+        elif isinstance(active, Labels):
             result = _from_labels(viewer, active)
         elif _is_boxes(active):
             result = _from_boxes(viewer, active)

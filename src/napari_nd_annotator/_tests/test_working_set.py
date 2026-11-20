@@ -170,3 +170,19 @@ def test_the_event_is_emitted_when_the_working_set_changes(scene):
         assert len(seen) == 2
     finally:
         ws.working_set_changed.disconnect(listener)
+
+
+def test_scratch_layers_are_not_part_of_a_working_set(scene):
+    viewer, image, labels, boxes, other, points = scene
+    _select(viewer, labels)
+    before = ws.working_set(viewer)
+    assert before.labels is labels
+    slice_image = viewer.add_image(np.zeros((20, 20)), name="slice", metadata={ws.SCRATCH: True})
+    slice_labels = viewer.add_labels(np.zeros((20, 20), dtype=int), name="slice labels", metadata={ws.SCRATCH: True})
+    _select(viewer, slice_labels)
+    assert ws.is_scratch(slice_labels) and not ws.is_scratch(labels)
+    assert ws.active_working_set(viewer) is None
+    after = ws.working_set(viewer)  # what was used last stays
+    assert (after.image, after.labels, after.boxes) == (image, labels, boxes)
+    _select(viewer, slice_image)
+    assert ws.working_set(viewer).labels is labels

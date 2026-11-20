@@ -21,7 +21,7 @@ from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size
 from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
 from .working_set import (LinkError, active_working_set, auto_link, install as install_working_set, link_layers,
-                          objects_in_labels, set_boxes, set_source_image)
+                          is_scratch, objects_in_labels, set_boxes, set_source_image)
 from .working_set import working_set_changed
 from .working_set_panel import WorkingSetPanel, ask_boxes_for_painted_objects
 
@@ -666,8 +666,11 @@ if BoundingBoxLayer:
                 self.notify_selection_changed()
 
         def _on_ndisplay_changed(self, event=None):
-            # the selected object is shown differently in 2D and 3D
+            # the selected object is shown differently in 2D and 3D. Not while a tool works on a scratch layer (the slice
+            # that is annotated): it is not shown over that, and it is shown again when the layer is gone
             try:
+                if any(is_scratch(layer) for layer in self.viewer.layers):
+                    return
                 self._reselect()
             except RuntimeError:  # the widget was deleted
                 self.viewer.dims.events.ndisplay.disconnect(self._on_ndisplay_changed)
