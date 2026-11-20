@@ -233,3 +233,47 @@ def test_minimal_surface_estimation(qtbot, monkeypatch, viewer, annotator, worke
     assert not np.any(labels.data == OBJECT_LABEL) or np.count_nonzero(labels.data == OBJECT_LABEL) == 27
     assert np.all(labels.data[0:3, 0:3, 0:3] == OBJECT_LABEL)
     assert np.all(labels.data[0:3, 58:60, 58:60] == OBJECT_LABEL + 1)
+
+
+@pytest.mark.parametrize("inspect", [False, True], ids=["default", "inspect"])
+def test_distance_maps_and_contour_points_are_layers_only_when_asked_for(qtbot, monkeypatch, viewer, annotator, workers,
+                                                                        inspect):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    ms = annotator.ToolsWidget.minimal_surface_widget
+    assert ms.inspect_layers_checkbox.value is False  # the default
+    ms.inspect_layers_checkbox.value = inspect
+    layer = viewer.add_image(_ball_image("float64"), name="ball")
+    labels = viewer.add_labels(np.zeros(BALL_SHAPE, dtype=np.uint16), name="labels")
+    bbox_layer, object_list = _add_object(viewer, layer, labels)
+    from napari_nd_annotator.object_anchors import anchor_store
+    anchor_store(bbox_layer).set(OBJECT_LABEL, [[20., 30., 16.], [20., 30., 44.]])
+    ms.slice_annotation_method = "Manual"
+    state = {"all_done": False, "annotated": False}
+    ms._start_estimation()
+
+    def step():
+        if not workers:
+            return False
+        worker = workers[0]
+        if not getattr(worker, "_test_hooked", False):
+            worker.all_done.connect(lambda: state.update(all_done=True))
+            worker._test_hooked = True
+        if not state["annotated"] and worker.slice_labels_layer is not None and worker.slice_image_layer is not None:
+            state["annotated"] = True
+            data = worker.slice_image_layer.data
+            worker.slice_labels_layer.data = (data >= 0.5 * data.max()).astype(int)
+            worker.finish_slice_annotation()
+            worker.done_pressed = True
+        return state["all_done"]
+
+    qtbot.waitUntil(step, timeout=TIMEOUT_MS)
+    qtbot.wait(300)
+    names = [layer.name for layer in viewer.layers]
+    distance_maps = [name for name in names if name.startswith("Distance map")]
+    contour_points = [name for name in names if name.startswith("Contour points")]
+    if inspect:
+        assert len(distance_maps) == 2 and len(contour_points) == 1
+        assert ms.distance_map_combobox.value is not None and ms.start_points_combobox.value is not None
+    else:
+        assert distance_maps == [] and contour_points == []
+    assert np.count_nonzero(labels.data == OBJECT_LABEL) > 0  # the result is there either way

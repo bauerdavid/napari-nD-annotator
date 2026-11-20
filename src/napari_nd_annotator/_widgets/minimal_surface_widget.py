@@ -252,6 +252,7 @@ class EstimationWorker(QObject):
         self.manual_annotation_done = False
         self.z_scale = None
         self.use_gradient = None
+        self.inspect_layers = False  # the distance maps and the contour points are made layers of (see the widget)
 
         self.prev_ndisplay = None
         self.prev_camera_center = None
@@ -473,6 +474,8 @@ class EstimationWorker(QObject):
             anchor_maps[anchor_idx] = distance_map
 
         def anchor_maps_finished():
+            if not self.inspect_layers:
+                return
             # the arrays are views of the estimator's memory, which is reused afterwards
             for anchor_idx, distance_map in anchor_maps.items():
                 self.distance_map_received.emit(
@@ -635,10 +638,11 @@ class EstimationWorker(QObject):
             raise ValueError("Slice not calculated")
         mask = self.slice_annotation.astype(float) if self.slice_annotation is not None else None
         self.slice_annotation = None
-        self.contour_points_received.emit(
-            "Contour points - %d" % len(self.bboxes),
-            self.plane_contour_points(mask),
-            {"translate": self.bboxes[-1].min(0), "scale": (1 / self.z_scale, 1., 1.)})
+        if self.inspect_layers:
+            self.contour_points_received.emit(
+                "Contour points - %d" % len(self.bboxes),
+                self.plane_contour_points(mask),
+                {"translate": self.bboxes[-1].min(0), "scale": (1 / self.z_scale, 1., 1.)})
         return mask
 
     def plane_contour_points(self, mask):
@@ -704,8 +708,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
             class SliceAnnotationGroup(MagicTemplate):
                 ...
 
-            @magicclass(widget_type="groupbox", name="Shortest paths")
-            class ShortestPathsGroup(MagicTemplate):
+            @magicclass(widget_type="groupbox", name="Inspect")
+            class ShortestPathsGroup(MagicTemplate):  # (the class keeps its name: the saved settings refer to it)
                 ...
 
     # Anchors: everything that places, suggests or moves them
@@ -788,6 +792,14 @@ class _MinimalSurfaceWidget(MagicTemplate):
                 " Manual, Threshold, Minimal contour: you annotate it. Automatic (distances): from the distances of"
                 " the anchors in the plane, which is instant (falls back to the phase field if they give nothing"
                 " usable). Automatic (phase field): evolves a phase field in the plane, which takes seconds."
+    )
+    # For understanding or developing the method: the distance maps of the anchors and the contour of the annotated
+    # plane are only made layers of when asked for, as they are rarely needed and cost memory
+    inspect_layers_checkbox = field(bool, label="Keep as layers", location=Tabs.AdvancedTab.ShortestPathsGroup).with_options(
+        value=False,
+        tooltip="Add the distance maps of the two anchors and the contour points of the annotated plane to the viewer"
+                " when Run is pressed (they are not kept otherwise), to look at how the surface is found. 'Show"
+                " shortest paths' draws paths on them."
     )
     distance_map_combobox = field(Image, label="Distance map (anchor 1)", location=Tabs.AdvancedTab.ShortestPathsGroup)
     second_distance_map_combobox = field(Image, label="Distance map (anchor 2)", location=Tabs.AdvancedTab.ShortestPathsGroup)
@@ -949,6 +961,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         use_meeting_plane_points = True
         estimation_worker = EstimationWorker(self._viewer, self.minimal_contour_widget, self)
         estimation_worker.initialize(image_data, phi_func, points_data, beta, alpha, n_iter, use_meeting_plane_points, self.slice_annotation_method, self._blur_image if self.is_blurring_enabled else None, z_scale, use_gradient)
+        estimation_worker.inspect_layers = self.inspect_layers_checkbox.value
         estimation_worker.image_data_received.connect(self._add_image)
         estimation_worker.layer_invalidated.connect(self._refresh_layer)
         estimation_worker.mask_data_received.connect(self._mask_received)
@@ -1149,7 +1162,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         points_layer = self.start_points_combobox.value
         distance_map_layers = [self.distance_map_combobox.value, self.second_distance_map_combobox.value]
         if points_layer is None or all(layer is None for layer in distance_map_layers):
-            warnings.warn("Select a distance map and a Points layer with the start points")
+            warnings.warn("Select a distance map and a Points layer with the start points (turn on 'Keep as layers' in"
+                          " this group and run again to get them)")
             return
         if points_layer.ndim != 3 or any(layer is not None and layer.ndim != 3 for layer in distance_map_layers):
             warnings.warn("The distance maps and the start points should be 3D")
