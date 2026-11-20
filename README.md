@@ -44,7 +44,7 @@ The plugin is also available in [napari-hub], to install it directly from napari
 ### napari compatibility
 The plugin requires `napari>=0.5.0` (it draws with napari's overlay API and builds on the 0.5 layer controls); version-specific
 code paths handle the differences between napari releases.
-It was last checked against napari 0.5.0, 0.5.6 and 0.9.2 (and the Minimal Surface widget end to end against 0.9.2). napari's internal (underscore) API is used in a few
+It was last checked against napari 0.5.0, 0.5.6, 0.9.2 and 0.10.0 (and the Minimal Surface widget end to end against 0.9.2 and 0.10.0, with napari-bbox 0.2). napari's internal (underscore) API is used in a few
 places, so a new napari release can break the plugin before the package metadata is updated - please [file an issue] if it does.
 A GitHub workflow (`napari_compat`) runs smoke tests against several napari versions, including the newest one, every week.
 

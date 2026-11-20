@@ -43,6 +43,11 @@ jobs:
             python: "3.11"
             qt: PyQt5
             constraints: ""
+          # the newest release that was checked by hand; "latest" below moves on when napari does
+          - napari: "0.10.0"
+            python: "3.13"
+            qt: PyQt6
+            constraints: ""
           # newest napari, whatever that is when the job runs
           - napari: "latest"
             python: "3.13"
