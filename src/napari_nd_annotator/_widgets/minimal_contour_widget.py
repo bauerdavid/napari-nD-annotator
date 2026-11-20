@@ -44,6 +44,7 @@ from ..minimal_contour.intensity_prior import MAX_SLOWDOWN as MAX_PRIOR_SLOWDOWN
     SIMILAR_OR_DARKER
 from ..minimal_contour.plane_features import PlaneFeatureCache, to_float64_pair
 from .object_list import selected_object, selected_object_changed
+from .working_set import auto_link, install as install_working_set, is_helper_layer, link_layers, linked_image, working_set
 from napari_nd_annotator._widgets.resources import mc_contour_style_path, interpolate_style_path
 
 
@@ -108,15 +109,13 @@ FEATURES = {
 }
 
 DEMO_SIZE = 200
-# set this environment variable (to anything but "" or "0") to show the experimental intensity prior controls
-INTENSITY_PRIOR_ENV = "ND_ANNOTATOR_INTENSITY_PRIOR"
 # how many times slower the pixels least like the anchors' intensity get (see minimal_contour/intensity_prior.py)
 PRIOR_SLOWDOWN_CHOICES = [("×%g" % s, s) for s in (3., 10., 30., 100., 300., MAX_PRIOR_SLOWDOWN)]
 DEFAULT_PRIOR_SLOWDOWN = 100.
 DEFAULT_PRIOR_FEATURE_WEIGHT = 0.25
 PRIOR_MATCH_CHOICES = [("Similar", SIMILAR), ("Similar or brighter", SIMILAR_OR_BRIGHTER),
                        ("Similar or darker", SIMILAR_OR_DARKER)]
-# the widgets of the experimental intensity prior: hidden without INTENSITY_PRIOR_ENV and never persisted
+# the widgets of the intensity prior: never persisted (it always starts switched off)
 INTENSITY_PRIOR_FIELDS = ("intensity_prior_checkbox", "intensity_prior_match_combobox",
                           "intensity_prior_slowdown_combobox", "intensity_prior_feature_weight_slider",
                           "intensity_prior_min_anchors_spinbox")
@@ -171,7 +170,7 @@ class SelectedLayerTracker:
     def _add_metadata(self, event):
         if self._prev_active is None or type(event.value) is not Labels:
             return
-        event.value.metadata["source_image_layer"] = self._prev_active
+        link_layers(image=self._prev_active, labels=event.value)
         self._prev_active = None
 
 
@@ -225,26 +224,26 @@ class MinimalContourWidget(MagicTemplate):
                                                     "with the selected image feature (with a lower number the contour will be\n"
                                                     "closer to the Euclidean shortest path")
     local_intensity_correction_checkbox = field(bool, location=ImageFeaturesWidget).with_options(visible=False)
-    # experimental, only shown when the INTENSITY_PRIOR_ENV environment variable is set
+    # the intensity prior: the contour follows the intensity of the anchors (off until checked)
     intensity_prior_checkbox = field(bool, label="Follow anchor intensity", location=ImageFeaturesWidget).with_options(
-        visible=False, tooltip="[Experimental] When checked, the contour follows pixels whose intensity is similar\n"
+        tooltip="When checked, the contour follows pixels whose intensity is similar\n"
                                "to the intensity at the anchor points (and along the accepted contour)")
     intensity_prior_match_combobox = field(widget_type=ComboBox, label="Match", location=ImageFeaturesWidget, options={
-        "choices": PRIOR_MATCH_CHOICES, "value": SIMILAR, "visible": False,
+        "choices": PRIOR_MATCH_CHOICES, "value": SIMILAR,
         "tooltip": "Which intensities count as matching the anchors:\n"
                    "Similar: close to it, darker or brighter\n"
                    "Similar or brighter: also anything brighter (e.g. along a membrane stain)\n"
                    "Similar or darker: also anything darker"})
     intensity_prior_slowdown_combobox = field(widget_type=ComboBox, label="Intensity strength", location=ImageFeaturesWidget, options={
-        "choices": PRIOR_SLOWDOWN_CHOICES, "value": DEFAULT_PRIOR_SLOWDOWN, "visible": False,
+        "choices": PRIOR_SLOWDOWN_CHOICES, "value": DEFAULT_PRIOR_SLOWDOWN,
         "tooltip": "How many times slower the contour moves on pixels whose intensity\n"
                    "differs most from the anchors' intensity"})
     intensity_prior_feature_weight_slider = field(float, label="Feature weight", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(
-        min=0., max=1., value=DEFAULT_PRIOR_FEATURE_WEIGHT, visible=False,
+        min=0., max=1., value=DEFAULT_PRIOR_FEATURE_WEIGHT,
         tooltip="How much the selected image feature still counts while following the intensity.\n"
                 "0: intensity only; small values keep the contour tidy on noisy images")
     intensity_prior_min_anchors_spinbox = field(int, label="Prior from anchor", location=ImageFeaturesWidget).with_options(
-        min=1, max=10, value=1, visible=False,
+        min=1, max=10, value=1,
         tooltip="Number of placed anchor points after which the prior is used.\n"
                 "With 1 the intensity at the first anchor is the reference;\n"
                 "more anchors give a more reliable reference.")
@@ -339,9 +338,6 @@ class MinimalContourWidget(MagicTemplate):
             self._initialize(self._viewer)
         VispyMinimalContourOverlay.mc_calculator.set_param(self.param)
         self.local_intensity_correction_checkbox.changed.connect(VispyMinimalContourOverlay.mc_calculator.set_use_local_maximum)
-        if os.environ.get(INTENSITY_PRIOR_ENV, "") not in ("", "0"):
-            for name in INTENSITY_PRIOR_FIELDS:
-                getattr(self, name).visible = True
         for widget, setter in [
             (self.intensity_prior_match_combobox, VispyMinimalContourOverlay.set_intensity_prior_match),
             (self.intensity_prior_slowdown_combobox, VispyMinimalContourOverlay.set_intensity_prior_max_slowdown),
@@ -393,7 +389,7 @@ class MinimalContourWidget(MagicTemplate):
             del d["labels_layer_combobox"]
         if "source_image_container" in d:
             del d["source_image_container"]
-        # the experimental intensity prior always starts switched off
+        # the intensity prior always starts switched off
         for container in (d, d.get("Image Features", {})):
             for key in INTENSITY_PRIOR_FIELDS:
                 container.pop(key, None)
@@ -405,7 +401,7 @@ class MinimalContourWidget(MagicTemplate):
 
     @property
     def image_layer(self):
-        return self.labels_layer.metadata.get("source_image_layer", None) if self.labels_layer is not None else None
+        return linked_image(self.labels_layer, self._viewer) if self.labels_layer is not None else None
 
     @property
     def image_data(self):
@@ -1055,9 +1051,8 @@ class MinimalContourWidget(MagicTemplate):
         self.LabelOptionsWidget.visible = True
         self.ContourWidget.visible = True
         self.BlurWidget.visible = True
-        self.SourceImageWidget.visible = True
-        image_layer = self.image_layer
-        self.SourceImageWidget.source_image_txt.value = "Source: %s" % (image_layer.name if image_layer is not None else "None")
+        # the source image is shown (and changed) in the layers panel; the row is only for a labels layer without one
+        self.SourceImageWidget.visible = False
 
     def _select_source_image_dialog(self, labels_layer):
         """Show a dialog to select/change the source image layer for labels_layer.
@@ -1095,10 +1090,10 @@ class MinimalContourWidget(MagicTemplate):
                 self.viewer.layers.remove(labels_layer)
             new_labels = self.viewer.add_labels(
                 np.zeros(source_layer.data.shape[:source_layer.ndim], dtype=dtype), name=name)
-            new_labels.metadata["source_image_layer"] = source_layer
+            link_layers(image=source_layer, labels=new_labels)
             self.viewer.layers.selection.select_only(new_labels)
             return True
-        labels_layer.metadata["source_image_layer"] = source_layer
+        link_layers(image=source_layer, labels=labels_layer)
         return True
 
     @set_design(location=SourceImageWidget, text="Change")
@@ -1111,15 +1106,28 @@ class MinimalContourWidget(MagicTemplate):
             self.SourceImageWidget.source_image_txt.value = "Source: %s" % (
                 self.image_layer.name if self.image_layer is not None else "None")
 
+    def _working_set_labels_layer(self):
+        """The labels layer of the working set, if it has a source image (it is not asked for one here)."""
+        labels = working_set(self.viewer).labels
+        if isinstance(labels, Labels) and labels in self.viewer.layers and linked_image(labels, self.viewer) is not None:
+            return labels
+        return None
+
     def _on_active_layer_changed(self, *_):
         if self.viewer is None:
             return
         active_layer = self.viewer.layers.selection.active
-        self._labels_layer = active_layer if isinstance(active_layer, Labels) else None
+        # a helper layer (the layer of the bounding boxes, points...) being active does not switch the tool off:
+        # it keeps working on the labels layer of the working set. The image being active does (see is_helper_layer)
+        if isinstance(active_layer, Labels):
+            self._labels_layer = active_layer
+        else:
+            self._labels_layer = self._working_set_labels_layer() if is_helper_layer(active_layer) else None
         self._on_label_change()
         if not self._labels_layer:
             self._show_no_labels_layer_selected_txt()
             return
+        auto_link(self.viewer, self._labels_layer)  # the only image that fits a labels layer without a source
         if "source_image_layer" not in self._labels_layer.metadata:
             image_layers = list(map(lambda layer: layer.name, filter(lambda layer: isinstance(layer, Image), self.viewer.layers)))
             if len(image_layers) == 0:
@@ -1195,6 +1203,7 @@ class MinimalContourWidget(MagicTemplate):
 
     def _initialize(self, viewer: napari.Viewer):
         viewer = self._viewer = unwrap_viewer(viewer)
+        install_working_set(viewer)
         self._initialize_helper_layers()
         # feature files of older versions that were left behind (this version writes none)
         clean_legacy_tmp()

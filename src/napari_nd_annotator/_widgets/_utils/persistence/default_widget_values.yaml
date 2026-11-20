@@ -23,5 +23,4 @@ nd_annotator_ms:
   image_feature_combobox: Gradient
   iterations_slider: 10000
   slice_segmentation_dropdown: Minimal contour
-  use_correction_checkbox: true
   z_scale_spinbox: 1.

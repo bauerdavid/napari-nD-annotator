@@ -1,0 +1,715 @@
+"""The Minimal Surface widget working per object: anchors of the selected object, placing them in the 3D view and
+writing the result with the label id of the object.
+
+Needs a GL-capable Qt platform, the optional minimal_surface package and the napari-bbox plugin (like the other viewer
+tests, skipped when one is missing). The running of an estimation is in ``test_minimal_surface_widget.py``.
+"""
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+pytest.importorskip("minimal_surface")
+pytest.importorskip("napari_bbox")
+
+from .test_napari_compat import viewer, _process_events  # noqa: E402,F401
+from .test_suggest_anchors_widget import (  # noqa: E402,F401
+    annotator, scene, _select, _anchors, _distance_from_ball_surface, BALL_CENTER, BALL_RADIUS, SHAPE)
+
+from napari_nd_annotator._widgets.minimal_surface_widget import write_object_mask  # noqa: E402
+from napari_nd_annotator._widgets.object_list import selected_object_info  # noqa: E402
+from napari_nd_annotator._helper_functions import viewer_camera  # noqa: E402
+from napari_nd_annotator.object_anchors import anchor_store  # noqa: E402
+
+LABEL = 3  # the label of the object of the scene
+
+
+def _click(ms, viewer, position, direction, button=1, drag=False, modifiers=()):
+    """A click of the mouse in the 3D canvas, through the callback that napari calls."""
+    event = SimpleNamespace(type="mouse_press", button=button, modifiers=modifiers, position=tuple(position),
+                            view_direction=tuple(np.asarray(direction, dtype=float)), dims_displayed=(0, 1, 2))
+    callback = ms._on_canvas_mouse(viewer, event)
+    next(callback, None)
+    if drag:
+        event.type = "mouse_move"
+        next(callback, None)
+    event.type = "mouse_release"
+    for _ in callback:
+        pass
+
+
+@pytest.fixture
+def surface_tab(annotator):
+    """The Minimal Surface tab is the shown one (anchors are placed only then)."""
+    annotator.ToolsWidget.current_index = 2
+    yield annotator.ToolsWidget.minimal_surface_widget
+
+
+@pytest.fixture
+def object_scene(viewer, scene, surface_tab):
+    """The scene with the object selected, in the 3D view."""
+    image_layer, object_list, ms = scene
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    return image_layer, object_list, ms
+
+
+def test_clicks_place_the_anchors_on_the_surface(viewer, object_scene):
+    image_layer, object_list, ms = object_scene
+    assert len(_anchors(ms)) == 0
+    # from both sides along x, through the center of the ball
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    assert len(_anchors(ms)) == 1
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    points = _anchors(ms)
+    assert points.shape == (2, 3)
+    assert np.all(_distance_from_ball_surface(points) < 1.5)
+    assert points[0, 2] < BALL_CENTER[2] < points[1, 2]
+    assert ms.object_status_label.value == "%d (2/2 anchors)" % LABEL
+    # the plugin's display layer shows them, in world coordinates
+    np.testing.assert_allclose(ms._anchors_layer.data, [image_layer.data_to_world(p) for p in points])
+    assert not ms._anchors_layer.editable
+    # a third click, away from the anchors, starts a new pair
+    _click(ms, viewer, (20, 36, -20), (0, 0, 1))
+    assert len(_anchors(ms)) == 1
+
+
+def test_right_click_removes_the_last_anchor(viewer, object_scene):
+    image_layer, object_list, ms = object_scene
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    _click(ms, viewer, (0, 0, 0), (0, 0, 1), button=2)
+    assert len(_anchors(ms)) == 1
+    ms.clear_anchors_button.native.click()
+    assert len(_anchors(ms)) == 0
+    assert not ms._anchors_layer.visible
+
+
+def test_ray_that_misses_the_object_places_nothing(viewer, object_scene):
+    image_layer, object_list, ms = object_scene
+    _click(ms, viewer, (20, 5, -20), (0, 0, 1))  # beside the ball
+    _click(ms, viewer, (39, 59, -20), (0, 0, 1))  # outside the bounding box
+    assert len(_anchors(ms)) == 0
+
+
+def test_anchors_are_picked_in_the_clipped_box_only(viewer, object_scene):
+    image_layer, object_list, ms = object_scene
+    # a bright wall in front of the box is not hit
+    image_layer.data[:, :, :8] = image_layer.data.max()
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    assert abs(_anchors(ms)[0, 2] - (BALL_CENTER[2] - BALL_RADIUS)) < 1.5
+
+
+@pytest.mark.parametrize("case", ["drag", "modifier", "checkbox off", "2D", "other tab", "no object", "middle button"])
+def test_clicks_that_are_not_for_the_anchors_are_ignored(viewer, object_scene, annotator, case):
+    image_layer, object_list, ms = object_scene
+    kwargs = {}
+    if case == "drag":
+        kwargs["drag"] = True
+    elif case == "modifier":
+        kwargs["modifiers"] = ("Shift",)
+    elif case == "checkbox off":
+        ms.place_anchors_checkbox.value = False
+    elif case == "2D":
+        viewer.dims.ndisplay = 2
+    elif case == "other tab":
+        annotator.ToolsWidget.current_index = 0
+    elif case == "no object":
+        object_list.select_item(object_list.item(0))  # the second click unselects it
+        _process_events()
+        assert selected_object_info(viewer) is None
+    elif case == "middle button":
+        kwargs["button"] = 3
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1), **kwargs)
+    assert len(anchor_store(object_list.bounding_box_layer).get(LABEL)) == 0
+
+
+def test_image_plane_placement(viewer, object_scene):
+    image_layer, object_list, ms = object_scene
+    ms.anchor_placement_combobox.value = "Image plane"
+    assert image_layer.depiction == "plane"
+    # the plane is moved into the bounding box, with its normal along the first axis
+    position = np.asarray(image_layer.plane.position)
+    assert np.all(position >= object_list.item(0).bounding_box[0]) and np.all(position <= object_list.item(0).bounding_box[1])
+    image_layer.plane.position = (22., 30., 30.)
+    image_layer.plane.normal = (1, 0, 0)
+    # a ray along the first axis crosses the plane at its own y, x
+    _click(ms, viewer, (-20, 26, 28), (1, 0, 0))
+    np.testing.assert_allclose(_anchors(ms), [[22, 26, 28]], atol=1e-6)
+    # a ray that crosses the plane outside the bounding box places nothing
+    image_layer.plane.position = (0., 30., 30.)
+    _click(ms, viewer, (-20, 26, 28), (1, 0, 0))
+    assert len(_anchors(ms)) == 1
+    ms.anchor_placement_combobox.value = "Ray pick"
+    assert image_layer.depiction == "volume"
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    assert abs(_anchors(ms)[1, 2] - (BALL_CENTER[2] + BALL_RADIUS)) < 1.5
+
+
+def _add_second_object(object_list):
+    import itertools
+    layer = object_list.bounding_box_layer
+    corners = np.where(list(itertools.product((False, True), repeat=3)), [30, 45, 45], [10, 15, 15]).astype(float)
+    layer.data = [np.asarray(box) for box in layer.data] + [corners]
+    layer.features = {"label": np.array([LABEL, LABEL + 1])}
+    object_list.update_items()
+    _process_events()
+
+
+def test_anchors_belong_to_their_object(viewer, scene, surface_tab):
+    image_layer, object_list, ms = scene
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    first = _anchors(ms).copy()
+    _add_second_object(object_list)
+    object_list.select_item(object_list.item(1))
+    _process_events()
+    selected = selected_object_info(viewer)
+    assert selected.label == LABEL + 1 and object_list.count() == 2
+    assert len(_anchors(ms)) == 0 and ms.object_status_label.value.startswith("%d (0/2" % (LABEL + 1))
+    assert not ms._anchors_layer.visible
+    # anchors of the new object do not touch those of the first
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    assert len(_anchors(ms)) == 1
+    object_list.select_item(object_list.item(0))
+    _process_events()
+    np.testing.assert_allclose(_anchors(ms), first)
+    assert ms._anchors_layer.visible and len(ms._anchors_layer.data) == 2
+    # the layers of the object stay the selected ones
+    assert ms._anchors_layer not in viewer.layers.selection
+    assert object_list.mask_layer in viewer.layers.selection
+
+
+def test_anchors_are_stored_with_the_bounding_box_layer(viewer, object_scene):
+    image_layer, object_list, ms = object_scene
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    stored = object_list.bounding_box_layer.metadata["nd_annotator_anchors"]
+    assert list(stored) == [str(LABEL)] and len(stored[str(LABEL)]) == 1
+
+
+def test_run_needs_an_object_with_two_anchors(viewer, scene, surface_tab):
+    image_layer, object_list, ms = scene
+    with pytest.warns(UserWarning, match="No object selected"):
+        ms._start_estimation()
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    with pytest.warns(UserWarning, match="needs two anchors"):
+        ms._start_estimation()
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    with pytest.warns(UserWarning, match="needs two anchors"):
+        ms._start_estimation()
+    assert ms.call_button.text == "Run"
+
+
+def test_run_checks_the_labels_layer_of_the_object_list(viewer, scene, surface_tab):
+    image_layer, object_list, ms = scene
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    object_list.mask_layer.data = np.zeros((10, 10, 10), dtype=np.uint16)
+    with pytest.warns(UserWarning, match="different shapes"):
+        ms._start_estimation()
+    assert ms.call_button.text == "Run"
+    object_list.mask_layer.data = np.zeros(SHAPE, dtype=np.uint16)
+
+
+def _labels(viewer, dtype=np.uint16):
+    return viewer.add_labels(np.zeros(SHAPE, dtype=dtype), name="written")
+
+
+def _ball_mask():
+    zz, yy, xx = np.mgrid[:20, :20, :20]
+    return ((zz - 10) ** 2 + (yy - 10) ** 2 + (xx - 10) ** 2) <= 64
+
+
+def test_object_mask_is_written_with_the_label_id_and_can_be_undone(viewer):
+    labels = _labels(viewer)
+    mask = _ball_mask()
+    write_object_mask(labels, 7, mask, np.array([5., 8., 9.]))
+    assert np.array_equal(labels.data == 7, np.pad(mask, [(5, 15), (8, 32), (9, 31)]))
+    assert set(np.unique(labels.data)) == {0, 7}
+    labels.undo()
+    assert labels.data.max() == 0
+    labels.redo()
+    assert np.count_nonzero(labels.data == 7) == np.count_nonzero(mask)
+
+
+def test_object_mask_replaces_only_the_previous_mask_of_the_object(viewer):
+    labels = _labels(viewer)
+    labels.data[0:5, 0:5, 0:5] = 2  # another object
+    labels.data[30:35, 30:35, 30:35] = 7  # the previous mask of the object, inside its box
+    labels.data[20:22, 50:52, 50:52] = 7  # a stray part far away from the box and the new mask
+    labels.data[14:16, 17:19, 18:20] = 5  # another object under the new mask
+    box = (np.array([25, 25, 25]), np.array([38, 38, 38]))
+    write_object_mask(labels, 7, _ball_mask(), np.array([5., 8., 9.]), box)
+    data = np.asarray(labels.data)
+    assert not np.any(data[30:35, 30:35, 30:35] == 7)  # replaced
+    assert np.all(data[0:5, 0:5, 0:5] == 2)  # others stay
+    assert np.all(data[20:22, 50:52, 50:52] == 7)  # outside the touched region
+    assert np.all(data[14:16, 17:19, 18:20] == 7)  # painted over
+    assert data[15, 18, 19] == 7  # the new mask
+    # one undo restores everything
+    labels.undo()
+    assert np.all(labels.data[30:35, 30:35, 30:35] == 7) and np.all(labels.data[14:16, 17:19, 18:20] == 5)
+    assert labels.data[15, 18, 19] == 5
+
+
+def test_object_mask_is_cut_at_the_edge_of_the_layer(viewer):
+    labels = _labels(viewer)
+    write_object_mask(labels, 4, _ball_mask(), np.array([30., 50., 50.]))
+    assert np.count_nonzero(labels.data == 4) == np.count_nonzero(_ball_mask()[:10, :10, :10])
+    # an empty result changes nothing and adds no history
+    before = len(labels._undo_history)
+    write_object_mask(labels, 4, np.zeros((3, 3, 3), dtype=bool), np.array([0., 0., 0.]), None)
+    labels.undo()
+    labels.undo()
+    assert len(labels._undo_history) == 0 and before == 1 and labels.data.max() == 0
+
+
+def test_settings_saved_with_the_old_widget_still_load(viewer, annotator, tmp_path):
+    import json
+    from magicclass.serialize import serialize
+    ms = annotator.ToolsWidget.minimal_surface_widget
+    assert not hasattr(ms, "use_correction") and not hasattr(ms, "labels_layer_combobox")
+    data = serialize(annotator)
+    saved = data["ToolsWidget"]["Minimal Surface"]
+    # the settings are stored both flat and by container; the containers were collapsible ones, now they are tabs
+    assert "alpha" in saved and "alpha" in saved["Settings"]["Image"]["Features"]
+    saved.update({"use_correction": False, "alpha": 0.2, "z_scale": 3.})
+    saved["Image Features"] = {"use_correction": False, "alpha": 0.2, "z_scale": 3.}
+    saved["Blurring"] = {"blur_image_checkbox": False}
+    saved["labels_layer_combobox"] = 1
+    path = tmp_path / "settings"
+    path.write_text(json.dumps(data))
+    annotator._load(path)
+    # the z scale is not a setting any more: it comes from the scale of the image layer
+    assert ms.alpha == pytest.approx(.2) and ms.z_scale == pytest.approx(1.)
+
+
+@pytest.mark.parametrize("scale, expected", [
+    ((1., 1., 1.), 1.), ((3., 1., 1.), 3.), ((2., .5, .5), 4.), ((1., 2., 2.), .5), ((4., 2., 8.), 1.), ((0., 1., 1.), 1.),
+    ((9., 9., 3., 1., 1.), 3.),  # the last three axes
+])
+def test_z_scale_from_layer_scale(scale, expected):
+    from napari_nd_annotator._widgets.minimal_surface_widget import z_scale_from_layer_scale
+    assert z_scale_from_layer_scale(scale) == pytest.approx(expected)
+
+
+def test_the_z_scale_follows_the_scale_of_the_image_layer(viewer, scene, monkeypatch):
+    image_layer, object_list, ms = scene
+    assert ms.z_scale == 1.
+    image_layer.scale = (3., 1., 1.)
+    assert ms.z_scale == pytest.approx(3.)
+    assert ms.z_scale_label.value.startswith("3 ")
+    # the suggestion resamples by it
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    calls = []
+    original = msw.suggest_anchors_in_image
+    monkeypatch.setattr(msw, "suggest_anchors_in_image", lambda *args, **kwargs: calls.append(kwargs) or original(*args, **kwargs))
+    _select(viewer, object_list)
+    ms._suggest_anchors()
+    assert calls and tuple(calls[0]["resample"]) == pytest.approx((3., 1., 1.))
+    # and so does a run (the image resampled along z)
+    assert ms._z_scale_of(image_layer) == pytest.approx(3.)
+
+
+def test_the_layers_of_the_object_list_get_the_scale_of_the_image(viewer, scene):
+    image_layer, object_list, ms = scene
+    labels, boxes = object_list.mask_layer, object_list.bounding_box_layer
+    # changing the scale of any of the three changes the others
+    image_layer.scale = (3., 1., 1.)
+    assert tuple(labels.scale) == (3., 1., 1.) and tuple(boxes.scale) == (3., 1., 1.)
+    boxes.scale = (2., .5, .5)
+    assert tuple(image_layer.scale) == (2., .5, .5) and tuple(labels.scale) == (2., .5, .5)
+    labels.scale = (1., 1., 1.)
+    assert tuple(image_layer.scale) == (1., 1., 1.) and tuple(boxes.scale) == (1., 1., 1.)
+    assert ms.z_scale == pytest.approx(1.)
+    # a layer that is chosen later takes the scale of the image
+    image_layer.scale = (5., 1., 1.)
+    other_labels = viewer.add_labels(np.zeros(SHAPE, dtype=np.uint16), name="other labels", scale=(7., 7., 7.),
+                                     metadata={"source_image_layer": image_layer})  # (else a dialog asks for it)
+    object_list.mask_layer = other_labels
+    assert tuple(other_labels.scale) == (5., 1., 1.)
+    # the replaced layer is not followed any more
+    image_layer.scale = (6., 1., 1.)
+    assert tuple(other_labels.scale) == (6., 1., 1.) and tuple(labels.scale) == (5., 1., 1.)
+
+
+def test_the_buttons_are_always_visible_and_the_settings_are_grouped_in_tabs(viewer, scene):
+    image_layer, object_list, ms = scene
+    tabs = ms.Tabs.native
+    # the two buttons are not in a tab, so they need no expanding or scrolling
+    for button in (ms.suggest_anchors_button, ms.call_button):
+        assert not tabs.isAncestorOf(button.native)
+    assert [widget.name for widget in ms.Tabs] == ["Anchors", "Image", "Advanced"]
+    # everything about the anchors is together, what the surface is computed on is together
+    for widget in (ms.place_anchors_checkbox, ms.anchor_placement_combobox, ms.anchor_distance_slider,
+                   ms.clear_anchors_button, ms.suggestion_mode_combobox, ms.fan_rays_spinbox):
+        assert ms.Tabs.AnchorsTab.native.isAncestorOf(widget.native), widget.name
+    for widget in (ms.used_feature_combobox, ms.blur_image_checkbox, ms.blur_sigma_slider,
+                   ms.ignore_annotated_checkbox):
+        assert ms.Tabs.ImageTab.native.isAncestorOf(widget.native), widget.name
+
+
+def test_widgets_do_not_keep_the_keyboard_focus_from_the_canvas(viewer, scene, monkeypatch):
+    # a button that has the focus swallows the Space key, which napari would take for panning
+    from qtpy.QtCore import Qt
+    from qtpy.QtWidgets import QAbstractButton, QComboBox, QTabBar
+    from napari_nd_annotator._helper_functions import viewer_qt_viewer
+    image_layer, object_list, ms = scene
+    for widget_type in (QAbstractButton, QComboBox, QTabBar):
+        for widget in ms.native.findChildren(widget_type):
+            assert widget.focusPolicy() == Qt.FocusPolicy.NoFocus, widget
+    canvas = viewer_qt_viewer(viewer).canvas.native
+    focused = []
+    monkeypatch.setattr(canvas, "setFocus", lambda *args: focused.append(True))
+    assert not ms.suggest_anchors_button.native.isEnabled()  # (nothing is selected)
+    ms.clear_anchors_button.native.click()  # warns that nothing is selected
+    assert len(focused) == 1
+
+
+def _gesture(ms, viewer, layer, position, direction, button=1, modifiers=(), moves=()):
+    """A press (and moves, release) as napari dispatches it: the viewer callbacks first, then those of the layer."""
+    event = SimpleNamespace(type="mouse_press", button=button, modifiers=modifiers, position=tuple(position),
+                            view_direction=tuple(np.asarray(direction, dtype=float)), dims_displayed=(0, 1, 2))
+    callback = ms._on_canvas_mouse(viewer, event)
+    next(callback, None)
+    for layer_callback in list(layer.mouse_drag_callbacks):
+        layer_callback(layer, event)
+    for move_position in moves:
+        event.type, event.position = "mouse_move", tuple(move_position)
+        next(callback, None)
+    event.type = "mouse_release"
+    for _ in callback:
+        pass
+
+
+@pytest.fixture
+def box_editing_scene(viewer, object_scene):
+    """The object scene with the object layer active, in the mode that selects and moves its boxes."""
+    image_layer, object_list, ms = object_scene
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    layer = object_list.bounding_box_layer
+    viewer.layers.selection.active = layer
+    layer.mode = "select"
+    presses = []
+    layer.mouse_drag_callbacks[:] = [lambda layer, event: presses.append(event.position)]
+    return viewer, ms, layer, presses
+
+
+def test_plain_clicks_edit_the_boxes_when_the_object_layer_is_in_edit_mode(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    before = _anchors(ms).copy()
+    # beside the anchors: the box tool gets the click, no anchor is placed or removed
+    _gesture(ms, viewer, layer, (20, 36, -20), (0, 0, 1))
+    _gesture(ms, viewer, layer, (20, 36, -20), (0, 0, 1), button=2)
+    assert len(presses) == 2
+    np.testing.assert_allclose(_anchors(ms), before)
+
+
+def test_anchors_can_be_placed_and_removed_with_alt_in_edit_mode(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    _gesture(ms, viewer, layer, (0, 0, 0), (0, 0, 1), button=2, modifiers=("Alt",))
+    assert len(_anchors(ms)) == 1
+    _gesture(ms, viewer, layer, (20, 30, 80), (0, 0, -1), modifiers=("Alt",))
+    points = _anchors(ms)
+    assert len(points) == 2 and np.all(_distance_from_ball_surface(points) < 1.5)
+    assert presses == []  # the boxes did not get any of it
+
+
+def test_an_anchor_that_is_dragged_is_not_also_the_box_that_is_edited(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    callbacks = list(layer.mouse_drag_callbacks)
+    before = _anchors(ms).copy()
+    _gesture(ms, viewer, layer, (20, 30, -20), (0, 0, 1), moves=[(20, 36, -20)])
+    after = _anchors(ms)
+    assert abs(after[0][1] - 36) < 1e-6 and np.allclose(after[1], before[1])  # the anchor moved
+    assert presses == []  # the box tool did not see the press
+    assert layer.mouse_drag_callbacks == callbacks  # and it gets the next ones
+
+
+def test_the_layer_keeps_its_callbacks_when_the_gesture_is_interrupted(box_editing_scene):
+    viewer, ms, layer, presses = box_editing_scene
+    callbacks = list(layer.mouse_drag_callbacks)
+    event = SimpleNamespace(type="mouse_press", button=1, modifiers=("Alt",), position=(20, 30, -20),
+                            view_direction=(0., 0., 1.), dims_displayed=(0, 1, 2))
+    gesture = ms._on_canvas_mouse(viewer, event)
+    next(gesture)
+    assert layer.mouse_drag_callbacks == []
+    gesture.close()  # e.g. the layer was removed in the middle of it
+    assert layer.mouse_drag_callbacks == callbacks
+
+
+def test_annotated_voxels():
+    from napari_nd_annotator._widgets.minimal_surface_widget import annotated_voxels
+    labels = np.zeros((4, 4, 4), dtype=np.uint16)
+    assert annotated_voxels(labels, 3) is None
+    labels[0] = 3  # only the object itself
+    assert annotated_voxels(labels, 3) is None
+    labels[1], labels[2] = 5, 7
+    annotated = annotated_voxels(labels, 3)
+    assert annotated.dtype == bool and annotated.sum() == 2 * 16 and not annotated[0].any() and not annotated[3].any()
+
+
+def test_suggestion_ignores_the_annotated_objects(viewer, scene, monkeypatch):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = scene
+    labels = object_list.mask_layer
+    labels.data[:5, :5, :5] = 8
+    labels.data[20, 30, 30] = LABEL  # the selected object itself
+    seen = []
+    original = msw.suggest_anchors_in_image
+    monkeypatch.setattr(msw, "suggest_anchors_in_image",
+                        lambda *a, **k: seen.append(k["ignore_mask"]) or original(*a, **k))
+    _select(viewer, object_list)
+    ms._suggest_anchors()
+    assert ms.ignore_annotated_checkbox.value
+    assert seen[0].sum() == 125 and seen[0][0, 0, 0] and not seen[0][20, 30, 30]
+    ms.ignore_annotated_checkbox.value = False
+    ms._suggest_anchors()
+    assert seen[1] is None
+
+
+def test_suggest_anchors_in_image_zeroes_the_ignored_voxels(monkeypatch):
+    from napari_nd_annotator import surface_anchors
+    crops = []
+    monkeypatch.setattr(surface_anchors, "edge_cost_from_image",
+                        lambda crop, *args: crops.append(crop.copy()) or np.ones(crop.shape))
+    image = np.full((20, 20, 20), 5, dtype=np.uint16)
+    ignore = np.zeros(image.shape, dtype=bool)
+    ignore[:10] = True
+    surface_anchors.suggest_anchors_in_image(image, np.array([4., 4, 4]), np.array([12., 12, 12]), margin=2)
+    surface_anchors.suggest_anchors_in_image(image, np.array([4., 4, 4]), np.array([12., 12, 12]), margin=2,
+                                             ignore_mask=ignore)
+    without, with_mask = crops
+    assert without.min() == 5 and with_mask.dtype == image.dtype
+    assert with_mask[:8].max() == 0 and with_mask[8:].min() == 5  # the crop starts at 2: its first 8 slices are < 10
+    assert image.min() == 5  # the data of the image is not touched
+
+
+def test_run_computes_the_surface_without_the_other_objects(viewer, scene, surface_tab, monkeypatch):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = scene
+    labels = object_list.mask_layer
+    labels.data[:5, :5, :5] = 8
+    labels.data[20, 30, 30] = LABEL
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    images = []
+    original = msw.EstimationWorker.initialize
+
+    def spy(worker, image, *args, **kwargs):
+        images.append(image)
+        return original(worker, image, *args, **kwargs)
+
+    monkeypatch.setattr(msw.EstimationWorker, "initialize", spy)
+    monkeypatch.setattr(msw.EstimationWorker, "run", lambda worker: worker.all_done.emit())
+    ms._start_estimation()
+    ms.ignore_annotated_checkbox.value = False
+    ms._start_estimation()
+    _process_events()
+    ignoring, keeping = images
+    assert np.all(ignoring[:5, :5, :5] == 0) and ignoring[20, 30, 30] == image_layer.data[20, 30, 30]
+    assert np.array_equal(ignoring[5:], image_layer.data[5:])
+    assert keeping is image_layer.data  # not copied when nothing is masked
+    assert image_layer.data[:5, :5, :5].any()  # the layer itself was not changed
+
+
+def test_writing_the_mask_in_3D_does_not_upset_the_interpolation_widget(viewer, object_scene):
+    # data_setitem emits labels_update like painting does; the labels layer is shown in 3D, so it has no slice dimension
+    image_layer, object_list, ms = object_scene
+    labels = object_list.mask_layer
+    assert viewer.layers.selection.active is labels and viewer.dims.ndisplay == 3
+    write_object_mask(labels, LABEL, _ball_mask(), np.array([5., 8., 9.]))
+    _process_events()
+    assert np.count_nonzero(labels.data == LABEL) == np.count_nonzero(_ball_mask())
+
+
+def test_automatic_slice_annotation_needs_a_feature_that_tells_the_object_from_the_background(viewer, object_scene):
+    from napari_nd_annotator._widgets import minimal_surface_widget as msw
+    image_layer, object_list, ms = object_scene
+    if "Automatic (distances)" not in msw.annotation_methods():
+        pytest.skip("this minimal_surface build has no automatic slice annotation")
+    assert ms.used_feature == msw.GRADIENT
+    ms.slice_annotation_method = "Automatic (distances)"
+    assert ms.used_feature == msw.GRADIENT_INTENSITY  # chosen for the user
+    ms.used_feature_combobox.value = msw.GRADIENT
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    with pytest.warns(UserWarning, match="Gradient \+ intensity"):
+        ms._start_estimation()
+    assert ms.call_button.text == "Run"
+
+
+def test_gradient_intensity_features():
+    from napari_nd_annotator._widgets.minimal_surface_widget import gradient_intensity_features
+    zz, yy, xx = np.mgrid[:30, :30, :30]
+    distance = np.sqrt((zz - 15) ** 2 + (yy - 15) ** 2 + (xx - 15) ** 2)
+    image = 1 / (1 + np.exp((distance - 8) / 1.2))
+    features = gradient_intensity_features(image)
+    assert features.shape == image.shape and features.min() == 0 and features.max() == 1
+    # the edge is the highest, the background is higher than the inside: this is what tells them apart
+    assert features[15, 15, 23] > features[15, 15, 28] > features[15, 15, 15]
+    # flat images do not divide by zero
+    assert np.all(gradient_intensity_features(np.ones((5, 5, 5))) == 0)
+
+
+def _drag(ms, viewer, press, moves, watch=None):
+    """Press at ``press`` (position, direction), move to each of ``moves``, release. ``watch`` is called after each move."""
+    event = SimpleNamespace(type="mouse_press", button=1, modifiers=(), position=tuple(press[0]),
+                            view_direction=tuple(np.asarray(press[1], dtype=float)), dims_displayed=(0, 1, 2))
+    callback = ms._on_canvas_mouse(viewer, event)
+    next(callback, None)
+    for position, direction in moves:
+        event.type = "mouse_move"
+        event.position, event.view_direction = tuple(position), tuple(np.asarray(direction, dtype=float))
+        next(callback, None)
+        if watch is not None:
+            watch()
+    event.type = "mouse_release"
+    for _ in callback:
+        pass
+
+
+@pytest.fixture
+def pair_scene(viewer, object_scene):
+    """The object scene with the anchors on both sides of the ball (along the last axis)."""
+    image_layer, object_list, ms = object_scene
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    _click(ms, viewer, (20, 30, 80), (0, 0, -1))
+    return image_layer, object_list, ms
+
+
+def test_dragging_an_anchor_moves_it_along_the_surface(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    first, second = _anchors(ms).copy()
+    camera = viewer_camera(viewer)
+    states = []
+    # grab the anchor on the near side (the ray goes through it) and move the cursor up in the first axis' neighbour
+    _drag(ms, viewer, ((20, 30, -20), (0, 0, 1)), [((20, 33, -20), (0, 0, 1)), ((20, 36, -20), (0, 0, 1))],
+          watch=lambda: states.append((camera.mouse_pan, camera.mouse_zoom)))
+    anchors = _anchors(ms)
+    assert len(anchors) == 2
+    np.testing.assert_allclose(anchors[1], second)  # the other one stays
+    assert abs(np.linalg.norm(anchors[0] - BALL_CENTER) - BALL_RADIUS) < 1.5  # still on the surface
+    assert abs(anchors[0][1] - 36) < 1e-6 and anchors[0][2] > first[2]  # under the cursor, on the near side
+    # the view does not rotate during the drag, and can afterwards
+    assert states == [(False, False)] * 2
+    assert (camera.mouse_pan, camera.mouse_zoom) == (True, True)
+    np.testing.assert_allclose(ms._anchors_layer.data[0], image_layer.data_to_world(anchors[0]))
+
+
+def test_dragging_through_the_other_anchor_moves_the_far_one(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    first, second = _anchors(ms).copy()
+    _drag(ms, viewer, ((20, 30, 80), (0, 0, -1)), [((20, 24, 80), (0, 0, -1))])
+    anchors = _anchors(ms)
+    np.testing.assert_allclose(anchors[0], first)
+    assert abs(anchors[1][1] - 24) < 1e-6 and abs(np.linalg.norm(anchors[1] - BALL_CENTER) - BALL_RADIUS) < 1.5
+
+
+def test_pressing_an_anchor_without_moving_does_nothing(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    before = _anchors(ms).copy()
+    _click(ms, viewer, (20, 30, -20), (0, 0, 1))
+    np.testing.assert_allclose(_anchors(ms), before)
+    assert len(_anchors(ms)) == 2
+
+
+def test_a_drag_that_misses_the_data_leaves_the_anchor(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    before = _anchors(ms).copy()
+    _drag(ms, viewer, ((20, 30, -20), (0, 0, 1)), [((20, 5, -20), (0, 0, 1))])  # beside the ball
+    np.testing.assert_allclose(_anchors(ms), before)
+
+
+def test_dragging_away_from_the_anchors_rotates_the_view(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    before = _anchors(ms).copy()
+    camera = viewer_camera(viewer)
+    states = []
+    _drag(ms, viewer, ((20, 36, -20), (0, 0, 1)), [((20, 40, -20), (0, 0, 1))],
+          watch=lambda: states.append((camera.mouse_pan, camera.mouse_zoom)))
+    np.testing.assert_allclose(_anchors(ms), before)
+    assert states == [(True, True)]
+
+
+def test_distance_slider_moves_the_anchors_from_and_to_the_center(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    base = _anchors(ms).copy()
+    center = np.array([20., 30., 30.])  # the center of the bounding box of the scene
+    assert ms.anchor_distance_slider.enabled and ms.anchor_distance_slider.value == 100
+    ms.anchor_distance_slider.value = 150
+    np.testing.assert_allclose(_anchors(ms), center + 1.5 * (base - center))
+    np.testing.assert_allclose(ms._anchors_layer.data[0], image_layer.data_to_world(_anchors(ms)[0]))
+    ms.anchor_distance_slider.value = 50
+    np.testing.assert_allclose(_anchors(ms), center + .5 * (base - center))
+    ms.anchor_distance_slider.value = 100
+    np.testing.assert_allclose(_anchors(ms), base)
+    # dragging an anchor makes the new positions the ones the slider is relative to
+    ms.anchor_distance_slider.value = 150
+    _drag(ms, viewer, ((20, 30, 80), (0, 0, -1)), [((20, 24, 80), (0, 0, -1))])
+    assert ms.anchor_distance_slider.value == 100
+    moved = _anchors(ms).copy()
+    ms.anchor_distance_slider.value = 50
+    np.testing.assert_allclose(_anchors(ms), center + .5 * (moved - center))
+    # so does clicking
+    ms.anchor_distance_slider.value = 100
+    _click(ms, viewer, (20, 36, -20), (0, 0, 1))  # a new pair, with one anchor
+    assert not ms.anchor_distance_slider.enabled and ms.anchor_distance_slider.value == 100
+
+
+def test_distance_slider_keeps_the_anchors_in_the_image(viewer, pair_scene):
+    image_layer, object_list, ms = pair_scene
+    ms.anchor_distance_slider.value = 200
+    assert np.all(_anchors(ms) >= 0) and np.all(_anchors(ms) <= np.asarray(SHAPE) - 1)
+
+
+def test_distance_slider_follows_the_selected_object(viewer, scene, surface_tab):
+    image_layer, object_list, ms = scene
+    assert not ms.anchor_distance_slider.enabled
+    viewer.dims.ndisplay = 3
+    _select(viewer, object_list)
+    assert not ms.anchor_distance_slider.enabled  # no anchors yet
+    ms._suggest_anchors()
+    assert ms.anchor_distance_slider.enabled
+    suggested = _anchors(ms).copy()
+    ms.anchor_distance_slider.value = 130
+    assert not np.allclose(_anchors(ms), suggested)
+    ms.clear_anchors_button.native.click()
+    assert not ms.anchor_distance_slider.enabled and ms.anchor_distance_slider.value == 100
+
+
+def test_annotating_a_slice_keeps_the_object_selected_and_the_selection(viewer, object_scene, annotator):
+    from napari_nd_annotator._widgets.minimal_surface_widget import EstimationWorker
+    from napari_nd_annotator._widgets.object_list import selected_object_info
+    image_layer, object_list, ms = object_scene
+    worker = EstimationWorker(viewer, annotator.ToolsWidget.minimal_contour_widget, ms)
+    worker.init_slice_annotation_fun = lambda: None
+    worker.finish_slice_annotation_fun = lambda: None
+    labels = object_list.mask_layer
+    viewer.layers.selection.select_only(image_layer)
+    _process_events()
+    selected = selected_object_info(viewer)
+    assert selected is not None
+    layer_count = len(viewer.layers)
+    worker.begin_slice_annotation(np.zeros((30, 40)), None)
+    _process_events()
+    # the slice labels layer is the active one, and the object is still selected in the list, which still shows its layers
+    assert viewer.layers.selection.active is worker.slice_labels_layer
+    assert worker.slice_labels_layer.metadata["source_image_layer"] is worker.slice_image_layer
+    still = selected_object_info(viewer)
+    assert still is not None and still.label == selected.label and still.labels_layer is labels
+    assert object_list.mask_layer is labels and ms.image_layer is image_layer
+    assert ms.call_button.text == "Run"
+    worker.finish_slice_annotation()
+    _process_events()
+    assert len(viewer.layers) == layer_count
+    assert selected_object_info(viewer) is not None and object_list.mask_layer is labels
+    assert list(viewer.layers.selection) == [image_layer] and viewer.layers.selection.active is image_layer

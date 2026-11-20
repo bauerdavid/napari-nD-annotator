@@ -61,49 +61,44 @@ def _distance_from_ball_surface(points):
     return np.abs(np.linalg.norm(np.asarray(points) - BALL_CENTER, axis=1) - BALL_RADIUS)
 
 
+def _anchors(ms):
+    """The anchors of the selected object (what a run uses)."""
+    from napari_nd_annotator._widgets.object_list import selected_object_info
+    from napari_nd_annotator.object_anchors import anchor_store
+    selected = selected_object_info(ms.viewer)
+    return anchor_store(selected.bbox_layer).get(selected.label)
+
+
 def test_suggests_anchors_for_the_selected_object(viewer, scene):
     image_layer, object_list, ms = scene
     _select(viewer, object_list)
     ms._suggest_anchors()
-    points = np.asarray(ms.points_layer.data)
+    points = _anchors(ms)
     assert points.shape == (2, 3)
     assert np.all(_distance_from_ball_surface(points) < 2.5)
     # roughly opposite each other
     assert np.linalg.norm(points[0] - points[1]) > 1.8 * BALL_RADIUS
-    # Run uses the pair as it does one placed by hand
-    assert len(ms.points_layer.data) % 2 == 0
+    # shown on the display-only layer, which is not selected
+    assert ms._anchors_layer is not None and len(ms._anchors_layer.data) == 2
+    assert ms._anchors_layer not in viewer.layers.selection
 
 
-def test_suggesting_again_replaces_the_suggestion_but_keeps_user_anchors(viewer, scene):
+def test_suggesting_again_replaces_the_anchors_of_the_object(viewer, scene):
     image_layer, object_list, ms = scene
-    manual = np.array([[20., 30., 18.], [20., 30., 42.]])
-    for point in manual:
-        ms.points_layer.add(point)
     _select(viewer, object_list)
     ms._suggest_anchors()
-    assert len(ms.points_layer.data) == 4
-    np.testing.assert_allclose(ms.points_layer.data[:2], manual)
+    first = _anchors(ms).copy()
+    from napari_nd_annotator.object_anchors import anchor_store
+    anchor_store(object_list.bounding_box_layer).set(3, [[20., 30., 18.]])
     ms._suggest_anchors()
-    assert len(ms.points_layer.data) == 4
-    np.testing.assert_allclose(ms.points_layer.data[:2], manual)
-    # a suggestion that was moved is the user's: it stays
-    moved = np.asarray(ms.points_layer.data).copy()
-    moved[3] += 1
-    ms.points_layer.data = moved
-    ms._suggest_anchors()
-    assert len(ms.points_layer.data) == 6
+    np.testing.assert_allclose(_anchors(ms), first)
 
 
-def test_no_suggestion_without_selection_or_with_a_half_pair(viewer, scene):
+def test_no_suggestion_without_selection(viewer, scene):
     image_layer, object_list, ms = scene
     with pytest.warns(UserWarning, match="Select an object"):
         ms._suggest_anchors()
-    assert len(ms.points_layer.data) == 0
-    _select(viewer, object_list)
-    ms.points_layer.add(np.array([20., 30., 18.]))
-    with pytest.warns(UserWarning, match="Finish the current pair"):
-        ms._suggest_anchors()
-    assert len(ms.points_layer.data) == 1
+    assert ms._anchors_layer is None
 
 
 def test_button_is_connected_and_follows_the_image_dimension(viewer, scene):
@@ -111,10 +106,18 @@ def test_button_is_connected_and_follows_the_image_dimension(viewer, scene):
     _select(viewer, object_list)
     assert ms.suggest_anchors_button.enabled
     ms.suggest_anchors_button.native.click()
-    assert len(ms.points_layer.data) == 2
+    assert len(_anchors(ms)) == 2
+    # the image is the one of the selected object: choosing another one does not change what runs
     flat = viewer.add_image(np.zeros((20, 20)), name="flat")
     ms.image_layer = flat
+    assert ms.image_layer is image_layer
+    assert ms.suggest_anchors_button.enabled
+    assert "ball" in ms.image_status_label.value and "selected object" in ms.image_status_label.value
+    # without a selected object the chosen image is the one in use
+    _select(viewer, object_list)  # unselects the object
+    assert ms.image_layer is flat
     assert not ms.suggest_anchors_button.enabled
+    assert "flat" in ms.image_status_label.value
 
 
 @pytest.mark.parametrize("mode", ["Axis", "Fan (farthest pair)"])
@@ -129,7 +132,7 @@ def test_suggestion_mode_can_be_selected(viewer, scene, monkeypatch, mode):
     _select(viewer, object_list)
     ms._suggest_anchors()
     assert used == [msw.SUGGESTION_MODES[mode]]
-    points = np.asarray(ms.points_layer.data)
+    points = _anchors(ms)
     assert points.shape == (2, 3)
     assert np.all(_distance_from_ball_surface(points) < 2.5)
 
@@ -156,7 +159,7 @@ def test_suggestion_uses_the_blurring_option(viewer, scene, monkeypatch, blur):
         # the widget's own blur, the one a run applies
         blurred = seen[0](np.eye(8)[None].repeat(8, 0))
         assert blurred.shape == (8, 8, 8) and 0 < blurred.max() < 1
-    assert np.all(_distance_from_ball_surface(np.asarray(ms.points_layer.data)) < 2.5)
+    assert np.all(_distance_from_ball_surface(_anchors(ms)) < 2.5)
 
 
 def test_fan_parameters_are_shown_for_the_fan_mode_and_used(viewer, scene, monkeypatch):
@@ -175,9 +178,32 @@ def test_fan_parameters_are_shown_for_the_fan_mode_and_used(viewer, scene, monke
     _select(viewer, object_list)
     ms._suggest_anchors()
     assert (seen[0]["method"], seen[0]["n_rays"], seen[0]["max_radius_jump"], seen[0]["min_relative_strength"]) ==         ("fan", 128, 1.4, .6)
-    assert np.all(_distance_from_ball_surface(np.asarray(ms.points_layer.data)) < 2.5)
+    assert np.all(_distance_from_ball_surface(_anchors(ms)) < 2.5)
     # the axis mode does not get them
     ms.suggestion_mode_combobox.value = "Axis"
     assert all(w.native.isHidden() for w in parameter_widgets)
     ms._suggest_anchors()
     assert seen[1]["method"] == "axis" and "n_rays" not in seen[1]
+
+
+def test_run_and_suggest_need_an_object(viewer, scene):
+    image_layer, object_list, ms = scene
+    # nothing is selected: the buttons are disabled and say why
+    assert not ms.call_button.enabled and not ms.suggest_anchors_button.enabled
+    assert "Select an object" in ms.call_button.tooltip and "Select an object" in ms.suggest_anchors_button.tooltip
+    assert "select one" in ms.object_status_label.value
+    _select(viewer, object_list)
+    # an object without anchors: Suggest is possible, Run waits for the two anchors
+    assert ms.suggest_anchors_button.enabled and "Propose" in ms.suggest_anchors_button.tooltip
+    assert not ms.call_button.enabled and "anchors" in ms.call_button.tooltip
+    ms._suggest_anchors()
+    assert ms.call_button.enabled and ms.call_button.tooltip == "Segment the selected object"
+    # a single anchor is not enough
+    from napari_nd_annotator.object_anchors import anchor_store
+    anchor_store(object_list.bounding_box_layer).set(3, [[20., 30., 18.]])
+    ms._update_object_state()
+    assert not ms.call_button.enabled
+    ms._suggest_anchors()
+    assert ms.call_button.enabled
+    _select(viewer, object_list)  # unselected again
+    assert not ms.call_button.enabled and not ms.suggest_anchors_button.enabled

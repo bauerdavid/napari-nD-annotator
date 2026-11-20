@@ -10,15 +10,20 @@ from qtpy.QtGui import QImage, QPixmap, QHideEvent, QShowEvent
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QHBoxLayout, QLabel, QListWidgetItem, QListWidget, QMenu, \
     QComboBox, QPushButton, QStackedWidget, QDockWidget, QFileDialog, QSpinBox, QCheckBox
 from napari import Viewer
-from napari.layers import Image, Labels
+from napari.layers import Image, Labels, Layer
 from napari.utils.events import EventEmitter
-from scipy.ndimage import find_objects
+from napari.utils.notifications import show_info
 
 from ._utils import WidgetWithLayerList
 from ._utils.clipping import LayerClipper, displayed_layer_dims
 from ._utils.shortcuts import VIEWER, bind_all, unbind_all
-from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size
+from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size, viewer_qt_viewer
+from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
+from .working_set import (LinkError, active_working_set, auto_link, install as install_working_set, link_layers,
+                          is_scratch, objects_in_labels, set_boxes, set_source_image)
+from .working_set import working_set_changed
+from .working_set_panel import WorkingSetPanel, ask_boxes_for_painted_objects
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -28,6 +33,7 @@ except ImportError:
 import itertools
 import csv
 import weakref
+from typing import NamedTuple, Optional
 
 import PIL.Image as PilImage
 
@@ -42,12 +48,19 @@ SELECTED_EDGE_COLOR = (1., 0., 0., 1.)  # the edge color of the bounding box of 
 selected_object_changed = EventEmitter(source=None, type_name="selected_object_changed")
 
 
-def selected_object(viewer):
-    """The object selected in the object list of ``viewer`` as ``(label, bbox_min, bbox_max, image_layer)``, or None.
+class SelectedObject(NamedTuple):
+    """The object selected in the object list: its label id, the inclusive corners of its bounding box (data
+    coordinates of ``image_layer``) and the layers of the object list it belongs to."""
+    label: int
+    bbox_min: np.ndarray
+    bbox_max: np.ndarray
+    image_layer: Layer
+    labels_layer: Optional[Layer]
+    bbox_layer: Layer
 
-    The bounding box corners are inclusive and in data (index) coordinates of ``image_layer``, the image layer
-    of the object list. Lets other widgets work on the selected object without a reference to the object list.
-    """
+
+def selected_object_info(viewer) -> Optional[SelectedObject]:
+    """The object selected in the object list of ``viewer``, or None."""
     viewer = unwrap_viewer(viewer)
     for object_list in list(_OBJECT_LISTS):
         try:
@@ -55,13 +68,26 @@ def selected_object(viewer):
                 continue
             item = object_list.item(object_list.selected_idx)
             image_layer = object_list.image_layer
+            labels_layer = object_list.mask_layer
+            bbox_layer = object_list.bounding_box_layer
         except RuntimeError:  # the widget was deleted
             continue
-        if item is None or image_layer is None:
+        if item is None or image_layer is None or bbox_layer is None:
             continue
         bounding_box = np.asarray(item.bounding_box)
-        return item.idx, bounding_box[0].copy(), bounding_box[1].copy(), image_layer
+        return SelectedObject(item.idx, bounding_box[0].copy(), bounding_box[1].copy(), image_layer, labels_layer,
+                              bbox_layer)
     return None
+
+
+def selected_object(viewer):
+    """The object selected in the object list of ``viewer`` as ``(label, bbox_min, bbox_max, image_layer)``, or None.
+
+    The bounding box corners are inclusive and in data (index) coordinates of ``image_layer``, the image layer
+    of the object list. Lets other widgets work on the selected object without a reference to the object list.
+    """
+    selected = selected_object_info(viewer)
+    return None if selected is None else selected[:4]
 
 
 def slice_len(slice_, count=None):
@@ -246,7 +272,7 @@ if BoundingBoxLayer:
                 mask_layer.translate = translate(self.mask_layer)
                 mask_layer.brush_size = self.mask_layer.brush_size
                 if image_layer is not None:
-                    mask_layer.metadata["source_image_layer"] = image_layer
+                    link_layers(image=image_layer, labels=mask_layer)
                 self.viewer.add_layer(mask_layer)
             else:
                 mask_layer = None
@@ -266,10 +292,16 @@ if BoundingBoxLayer:
             self.parent.watch_mask_layer(self.mask_layer)
 
         def _give_labels_a_source_image(self):
-            # the minimal contour tool works on the source image of the labels layer, and asks for one when there is none
-            image_layer, mask_layer = self.image_layer, self.mask_layer
-            if "source_image_layer" not in mask_layer.metadata and image_layer.ndim == mask_layer.ndim                     and tuple(image_layer.data.shape[:image_layer.ndim]) == tuple(mask_layer.data.shape):
-                mask_layer.metadata["source_image_layer"] = image_layer
+            # The tools find the layers that belong together through the links (see working_set): the boxes are indices
+            # of the image, and the labels layer has it as its source (the minimal contour tool asks for one when there
+            # is none) if the shapes match. The pair chosen in the object list is the one the tools work on.
+            image_layer, mask_layer, bbox_layer = self.image_layer, self.mask_layer, self.parent.bounding_box_layer
+            same_shape = (image_layer.ndim == mask_layer.ndim
+                          and tuple(image_layer.data.shape[:image_layer.ndim]) == tuple(mask_layer.data.shape))
+            if same_shape:
+                link_layers(image=image_layer, labels=mask_layer, boxes=bbox_layer)
+            else:
+                link_layers(image=image_layer, boxes=bbox_layer)
 
         def update_clipping(self):
             self.parent.clipper.set_box(self.bounding_box[0], self.bounding_box[1])
@@ -312,11 +344,21 @@ if BoundingBoxLayer:
 
         def update_icon(self):
             visible_dims = list(self.viewer.dims.displayed)[-2:]
+            # a box may reach outside the layers (e.g. it was drawn on another image): only the part inside is shown
+            shape = np.full(self.bounding_box.shape[1], np.iinfo(np.int64).max)
+            for layer in (self.image_layer, self.mask_layer):
+                if layer is not None:
+                    layer_shape = np.asarray(layer.data.shape[:self.bounding_box.shape[1]])
+                    shape[:len(layer_shape)] = np.minimum(shape[:len(layer_shape)], layer_shape)
             bbox_idx = tuple(
-                slice(max(self.bounding_box[0, d], 0), self.bounding_box[1, d]+1) if d in visible_dims
-                else self.bounding_box[:, d].mean().astype(int)
+                slice(int(np.clip(self.bounding_box[0, d], 0, shape[d])),
+                      int(np.clip(self.bounding_box[1, d] + 1, 0, shape[d]))) if d in visible_dims
+                else int(np.clip(self.bounding_box[:, d].mean(), 0, max(shape[d] - 1, 0)))
                 for d in range(self.bounding_box.shape[1])
             )
+            if any(type(idx) is slice and idx.stop <= idx.start for idx in bbox_idx):
+                self.icon = np.zeros((1, 1, 3), dtype=np.uint8)  # nothing of the box is inside the layers
+                return
             if self.image_layer is None:
                 icon = np.zeros([slice_len(bbox_idx[d]) for d in range(len(bbox_idx)) if type(bbox_idx[d]) is slice] + [3])
             else:
@@ -353,6 +395,10 @@ if BoundingBoxLayer:
             # the camera and slice position before the first object was selected, restored when it is unselected
             self._saved_view = None
             self._watched_mask_layer = None
+            # the image, labels and bounding box layers share one scale (see `_sync_scales`)
+            self._scale_watched = []
+            self._syncing_scales = False
+            self._mismatch_warned = set()  # see `_warn_if_layers_mismatch`
             # the icon of the selected object follows the edits of the labels (throttled, painting is fast)
             self._icon_timer = QTimer(self)
             self._icon_timer.setSingleShot(True)
@@ -365,6 +411,7 @@ if BoundingBoxLayer:
             self._indices = None
             self.indices = indices
             self.viewer = viewer
+            install_working_set(viewer)
             self.name_template = name_template
             self.channels_dim = channels_dim
             self.image_layer = image_layer
@@ -391,7 +438,13 @@ if BoundingBoxLayer:
             if self._bounding_box_layer is not None:
                 self._bounding_box_layer.events.set_data.disconnect(self._on_bounding_boxes_removed)
                 self._bounding_box_layer.events.current_edge_color.disconnect(self._on_current_edge_color)
+                # the list no longer works on that layer: drawing boxes on it must not reach the list
+                if self.bounding_box_change in self._bounding_box_layer.mouse_drag_callbacks:
+                    self._bounding_box_layer.mouse_drag_callbacks.remove(self.bounding_box_change)
+                if self._on_bb_double_click in self._bounding_box_layer.mouse_double_click_callbacks:
+                    self._bounding_box_layer.mouse_double_click_callbacks.remove(self._on_bb_double_click)
             self._bounding_box_layer = new_layer
+            self._sync_scales()
             if new_layer is not None:
                 new_layer.events.set_data.connect(self._on_bounding_boxes_removed)
                 new_layer.events.current_edge_color.connect(self._on_current_edge_color)
@@ -421,6 +474,7 @@ if BoundingBoxLayer:
             if clipped:
                 self.release_selection()
             self._image_layer = new_layer
+            self._sync_scales()
             for i in range(self.count()):
                 item = self.item(i)
                 item.image_layer = new_layer
@@ -439,6 +493,7 @@ if BoundingBoxLayer:
             if clipped:
                 self.release_selection()
             self._mask_layer = new_layer
+            self._sync_scales()
             for i in range(self.count()):
                 item = self.item(i)
                 item.mask_layer = new_layer
@@ -513,6 +568,61 @@ if BoundingBoxLayer:
                 if emitter is not None:
                     emitter.connect(self._on_mask_changed)
 
+        def _scale_layers(self):
+            return [layer for layer in (self._image_layer, self._mask_layer, self._bounding_box_layer)
+                    if layer is not None]
+
+        def _sync_scales(self, source=None):
+            """Gives the image, labels and bounding box layers of the list the same scale.
+
+            Bounding box corners and label voxels are image indices, so layers with different scales would show,
+            clip and measure the object in different places. ``source`` (the layer whose scale was just changed)
+            sets the scale of the others; without it the image layer does. The scale is kept equal from then on:
+            changing the scale of any of the three changes the others.
+            """
+            layers = self._scale_layers()
+            previous, self._scale_watched = self._scale_watched, []
+            for layer in previous:
+                if not any(layer is other for other in layers):
+                    try:
+                        layer.events.scale.disconnect(self._on_scale_changed)
+                    except (ValueError, KeyError, RuntimeError):
+                        pass
+            for layer in layers:
+                if not any(layer is other for other in self._scale_watched):  # the same layer may have two roles
+                    if not any(layer is other for other in previous):
+                        layer.events.scale.connect(self._on_scale_changed)
+                    self._scale_watched.append(layer)
+            if source is None:
+                source = self._image_layer if self._image_layer is not None else (layers[0] if layers else None)
+            if source is None or self._syncing_scales:
+                return
+            reference = np.asarray(source.scale, dtype=float)
+            self._syncing_scales = True
+            try:
+                for layer in layers:
+                    if layer is source:
+                        continue
+                    count = min(len(reference), layer.ndim)
+                    new_scale = np.array(layer.scale, dtype=float)
+                    new_scale[-count:] = reference[-count:]
+                    if not np.allclose(new_scale, layer.scale):
+                        old_scale = tuple(float(s) for s in layer.scale)
+                        layer.scale = new_scale
+                        show_info(
+                            "The scale of layer '%s' was %s, set to %s like '%s': the image, labels and bounding box"
+                            " layers of the object list need the same scale"
+                            % (layer.name, old_scale, tuple(float(s) for s in new_scale), source.name))
+            finally:
+                self._syncing_scales = False
+
+        def _on_scale_changed(self, event):
+            try:
+                if not self._syncing_scales:
+                    self._sync_scales(event.source)
+            except RuntimeError:  # the widget was deleted
+                pass
+
         def unwatch_mask_layer(self):
             layer, self._watched_mask_layer = self._watched_mask_layer, None
             self._icon_timer.stop()
@@ -556,8 +666,11 @@ if BoundingBoxLayer:
                 self.notify_selection_changed()
 
         def _on_ndisplay_changed(self, event=None):
-            # the selected object is shown differently in 2D and 3D
+            # the selected object is shown differently in 2D and 3D. Not while a tool works on a scratch layer (the slice
+            # that is annotated): it is not shown over that, and it is shown again when the layer is gone
             try:
+                if any(is_scratch(layer) for layer in self.viewer.layers):
+                    return
                 self._reselect()
             except RuntimeError:  # the widget was deleted
                 self.viewer.dims.events.ndisplay.disconnect(self._on_ndisplay_changed)
@@ -592,13 +705,9 @@ if BoundingBoxLayer:
                 warnings.warn("Image and labels layer should be selected!")
                 return
             if selected_idx == self.selected_idx:
-                self.selected_idx = None
-                item.unselect()
-                self.clearSelection()
-                self.clearFocus()
-                self.bounding_box_layer.edge_color[selected_idx] = self.previous_edge_color
-                self.bounding_box_layer.data = self.bounding_box_layer.data
+                self._clear_selected_object(selected_idx, item)
             else:
+                self._warn_if_layers_mismatch()
                 item.on_select()
                 if self.selected_idx is not None:
                     self.bounding_box_layer.edge_color[self.selected_idx] = self.previous_edge_color
@@ -607,6 +716,47 @@ if BoundingBoxLayer:
                 self.bounding_box_layer.edge_color[selected_idx] = SELECTED_EDGE_COLOR
                 self.bounding_box_layer.data = self.bounding_box_layer.data
             self.notify_selection_changed()
+
+        def _clear_selected_object(self, row, item):
+            self.selected_idx = None
+            item.unselect()
+            self.clearSelection()
+            self.clearFocus()
+            layer = self.bounding_box_layer
+            if layer is not None and self.previous_edge_color is not None and row < len(layer.edge_color):
+                layer.edge_color[row] = self.previous_edge_color
+                layer.data = layer.data
+
+        def unselect_object(self):
+            """Unselects the selected object (if any): the view is restored, the clipping and the projections end."""
+            row = self.selected_idx
+            item = self.item(row) if row is not None else None
+            if item is None:
+                self.selected_idx = None
+                return
+            self._clear_selected_object(row, item)
+            self.notify_selection_changed()
+
+        def _warn_if_layers_mismatch(self):
+            """Says once per image and labels pair that they do not have the same shape.
+
+            The tools work on voxel indices of the image and write them to the labels layer, so a labels layer of
+            another shape gets the annotation in the wrong place (or the minimal contour asks for a source image).
+            """
+            image, labels = self._image_layer, self._mask_layer
+            if image is None or labels is None:
+                return
+            image_shape = tuple(image.data.shape[:image.ndim])
+            labels_shape = tuple(labels.data.shape)
+            if image_shape == labels_shape:
+                return
+            key = (id(image), id(labels), image_shape, labels_shape)
+            if key in self._mismatch_warned:
+                return
+            self._mismatch_warned.add(key)
+            show_info("The labels layer '%s' %s and the image layer '%s' %s have different shapes: the objects"
+                      " cannot be annotated reliably. Use a labels layer made for this image."
+                      % (labels.name, labels_shape, image.name, image_shape))
 
         def _on_current_edge_color(self, event=None):
             # Selecting a box in the layer copies its edge color to the color of the boxes drawn next. The highlight
@@ -643,8 +793,10 @@ if BoundingBoxLayer:
                 return []
             b_data = np.asarray(self._bounding_box_layer.data)
             if self.image_layer is not None:
-                # the bounding boxes are in world coordinates, the item bounding boxes in data (index) ones
-                b_data = (b_data - self.image_layer.translate) / self.image_layer.scale
+                # the data of the bounding box layer is in its own coordinates (the layer may have a scale and
+                # a translate), the item bounding boxes are in data (index) coordinates of the image layer
+                b_data = np.asarray([[self.image_layer.world_to_data(self._bounding_box_layer.data_to_world(point))
+                                      for point in box] for box in b_data])
             b_data = np.round(b_data).astype(int)
             return np.concatenate([b_data.min(1, keepdims=True), b_data.max(1, keepdims=True)], axis=1)
 
@@ -702,8 +854,12 @@ if BoundingBoxLayer:
             while event.type == "mouse_move":
                 yield
             self._mouse_down = False
-            new_data = np.asarray(layer.data)
-            # the bounding boxes are in world coordinates
+            # the data of the layer is in its own coordinates, the image extent is in world coordinates
+            if len(layer.data) == 0:  # e.g. the last box was deleted: nothing to clip
+                self.update_items()
+                return
+            new_data = np.asarray([[layer.data_to_world(point) for point in box] for box in layer.data]) \
+                .reshape((len(layer.data), -1, layer.ndim))
             if self.image_layer:
                 im_size = self.image_layer.data.shape
                 if self.image_layer.rgb:
@@ -715,9 +871,12 @@ if BoundingBoxLayer:
                 world_max = np.full(new_data.shape[-1], np.inf)
             if len(new_data) > 0 and (np.any(np.all(new_data > world_max, 1))\
                     or np.any(np.all(new_data < world_min, 1))):
+                # a box that is entirely outside the image is dropped
                 layer.data = previous_data
-            if len(new_data) > len(previous_data):
-                layer.data[-1][:] = np.clip(layer.data[-1], world_min, world_max - self.image_layer.scale)
+            elif len(new_data) > len(previous_data):
+                voxel = self.image_layer.scale if self.image_layer else 0
+                clipped = np.clip(new_data[-1], world_min, world_max - voxel)
+                layer.data[-1][:] = [layer.world_to_data(point) for point in clipped]
                 layer.data = layer.data
             self.update_items()
             if self.projections_widget is not None:
@@ -760,8 +919,25 @@ if BoundingBoxLayer:
         def addItem(self, item: QObjectListWidgetItem):
             self.insertItem(self.count(), item)
 
+        def highest_label_id(self):
+            """The largest value in the labels layer (objects painted by hand have ids too), 0 if there is none."""
+            labels = self.mask_layer
+            if labels is None:
+                return 0
+            try:
+                data = labels.data[0] if getattr(labels, "multiscale", False) else labels.data
+                return max(int(np.max(data)), 0)
+            except (ValueError, TypeError):  # empty or not numeric
+                return 0
+
         def next_index(self):
-            return next(self.indices)
+            """The id of the next object: the next of the sequence, never one that is in the labels layer already."""
+            idx = next(self.indices)
+            highest = self.highest_label_id()
+            if idx <= highest:
+                self.indices = highest + 1
+                idx = next(self.indices)
+            return idx
 
         def _on_bb_double_click(self, layer=None, event=None):
             if len(self.bounding_box_layer.selected_data) == 0:
@@ -779,15 +955,17 @@ if BoundingBoxLayer:
             layout = QVBoxLayout()
             self.viewer = viewer
             self.prev_n_layers = len(viewer.layers)
+            self._following = False
             self.channels_dim = None
             self.list_widget = None
             self.reset_index()
             self.bounding_box.combobox.currentIndexChanged.connect(self.bb_index_change)
             self.image.combobox.currentIndexChanged.connect(self.img_index_change)
             self.labels.combobox.currentIndexChanged.connect(self.mask_index_change)
-            layout.addWidget(self.bounding_box.combobox)
-            layout.addWidget(self.image.combobox)
-            layout.addWidget(self.labels.combobox)
+            # the layers are chosen here: the labels layer (the selection), and its image and boxes. The comboboxes
+            # of the three layers stay as the state of the list, they are not shown.
+            self.working_set_panel = WorkingSetPanel(viewer)
+            layout.addWidget(self.working_set_panel)
 
             self.list_widget_container = QStackedWidget()
             no_data_widget = QWidget()
@@ -824,11 +1002,35 @@ if BoundingBoxLayer:
             buttons_layout.addWidget(from_labels_button)
             buttons_widget.setLayout(buttons_layout)
             layout.addWidget(buttons_widget)
+            fit_widget = QWidget()
+            fit_layout = QHBoxLayout()
+            fit_layout.setContentsMargins(0, 0, 0, 0)
+            self.fit_button = QPushButton("Fit to object")
+            self.fit_button.setToolTip(
+                "Grows or shrinks the box of the selected object to the object under it, in every dimension, also"
+                " along the ones the box does not span: draw a rough box on any slice that shows the object (even"
+                " its top), the extent along the other dimensions is found automatically.")
+            self.fit_button.clicked.connect(self.fit_selected_box)
+            self.fit_polarity_combobox = QComboBox()
+            self.fit_polarity_combobox.addItems(["Auto", "Bright", "Dark"])
+            self.fit_polarity_combobox.setToolTip(
+                "Auto: the object is brighter or darker than its surroundings, whichever the content of the box is closer"
+                " to. Choose it when the object is hollow or the surroundings are mixed.")
+            for widget in (self.fit_button, self.fit_polarity_combobox):
+                widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # keep the keyboard (e.g. Space to pan) on the canvas
+            fit_layout.addWidget(self.fit_button, 1)
+            fit_layout.addWidget(self.fit_polarity_combobox)
+            fit_widget.setLayout(fit_layout)
+            layout.addWidget(fit_widget)
             self.setLayout(layout)
             self.name_template = "Object"
             if self.bounding_box.layer is not None:
                 self.create_list_widget()
             self.installEventFilter(self)
+            viewer.layers.selection.events.active.connect(self._follow_active_layer)
+            working_set_changed.connect(self._follow_active_layer)  # the links of the labels layer were changed
+            self._write_links()  # (the layers that were the only candidates belong together)
+            self._follow_active_layer()
 
         def _on_surroundings_toggled(self, _=None):
             if self.list_widget is not None:
@@ -844,6 +1046,7 @@ if BoundingBoxLayer:
                 self.create_list_widget()
             self.list_widget.bounding_box_layer = self.bounding_box.layer
             self.reset_index_after_existing_labels()
+            self._write_links()
 
         def reset_index_after_existing_labels(self):
             if "label" in self.bounding_box.layer.features and len(self.bounding_box.layer.features):
@@ -854,9 +1057,60 @@ if BoundingBoxLayer:
         def mask_index_change(self, _=None):
             if self.list_widget is not None and self.list_widget.mask_layer is not self.labels.layer:
                 self.list_widget.mask_layer = self.labels.layer
+            self._write_links()
 
         def img_index_change(self, _=None):
             self.update_channels_dim()
+            self._write_links()
+
+        def _write_links(self):
+            """The layers chosen here belong together: the labels layer gets the image and the boxes as its links.
+
+            Layers that do not fit are not linked (the status line says so).
+            """
+            if self._following:
+                return
+            image, labels, boxes = self.image.layer, self.labels.layer, self.bounding_box.layer
+            if labels is None:
+                return
+            try:
+                if image is not None:
+                    set_source_image(labels, image, self.viewer)
+                if boxes is not None:
+                    set_boxes(labels, boxes, self.viewer)
+            except LinkError:
+                pass
+
+        def _is_set_to(self, target):
+            """The list works on the layers of ``target`` already (a labels layer without a source image is not asked)."""
+            return (target.labels is self.labels.layer and (target.image is None or target.image is self.image.layer)
+                    and target.boxes is self.bounding_box.layer)
+
+        def _follow_active_layer(self, event=None):
+            """The list works on the labels layer that is selected: its image and its boxes (see `working_set`)."""
+            if self._following:
+                return
+            try:
+                target = active_working_set(self.viewer)
+                if target is None or target.labels is None or self._is_set_to(target):
+                    return
+                if target.image is None:
+                    auto_link(self.viewer, target.labels)
+                    target = active_working_set(self.viewer)
+                if target is None or target.image is None or self._is_set_to(target):
+                    return  # nothing to follow to: the panel says that the labels layer has no source image
+            except RuntimeError:  # the widget was deleted
+                self.viewer.layers.selection.events.active.disconnect(self._follow_active_layer)
+                return
+            self._following = True
+            try:
+                self.remove_list_widget()  # (the objects of the previous labels layer are no longer selected)
+                self.image.layer = target.image
+                self.labels.layer = target.labels
+                self.bounding_box.layer = target.boxes
+                self.bb_index_change()
+            finally:
+                self._following = False
 
         @property
         def image_layer(self):
@@ -867,9 +1121,18 @@ if BoundingBoxLayer:
             return self.labels.layer
 
         def create_bb_layer(self, _):
-            if self.image_layer is not None:
-                self.viewer.add_layer(
-                    BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent"))
+            if self.image_layer is None:
+                warnings.warn("Select an image layer first: the bounding box layer takes its dimensions and scale")
+                return
+            layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
+                                     scale=self.image_layer.scale, translate=self.image_layer.translate)
+            labels = self.labels.layer
+            if labels is not None and ask_boxes_for_painted_objects(labels):
+                ids, corners = objects_in_labels(labels)
+                layer.data = corners
+                layer.features["label"] = np.asarray(ids, dtype=int)
+            self.viewer.add_layer(layer)
+            self.bounding_box.layer = layer
 
         def update_channels_dim(self):
             if self.image_layer is None:
@@ -893,7 +1156,12 @@ if BoundingBoxLayer:
 
         def remove_list_widget(self):
             if self.list_widget is not None:
-                self.list_widget.release_clipper()
+                # nothing of the list may stay behind: not the selected object, nor the callbacks on the box layer
+                list_widget, self.list_widget = self.list_widget, None
+                list_widget.unselect_object()
+                list_widget.release_clipper()
+                list_widget.bounding_box_layer = None
+                _OBJECT_LISTS.discard(list_widget)
             while self.list_widget_container.count() > 1:
                 self.list_widget_container.removeWidget(self.list_widget_container.widget(1))
             self.list_widget_container.setCurrentIndex(0)
@@ -941,23 +1209,57 @@ if BoundingBoxLayer:
 
         def bounding_boxes_from_labels(self):
             if self.labels.layer is None:
+                warnings.warn("Select a labels layer first")
                 return
-            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent")
-            bb_corners = find_objects(self.labels.layer.data)
-            ids = []
-            bbs = []
-            for i, bb in enumerate(bb_corners):
-                if bb is None:
-                    continue
-                min_ = [slice_.start for slice_ in bb]
-                max_ = [slice_.stop - 1 for slice_ in bb]
-                bb = np.asarray(np.where(list(itertools.product((False, True), repeat=self.image_layer.ndim)), max_, min_))
-                bbs.append(bb)
-                ids.append(i+1)
+            if self.image_layer is None:
+                warnings.warn("Select an image layer first: the bounding box layer takes its dimensions and scale")
+                return
+            # the corners below are image indices, so the layer shares the transform of the image
+            bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
+                                        scale=self.image_layer.scale, translate=self.image_layer.translate)
+            ids, bbs = objects_in_labels(self.labels.layer)
             bb_layer.data = bbs
             bb_layer.features["label"] = np.asarray(ids, dtype=int)
             self.viewer.add_layer(bb_layer)
             self.bounding_box.layer = bb_layer
+
+        def fit_selected_box(self, _=None):
+            """Fit the box of the selected object to the object under it (see :func:`fit_box_to_object`)."""
+            self._focus_canvas()
+            list_widget, image_layer = self.list_widget, self.image_layer
+            if list_widget is None or list_widget.selected_idx is None:
+                warnings.warn("Select an object in the list first")
+                return
+            if image_layer is None or image_layer.rgb or self.channels_dim is not None:
+                warnings.warn("Fitting the box needs a single channel image layer")
+                return
+            row = list_widget.selected_idx
+            item = list_widget.item(row)
+            fit = fit_box_to_object(image_layer.data, item.bounding_box[0], item.bounding_box[1],
+                                    scale=image_layer.scale, polarity=self.fit_polarity_combobox.currentText().lower())
+            if not fit.found:
+                warnings.warn("Cannot fit the box of object %d: %s" % (item.idx, fit.reason))
+                return
+            corners = np.where(list(itertools.product((False, True), repeat=image_layer.ndim)),
+                               fit.box_max, fit.box_min)
+            layer = list_widget.bounding_box_layer
+            new_box = np.asarray([layer.world_to_data(image_layer.data_to_world(point)) for point in corners])
+            data = [np.asarray(box) for box in layer.data]
+            data[row] = new_box
+            layer.data = data
+            list_widget.update_items()
+            message = "Fitted the box of object %d to %s (%s object)" % (
+                item.idx, " x ".join(str(int(n)) for n in fit.box_max - fit.box_min + 1), fit.polarity)
+            if fit.reaches_limit:
+                message += ": the object is larger than the region searched around the box (or merged with a" \
+                           " neighbor), check it and fit again from a bigger box"
+            show_info(message)
+
+        def _focus_canvas(self):
+            try:
+                viewer_qt_viewer(self.viewer).canvas.native.setFocus()
+            except (AttributeError, RuntimeError):
+                pass
 
         def reset_index(self, starting_index=1):
             if self.list_widget is not None:

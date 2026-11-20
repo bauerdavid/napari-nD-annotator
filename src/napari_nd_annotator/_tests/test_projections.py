@@ -61,7 +61,7 @@ def _images(widget):
 
 def _resize_bounding_box(object_list, new_max):
     corners = np.where(list(itertools.product((False, True), repeat=3)), new_max, BBOX_MIN)
-    object_list.bounding_box_layer.data = [(corners*SCALE + TRANSLATE).astype(float)]
+    object_list.bounding_box_layer.data = [corners.astype(float)]  # the boxes share the transform of the image
     object_list.update_items()
     _process_events()
 
@@ -288,7 +288,7 @@ def test_projections_follow_a_moved_bounding_box(viewer, selected):
     image, labels, object_list, widget = selected
     shift = np.array([1, 2, 3])
     corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX + shift, BBOX_MIN + shift)
-    object_list.bounding_box_layer.data = [(corners*SCALE + TRANSLATE).astype(float)]
+    object_list.bounding_box_layer.data = [corners.astype(float)]  # the boxes share the transform of the image
     object_list.update_items()
     _process_events()
     _flush(widget)

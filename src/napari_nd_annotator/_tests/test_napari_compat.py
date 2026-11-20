@@ -235,10 +235,16 @@ def test_slice_annotation_fits_and_restores_camera(viewer, annotator):
     camera = viewer_camera(viewer)
     zoom_before = camera.zoom
 
+    shown = []
+    viewer.dims.ndisplay = 3
     worker.begin_slice_annotation(np.zeros((30, 40)), None)
+    worker.slice_image_layer.events.visible.connect(lambda event: shown.append(event.source.visible))
     assert viewer.dims.ndisplay == 2
     assert worker.slice_labels_layer in viewer.layers
     assert camera.zoom != zoom_before
+    # the slice image is drawn again once the view is 2D (it was seen black until its visibility was toggled)
+    _process_events()
+    assert worker.slice_image_layer.visible and shown == [False, True]
 
     worker.finish_slice_annotation()
     assert worker.slice_labels_layer is None

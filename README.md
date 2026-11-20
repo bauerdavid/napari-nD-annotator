@@ -102,6 +102,19 @@ Cropped layers of an object can still be created explicitly from the context men
 
 Bounding boxes can be created from the `Object list` widget. The dimensionality of the bounding box layer will be determined from the image layer. As bounding boxes are created, a small thumbnail will be displayed.
 
+#### The layers the tools work on
+The tools work on one *labels layer*: the one you select in the layer list (or in the `Labels` combobox at the top of the `Object list`, which selects it in the viewer). The labels layer knows its **image** (its source image: the voxels of the labels are indices of it) and its **boxes** (the bounding box layer with its objects), so selecting it is all there is to do: the `Object list` shows its boxes, Minimal contour works on its image, and Minimal surface on the selected object. The two relations are shown at the top of the `Object list` (and as a line at the top of the Annotation Toolbox) and changed there:
+
+ * `Image` > `Change...` lists the images that fit the labels layer (same shape, no multiscale; the others are greyed with the reason). The labels layer and its boxes take the scale of the image.
+ * `Boxes` > `Change...` lists the box layers with the dimensions of the labels layer (also `None`). One box layer can be used by several labels layers.
+ * `New` next to `Labels` makes an empty labels layer for the selected image, `New` next to `Boxes` a box layer for the labels layer.
+ * A labels layer without a source image gets the only image of the same shape and scale (a notification says so); with several images the choice is yours (`Image` > `Change...`).
+ * A warning in red tells what does not fit (labels and image of different shapes, boxes of another image, an active labels layer that is not the one of the selected object).
+
+Selecting another labels layer unselects the selected object and shows the boxes of the new one. Selecting the box layer (to draw boxes), a points layer or any layer that is not an image or labels leaves the layers as they are; selecting the image switches the minimal contour and interpolation tools off, as they work on a labels layer.
+
+`Fit to object` (under the object list) grows or shrinks the box of the selected object to the object under it, in every dimension, also along the ones that the box does not span. In the 2D view a box drawn on a slice has no extent along the other dimension, and finding the middle of a cell (or its size when drawing from its top) is hard: draw a rough box on any slice that shows the object, even the first one, and press the button. The object is the connected region around the box that is brighter (or darker) than a threshold half way between the content of the box and the background; the search region around the box is widened automatically (up to 8 times its size) when the box is small or deep inside a large object. The combo box next to the button sets whether the object is `Bright` or `Dark` (`Auto` decides by the content of the box). Limits: touching objects without a visible gap are fitted as one, and the box is replaced (no undo), so fit again from a box on the object you want. A message tells when the object reaches the border of the searched region, and nothing changes if the box is on the background.
+
 The proposed pipeline goes as follows:
 
  1. Create a bounding box layer
@@ -126,6 +139,30 @@ weighted sum.
 
 https://user-images.githubusercontent.com/36735863/188876826-1771acee-93ba-4905-982e-bfb459329659.mp4
 
+### Minimal surface
+The `Minimal Surface` tab segments a whole 3D object from two points on its surface (see [Minimal surface](#minimal-surface) for the optional dependency). It works on the object selected in the object list, an object being a bounding box with a label id:
+
+The image (shown, not chosen: it is the image of the selected object), the selected object (with how many of its two anchors are set) and the `Suggest anchors` and `Run` buttons are always visible at the top of the tab. The settings are in three tabs below them, so nothing has to be expanded or scrolled to: `Anchors` (placing, moving and suggesting the anchors), `Image` (the features the surface follows, blurring, and whether to ignore the objects that are annotated already) and `Advanced` (the slice annotation method, and `Inspect`: with `Keep as layers` on, `Run` adds the distance maps of the two anchors and the contour points of the annotated plane to the viewer, and `Show shortest paths` draws paths on them. This is for understanding or developing the method, it is off by default).
+
+ 1. Select an object in the object list (create its bounding box with the `Object List` widget).
+ 2. Set the two anchors of the object, roughly opposite each other on its surface:
+    * in the 3D view, click (without dragging) on the object. The anchor is placed where the ray under the cursor first enters the image data inside the bounding box (the half-maximum edge of the first bright structure on the ray), so click on what you see. A right click removes the last anchor, a third left click starts a new pair. To correct an anchor, drag it (press on it, not on the object behind it): it follows the cursor along the surface, like when it is placed, and the view does not rotate meanwhile. Anchors are only edited while the `Minimal Surface` tab is shown and `Edit in 3D view` (`Anchors` tab) is checked.
+    * a mouse press is never for both the anchors and the active layer. Pressing on an anchor always grabs the anchor, even when the object layer is in `Select` or `Add` mode (the box does not move). Elsewhere, a click places or removes anchors if the active layer is in `Pan/zoom` mode; if it is in a mode that edits with the mouse, plain clicks stay with the layer (they select, move or add boxes), and holding `Alt` makes them place or remove anchors.
+    * the keyboard focus stays on the canvas when the buttons, checkboxes and drop-downs of the tab are used, so holding `Space` pans the view (even in `Select` or `Add` mode) right after pressing `Suggest anchors`.
+    * or with `Suggest anchors`, which proposes the pair from the bounding box (`Suggestion` group of the `Anchors` tab: the mode and its parameters).
+    * `Distance (%)` moves the two anchors further from (above 100) or closer to (below 100) the center of the bounding box, along the line from the center to each anchor, relative to where they were when you last suggested, placed or dragged them. Use it to move suggested anchors onto the surface.
+    * if you prefer to place the anchors on a plane, set `Placement` to `Image plane`: the image is then shown with napari's plane depiction (`Shift`+drag moves the plane along its normal, double click sets its position) and the anchor is where the ray crosses the plane inside the bounding box.
+ 3. Choose how the contour of the object in the meeting plane of the two anchors is found (`Slice annotation` > `Method`, in the `Advanced` tab):
+    * `Manual`, `Threshold` and `Minimal contour`: you annotate it on the plane when `Run` asks for it.
+    * `Automatic (distances)`: found from the distances of the two anchors in the plane, which takes a fraction of a second and needs no interaction. `Automatic (phase field)` evolves a phase field in the plane instead, which takes seconds. They need a minimal-surface build that has them and a feature that tells the object from the background, so choosing one switches the `Feature` (`Image` tab) to `Gradient + intensity` (the plain `Gradient` gives no usable contour, and `Run` refuses it).
+ 4. Press `Run`. The result is written to the labels layer of the object list with the label id of the object, so it can be undone with `Ctrl+Z`. The previous mask of the object (its voxels inside its bounding box and the box of the result) is replaced, voxels of other objects under the new mask are overwritten like when painting, and voxels of the object far outside that region stay.
+
+The anisotropy of the image is not a setting: the `Z scale` (`Image` tab, shown but not editable) is the ratio of the voxel size along z and in the plane, taken from the `scale` of the image layer (the surface is computed on the image resampled along z by it). To change it, change the scale of the image layer. The image, labels and bounding box layers of the object list always have the same scale: the labels and bounding box layers take the scale of the image when they are chosen (a notification says so when it changes), and from then on changing the scale of any of the three changes the others.
+
+Objects that are annotated already are ignored from then on (`Image` tab > `Other objects` > `Ignore annotated`, on by default): the voxels that have another label than the selected object in the labels layer of the object list are left out of the anchor suggestion, and are set to zero in the copy of the image that `Run` computes the surface on, so neither the anchors nor the surface follow them. The selected object itself is not masked, as the result may replace it.
+
+The anchors belong to the object: they are kept when other objects are selected, and are stored in the `metadata` of the bounding box layer. The selected object's anchors are shown on a display-only layer (named `Anchors of object ... [display only]`) that you do not need to select or edit; use `Clear anchors` or click again to change them. Placing anchors needs the 3D view; in 2D use `Suggest anchors`.
+
 ### Minimal contour
 This plugin can estimate a minimal contour, which is calculated from a point set on the edges of the object, which are provided by the user. This contour will follow some kind of image feature (pixels with high gradient or high/low intensity).
 Features:
@@ -137,6 +174,7 @@ Features:
  * The `Param` value at the widget will decide, how strongly should the contour follow edges on the image. Higher value means higher sensitivity to image data, while a lower value will be closer to straight lines.
  * Different features can be used, like image gradient or pixel intensities, and also user-defined features (using Python)
    * the image is accessed as the `image` variable, and the features should be stored in the `features` variable in the small code editor widget
+ * `Follow anchor intensity` (under `Image Features`): the contour follows pixels whose intensity is similar to the intensity at the anchor points (and along the accepted contour), which helps on membranes or objects with a clear intensity but weak edges. `Match` sets which intensities count (`Similar`, `Similar or brighter`, `Similar or darker`), `Intensity strength` how much slower the contour moves on pixels that differ most, `Feature weight` how much the selected feature still counts (0: intensity only) and `Prior from anchor` after how many anchors the prior is used. It is off until checked, and always starts switched off.
 
 This functionality can be used by selecting the `Minimal Contour` tab in the `Annotation Toolbox` widget, which will create a new layer called `Anchors`.
 
