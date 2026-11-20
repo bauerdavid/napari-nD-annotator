@@ -174,6 +174,7 @@ Features:
  * The `Param` value at the widget will decide, how strongly should the contour follow edges on the image. Higher value means higher sensitivity to image data, while a lower value will be closer to straight lines.
  * Different features can be used, like image gradient or pixel intensities, and also user-defined features (using Python)
    * the image is accessed as the `image` variable, and the features should be stored in the `features` variable in the small code editor widget
+ * `Follow anchor intensity` (under `Image Features`): the contour follows pixels whose intensity is similar to the intensity at the anchor points (and along the accepted contour), which helps on membranes or objects with a clear intensity but weak edges. `Match` sets which intensities count (`Similar`, `Similar or brighter`, `Similar or darker`), `Intensity strength` how much slower the contour moves on pixels that differ most, `Feature weight` how much the selected feature still counts (0: intensity only) and `Prior from anchor` after how many anchors the prior is used. It is off until checked, and always starts switched off.
 
 This functionality can be used by selecting the `Minimal Contour` tab in the `Annotation Toolbox` widget, which will create a new layer called `Anchors`.
 

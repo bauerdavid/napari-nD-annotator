@@ -1,4 +1,4 @@
-"""The experimental intensity prior of the minimal contour.
+"""The intensity prior of the minimal contour.
 
 While it is on, the contour follows pixels whose intensity is similar to the intensity at the anchor points:
 the speed of the path is the intensity similarity times the selected feature's speed to a small power.
@@ -388,14 +388,9 @@ def viewer():
     _process_events()
 
 
-def _scene(viewer, monkeypatch, env=None):
+def _scene(viewer, monkeypatch):
     from napari_nd_annotator import AnnotatorWidget
     from napari_nd_annotator._helper_functions import viewer_qt_viewer
-    from napari_nd_annotator._widgets.minimal_contour_widget import INTENSITY_PRIOR_ENV
-    if env is None:
-        monkeypatch.delenv(INTENSITY_PRIOR_ENV, raising=False)
-    else:
-        monkeypatch.setenv(INTENSITY_PRIOR_ENV, env)
     annotator = AnnotatorWidget(viewer, persist=False)
     viewer.window.add_dock_widget(annotator, name="Annotator")
     data = (np.random.default_rng(0).uniform(0, 1, (60, 70)) * 1000).astype(np.uint16)
@@ -451,23 +446,17 @@ def _shown(widget):
     return not widget.native.isHidden()
 
 
-def test_controls_are_hidden_by_default(viewer, monkeypatch, restore_prior_state):
+def test_controls_are_shown_by_default_and_the_prior_is_off(viewer, monkeypatch, restore_prior_state):
     from napari_nd_annotator._widgets.minimal_contour_widget import INTENSITY_PRIOR_FIELDS
     mc = _scene(viewer, monkeypatch).mc
     for name in INTENSITY_PRIOR_FIELDS:
-        assert not _shown(getattr(mc, name))
-    assert _shown(mc.used_feature_combobox)
+        assert _shown(getattr(mc, name))
+    assert mc.intensity_prior_checkbox.value is False
 
 
-@pytest.mark.parametrize("value", ["", "0"])
-def test_controls_stay_hidden_for_empty_or_zero(viewer, monkeypatch, restore_prior_state, value):
-    mc = _scene(viewer, monkeypatch, env=value).mc
-    assert not _shown(mc.intensity_prior_checkbox)
-
-
-def test_environment_variable_shows_controls_that_are_not_persisted(viewer, monkeypatch, restore_prior_state):
+def test_controls_are_not_persisted(viewer, monkeypatch, restore_prior_state):
     from napari_nd_annotator._widgets.minimal_contour_widget import INTENSITY_PRIOR_FIELDS
-    mc = _scene(viewer, monkeypatch, env="1").mc
+    mc = _scene(viewer, monkeypatch).mc
     for name in INTENSITY_PRIOR_FIELDS:
         assert _shown(getattr(mc, name))
     mc.intensity_prior_checkbox.value = True
@@ -483,7 +472,7 @@ def test_environment_variable_shows_controls_that_are_not_persisted(viewer, monk
 
 def test_controls_set_the_prior(viewer, monkeypatch, restore_prior_state):
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
-    mc = _scene(viewer, monkeypatch, env="1").mc
+    mc = _scene(viewer, monkeypatch).mc
     prior = VispyMinimalContourOverlay.intensity_prior
     # the defaults of the controls are the prior's
     assert prior.max_slowdown == mc.intensity_prior_slowdown_combobox.value == 100.
@@ -500,7 +489,7 @@ def test_controls_set_the_prior(viewer, monkeypatch, restore_prior_state):
 def test_low_intensity_feature_gives_the_prior_the_displayed_intensities(viewer, monkeypatch, restore_prior_state):
     """The low intensity feature inverts the image; the prior still compares the intensities as displayed."""
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
-    scene = _scene(viewer, monkeypatch, env="1")
+    scene = _scene(viewer, monkeypatch)
     scene.mc.used_feature_combobox.value = "Low intensity"
     _vispy_overlay(scene)
     raw = np.asarray(VispyMinimalContourOverlay.intensity_prior._raw_image, dtype=float)
@@ -510,7 +499,7 @@ def test_low_intensity_feature_gives_the_prior_the_displayed_intensities(viewer,
 
 def test_overlay_sets_the_speed_map_from_accepted_anchors(viewer, monkeypatch, restore_prior_state):
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
-    scene = _scene(viewer, monkeypatch, env="1")
+    scene = _scene(viewer, monkeypatch)
     overlay, vispy_overlay = _vispy_overlay(scene)
     prior = VispyMinimalContourOverlay.intensity_prior
     assert prior.shape == scene.image.data.shape
@@ -562,7 +551,7 @@ def test_overlay_sets_the_speed_map_from_accepted_anchors(viewer, monkeypatch, r
 def test_overlay_samples_the_roi_window_in_window_coordinates(viewer, monkeypatch, restore_prior_state):
     """With a ROI the prior's image is the window; anchors (plane coordinates) are shifted into it."""
     from napari_nd_annotator._widgets.minimal_contour_overlay.vispy_minimal_contour_overlay import VispyMinimalContourOverlay
-    scene = _scene(viewer, monkeypatch, env="1")
+    scene = _scene(viewer, monkeypatch)
     overlay, vispy_overlay = _vispy_overlay(scene)
 
     # a plane of the scene's shape: dark left of column 45, bright from it; the calculator has columns 30..70

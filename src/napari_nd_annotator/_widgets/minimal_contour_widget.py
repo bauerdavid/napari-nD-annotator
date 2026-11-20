@@ -109,15 +109,13 @@ FEATURES = {
 }
 
 DEMO_SIZE = 200
-# set this environment variable (to anything but "" or "0") to show the experimental intensity prior controls
-INTENSITY_PRIOR_ENV = "ND_ANNOTATOR_INTENSITY_PRIOR"
 # how many times slower the pixels least like the anchors' intensity get (see minimal_contour/intensity_prior.py)
 PRIOR_SLOWDOWN_CHOICES = [("×%g" % s, s) for s in (3., 10., 30., 100., 300., MAX_PRIOR_SLOWDOWN)]
 DEFAULT_PRIOR_SLOWDOWN = 100.
 DEFAULT_PRIOR_FEATURE_WEIGHT = 0.25
 PRIOR_MATCH_CHOICES = [("Similar", SIMILAR), ("Similar or brighter", SIMILAR_OR_BRIGHTER),
                        ("Similar or darker", SIMILAR_OR_DARKER)]
-# the widgets of the experimental intensity prior: hidden without INTENSITY_PRIOR_ENV and never persisted
+# the widgets of the intensity prior: never persisted (it always starts switched off)
 INTENSITY_PRIOR_FIELDS = ("intensity_prior_checkbox", "intensity_prior_match_combobox",
                           "intensity_prior_slowdown_combobox", "intensity_prior_feature_weight_slider",
                           "intensity_prior_min_anchors_spinbox")
@@ -226,26 +224,26 @@ class MinimalContourWidget(MagicTemplate):
                                                     "with the selected image feature (with a lower number the contour will be\n"
                                                     "closer to the Euclidean shortest path")
     local_intensity_correction_checkbox = field(bool, location=ImageFeaturesWidget).with_options(visible=False)
-    # experimental, only shown when the INTENSITY_PRIOR_ENV environment variable is set
+    # the intensity prior: the contour follows the intensity of the anchors (off until checked)
     intensity_prior_checkbox = field(bool, label="Follow anchor intensity", location=ImageFeaturesWidget).with_options(
-        visible=False, tooltip="[Experimental] When checked, the contour follows pixels whose intensity is similar\n"
+        tooltip="When checked, the contour follows pixels whose intensity is similar\n"
                                "to the intensity at the anchor points (and along the accepted contour)")
     intensity_prior_match_combobox = field(widget_type=ComboBox, label="Match", location=ImageFeaturesWidget, options={
-        "choices": PRIOR_MATCH_CHOICES, "value": SIMILAR, "visible": False,
+        "choices": PRIOR_MATCH_CHOICES, "value": SIMILAR,
         "tooltip": "Which intensities count as matching the anchors:\n"
                    "Similar: close to it, darker or brighter\n"
                    "Similar or brighter: also anything brighter (e.g. along a membrane stain)\n"
                    "Similar or darker: also anything darker"})
     intensity_prior_slowdown_combobox = field(widget_type=ComboBox, label="Intensity strength", location=ImageFeaturesWidget, options={
-        "choices": PRIOR_SLOWDOWN_CHOICES, "value": DEFAULT_PRIOR_SLOWDOWN, "visible": False,
+        "choices": PRIOR_SLOWDOWN_CHOICES, "value": DEFAULT_PRIOR_SLOWDOWN,
         "tooltip": "How many times slower the contour moves on pixels whose intensity\n"
                    "differs most from the anchors' intensity"})
     intensity_prior_feature_weight_slider = field(float, label="Feature weight", widget_type="FloatSlider", location=ImageFeaturesWidget).with_options(
-        min=0., max=1., value=DEFAULT_PRIOR_FEATURE_WEIGHT, visible=False,
+        min=0., max=1., value=DEFAULT_PRIOR_FEATURE_WEIGHT,
         tooltip="How much the selected image feature still counts while following the intensity.\n"
                 "0: intensity only; small values keep the contour tidy on noisy images")
     intensity_prior_min_anchors_spinbox = field(int, label="Prior from anchor", location=ImageFeaturesWidget).with_options(
-        min=1, max=10, value=1, visible=False,
+        min=1, max=10, value=1,
         tooltip="Number of placed anchor points after which the prior is used.\n"
                 "With 1 the intensity at the first anchor is the reference;\n"
                 "more anchors give a more reliable reference.")
@@ -340,9 +338,6 @@ class MinimalContourWidget(MagicTemplate):
             self._initialize(self._viewer)
         VispyMinimalContourOverlay.mc_calculator.set_param(self.param)
         self.local_intensity_correction_checkbox.changed.connect(VispyMinimalContourOverlay.mc_calculator.set_use_local_maximum)
-        if os.environ.get(INTENSITY_PRIOR_ENV, "") not in ("", "0"):
-            for name in INTENSITY_PRIOR_FIELDS:
-                getattr(self, name).visible = True
         for widget, setter in [
             (self.intensity_prior_match_combobox, VispyMinimalContourOverlay.set_intensity_prior_match),
             (self.intensity_prior_slowdown_combobox, VispyMinimalContourOverlay.set_intensity_prior_max_slowdown),
@@ -394,7 +389,7 @@ class MinimalContourWidget(MagicTemplate):
             del d["labels_layer_combobox"]
         if "source_image_container" in d:
             del d["source_image_container"]
-        # the experimental intensity prior always starts switched off
+        # the intensity prior always starts switched off
         for container in (d, d.get("Image Features", {})):
             for key in INTENSITY_PRIOR_FIELDS:
                 container.pop(key, None)
