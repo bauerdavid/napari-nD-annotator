@@ -184,3 +184,16 @@ def test_fan_parameters_are_shown_for_the_fan_mode_and_used(viewer, scene, monke
     assert all(w.native.isHidden() for w in parameter_widgets)
     ms._suggest_anchors()
     assert seen[1]["method"] == "axis" and "n_rays" not in seen[1]
+
+
+def test_run_and_suggest_need_an_object(viewer, scene):
+    image_layer, object_list, ms = scene
+    # nothing is selected: the buttons are disabled and say why
+    assert not ms.call_button.enabled and not ms.suggest_anchors_button.enabled
+    assert "Select an object" in ms.call_button.tooltip and "Select an object" in ms.suggest_anchors_button.tooltip
+    assert "select one" in ms.object_status_label.value
+    _select(viewer, object_list)
+    assert ms.call_button.enabled and ms.suggest_anchors_button.enabled
+    assert "Select an object" not in ms.call_button.tooltip and "Propose" in ms.suggest_anchors_button.tooltip
+    _select(viewer, object_list)  # unselected again
+    assert not ms.call_button.enabled and not ms.suggest_anchors_button.enabled

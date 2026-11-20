@@ -366,9 +366,9 @@ def test_widgets_do_not_keep_the_keyboard_focus_from_the_canvas(viewer, scene, m
     canvas = viewer_qt_viewer(viewer).canvas.native
     focused = []
     monkeypatch.setattr(canvas, "setFocus", lambda *args: focused.append(True))
-    ms.suggest_anchors_button.native.click()  # warns that nothing is selected
-    ms.clear_anchors_button.native.click()
-    assert len(focused) == 2
+    assert not ms.suggest_anchors_button.native.isEnabled()  # (nothing is selected)
+    ms.clear_anchors_button.native.click()  # warns that nothing is selected
+    assert len(focused) == 1
 
 
 def _gesture(ms, viewer, layer, position, direction, button=1, modifiers=(), moves=()):

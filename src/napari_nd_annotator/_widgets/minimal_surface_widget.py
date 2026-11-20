@@ -16,7 +16,7 @@ from scipy.ndimage import gaussian_filter, gaussian_gradient_magnitude, zoom
 from magicclass import magicclass, MagicTemplate, field, vfield, set_design
 from magicclass.serialize import serialize
 
-from qtpy.QtCore import Signal, Qt, QObject, QThread
+from qtpy.QtCore import Signal, Qt, QObject, QThread, QTimer
 from qtpy.QtWidgets import (
     QVBoxLayout,
     QLabel,
@@ -303,7 +303,19 @@ class EstimationWorker(QObject):
         self.slice_labels_layer.brush_size = 1
         self.slice_labels_layer.mode = "paint"
         self.minimal_surface_widget.call_button.enabled = True
+        # the slice image was added in the 3D view and shown in 2D right after: make it draw itself again, as turning
+        # its visibility off and on does (it has been seen black until then)
+        self._redraw_slice_image()
+        QTimer.singleShot(0, self._redraw_slice_image)
         self.init_slice_annotation_fun()
+
+    def _redraw_slice_image(self):
+        layer = self.slice_image_layer
+        if layer is None or layer not in self.viewer.layers:
+            return
+        layer.visible = False
+        layer.visible = True
+        layer.refresh()
 
     def finish_slice_annotation(self):
         if self.finish_slice_annotation_fun is not None:
@@ -575,7 +587,7 @@ class EstimationWorker(QObject):
             self.minimal_surface_widget.call_button.clicked.disconnect(stop)
             self.minimal_surface_widget.call_button.clicked.connect(self.minimal_surface_widget._start_estimation)
             self.minimal_surface_widget.call_button.text = "Run"
-            self.minimal_surface_widget.call_button.enabled = True
+            self.minimal_surface_widget._update_buttons_enabled()
 
     def data_initializer(self, name, selected_idx=None, layer_args=None):
         if layer_args is None:
@@ -1313,15 +1325,34 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _ensure_3d_image(self, _=None):
         self._update_z_scale_label()
         self._update_image_status()
-        if self.image_layer is None:
-            return
-        if self.image_layer.ndim == 2:
+        if self.image_layer is not None and self.image_layer.ndim == 2:
             warnings.warn("Minimal Surface works only with 3D images!")
-        is_enabled = self.image_layer is not None and self.image_layer.ndim==3
-        self.call_button.enabled = is_enabled
-        self.suggest_anchors_button.enabled = is_enabled
-        self.Tabs.enabled = is_enabled
-        self.anchor_distance_slider.enabled = is_enabled and self._anchor_base is not None
+        is_enabled = self.image_layer is not None and self.image_layer.ndim == 3
+        if self.image_layer is not None:
+            self.Tabs.enabled = is_enabled
+            self.anchor_distance_slider.enabled = is_enabled and self._anchor_base is not None
+        self._update_buttons_enabled()
+
+    def _update_buttons_enabled(self):
+        """Run and Suggest anchors need an object (a bounding box with a label id) and a 3D image: they are disabled
+        otherwise, and their tooltip says what is missing."""
+        image = self.image_layer
+        has_image = image is not None and image.ndim == 3
+        has_object = self._selected_object() is not None
+        enabled = has_image and has_object
+        if not has_object:
+            reason = "Select an object in the Object List first"
+        elif not has_image:
+            reason = "Minimal Surface needs a 3D image"
+        else:
+            reason = ""
+        if not hasattr(self, "_suggest_tooltip"):
+            self._suggest_tooltip = self.suggest_anchors_button.tooltip
+        if self.call_button.text == "Run":  # (while it runs the button stops the run)
+            self.call_button.enabled = enabled
+            self.call_button.tooltip = reason or "Segment the selected object"
+        self.suggest_anchors_button.enabled = enabled
+        self.suggest_anchors_button.tooltip = reason or self._suggest_tooltip
 
     def _update_image_status(self):
         selected = self._selected_object()
@@ -1358,7 +1389,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _update_object_state_(self):
         selected = self._selected_object()
         if selected is None:
-            self.object_status_label.value = "none selected"
+            self.object_status_label.value = "none: select one in the Object List"
             self._show_anchors(None, np.zeros((0, 3)), "")
             self._apply_placement_mode()
             self._reset_anchor_base(None)
