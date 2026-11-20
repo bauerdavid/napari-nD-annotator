@@ -1348,11 +1348,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._update_buttons_enabled()
 
     def _update_buttons_enabled(self):
-        """Run and Suggest anchors need an object (a bounding box with a label id) and a 3D image: they are disabled
-        otherwise, and their tooltip says what is missing."""
+        """Run and Suggest anchors need an object (a bounding box with a label id) and a 3D image, Run also the two
+        anchors of the object: they are disabled otherwise, and their tooltip says what is missing."""
         image = self.image_layer
         has_image = image is not None and image.ndim == 3
-        has_object = self._selected_object() is not None
+        selected = self._selected_object()
+        has_object = selected is not None
         enabled = has_image and has_object
         if not has_object:
             reason = "Select an object in the Object List first"
@@ -1360,11 +1361,15 @@ class _MinimalSurfaceWidget(MagicTemplate):
             reason = "Minimal Surface needs a 3D image"
         else:
             reason = ""
+        run_reason = reason
+        if not reason and len(anchor_store(selected.bbox_layer).get(selected.label)) < 2:
+            run_reason = "Place the two anchors of the object first: click on its surface in the 3D view, or press" \
+                         " 'Suggest anchors'"
         if not hasattr(self, "_suggest_tooltip"):
             self._suggest_tooltip = self.suggest_anchors_button.tooltip
         if self.call_button.text == "Run":  # (while it runs the button stops the run)
-            self.call_button.enabled = enabled
-            self.call_button.tooltip = reason or "Segment the selected object"
+            self.call_button.enabled = not run_reason
+            self.call_button.tooltip = run_reason or "Segment the selected object"
         self.suggest_anchors_button.enabled = enabled
         self.suggest_anchors_button.tooltip = reason or self._suggest_tooltip
 
@@ -1436,7 +1441,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._anchor_base = pair
         with self.anchor_distance_slider.changed.blocked():
             self.anchor_distance_slider.value = 100.
-        self.anchor_distance_slider.enabled = pair is not None and self.call_button.enabled
+        self.anchor_distance_slider.enabled = pair is not None
 
     @anchor_distance_slider.connect
     def _on_anchor_distance_changed(self, percent):

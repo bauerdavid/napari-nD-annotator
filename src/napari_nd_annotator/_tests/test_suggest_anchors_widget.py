@@ -193,7 +193,17 @@ def test_run_and_suggest_need_an_object(viewer, scene):
     assert "Select an object" in ms.call_button.tooltip and "Select an object" in ms.suggest_anchors_button.tooltip
     assert "select one" in ms.object_status_label.value
     _select(viewer, object_list)
-    assert ms.call_button.enabled and ms.suggest_anchors_button.enabled
-    assert "Select an object" not in ms.call_button.tooltip and "Propose" in ms.suggest_anchors_button.tooltip
+    # an object without anchors: Suggest is possible, Run waits for the two anchors
+    assert ms.suggest_anchors_button.enabled and "Propose" in ms.suggest_anchors_button.tooltip
+    assert not ms.call_button.enabled and "anchors" in ms.call_button.tooltip
+    ms._suggest_anchors()
+    assert ms.call_button.enabled and ms.call_button.tooltip == "Segment the selected object"
+    # a single anchor is not enough
+    from napari_nd_annotator.object_anchors import anchor_store
+    anchor_store(object_list.bounding_box_layer).set(3, [[20., 30., 18.]])
+    ms._update_object_state()
+    assert not ms.call_button.enabled
+    ms._suggest_anchors()
+    assert ms.call_button.enabled
     _select(viewer, object_list)  # unselected again
     assert not ms.call_button.enabled and not ms.suggest_anchors_button.enabled

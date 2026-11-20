@@ -19,6 +19,7 @@ The layers are related, and the relation is stored where it belongs:
 Links to layers that were removed from the viewer are dropped (see `install`). `working_set_changed` is emitted
 (with ``viewer=`` and ``working_set=``) when the result changes.
 """
+import itertools
 import weakref
 from typing import Any, NamedTuple, Optional
 
@@ -166,8 +167,39 @@ def new_labels_for(viewer, image):
     return labels
 
 
-def new_boxes_for(viewer, labels):
-    """Adds a box layer for the objects of ``labels``, in the transform of its image, and links it."""
+MAX_LABEL_FOR_BOXES = 10_000_000  # (``find_objects`` makes a list as long as the largest id)
+
+
+def objects_in_labels(labels):
+    """The objects painted in a labels layer: their ids and the corners of their boxes (voxel indices, inclusive).
+
+    Returns ``([], [])`` if there are none, or if the ids are too large to look at them one by one.
+    """
+    from scipy.ndimage import find_objects
+    data = labels.data[0] if getattr(labels, "multiscale", False) else labels.data
+    try:
+        data = np.asarray(data)
+        if data.size == 0 or not np.issubdtype(data.dtype, np.integer) or int(data.max()) > MAX_LABEL_FOR_BOXES:
+            return [], []
+        found = find_objects(np.maximum(data, 0) if np.issubdtype(data.dtype, np.signedinteger) else data)
+    except (ValueError, TypeError, MemoryError):
+        return [], []
+    ids, corners = [], []
+    for idx, slices in enumerate(found, start=1):
+        if slices is None:
+            continue
+        low, high = [s.start for s in slices], [s.stop - 1 for s in slices]
+        corners.append(np.asarray(np.where(list(itertools.product((False, True), repeat=len(slices))), high, low),
+                                  dtype=float))
+        ids.append(idx)
+    return ids, corners
+
+
+def new_boxes_for(viewer, labels, from_objects=False):
+    """Adds a box layer for the objects of ``labels``, in the transform of its image, and links it.
+
+    With ``from_objects`` it has a box around each object that is painted in the labels layer already.
+    """
     if BoundingBoxLayer is None:
         raise LinkError("Bounding boxes need the napari-bbox plugin.")
     image = linked_image(labels, viewer)
@@ -175,6 +207,11 @@ def new_boxes_for(viewer, labels):
         raise LinkError("The labels layer '%s' has no source image: the boxes take its scale." % labels.name)
     boxes = BoundingBoxLayer(ndim=labels.ndim, name="objects (%s)" % labels.name, edge_color="green",
                              face_color="transparent", scale=image.scale, translate=image.translate)
+    if from_objects:
+        ids, corners = objects_in_labels(labels)
+        if ids:
+            boxes.data = corners
+            boxes.features["label"] = np.asarray(ids, dtype=int)
     viewer.add_layer(boxes)
     set_boxes(labels, boxes, viewer)
     return boxes

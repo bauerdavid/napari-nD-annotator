@@ -13,7 +13,6 @@ from napari import Viewer
 from napari.layers import Image, Labels, Layer
 from napari.utils.events import EventEmitter
 from napari.utils.notifications import show_info
-from scipy.ndimage import find_objects
 
 from ._utils import WidgetWithLayerList
 from ._utils.clipping import LayerClipper, displayed_layer_dims
@@ -22,9 +21,9 @@ from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size
 from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
 from .working_set import (LinkError, active_working_set, auto_link, install as install_working_set, link_layers,
-                          set_boxes, set_source_image)
+                          objects_in_labels, set_boxes, set_source_image)
 from .working_set import working_set_changed
-from .working_set_panel import WorkingSetPanel
+from .working_set_panel import WorkingSetPanel, ask_boxes_for_painted_objects
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -917,8 +916,25 @@ if BoundingBoxLayer:
         def addItem(self, item: QObjectListWidgetItem):
             self.insertItem(self.count(), item)
 
+        def highest_label_id(self):
+            """The largest value in the labels layer (objects painted by hand have ids too), 0 if there is none."""
+            labels = self.mask_layer
+            if labels is None:
+                return 0
+            try:
+                data = labels.data[0] if getattr(labels, "multiscale", False) else labels.data
+                return max(int(np.max(data)), 0)
+            except (ValueError, TypeError):  # empty or not numeric
+                return 0
+
         def next_index(self):
-            return next(self.indices)
+            """The id of the next object: the next of the sequence, never one that is in the labels layer already."""
+            idx = next(self.indices)
+            highest = self.highest_label_id()
+            if idx <= highest:
+                self.indices = highest + 1
+                idx = next(self.indices)
+            return idx
 
         def _on_bb_double_click(self, layer=None, event=None):
             if len(self.bounding_box_layer.selected_data) == 0:
@@ -1107,6 +1123,11 @@ if BoundingBoxLayer:
                 return
             layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
                                      scale=self.image_layer.scale, translate=self.image_layer.translate)
+            labels = self.labels.layer
+            if labels is not None and ask_boxes_for_painted_objects(labels):
+                ids, corners = objects_in_labels(labels)
+                layer.data = corners
+                layer.features["label"] = np.asarray(ids, dtype=int)
             self.viewer.add_layer(layer)
             self.bounding_box.layer = layer
 
@@ -1193,17 +1214,7 @@ if BoundingBoxLayer:
             # the corners below are image indices, so the layer shares the transform of the image
             bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
                                         scale=self.image_layer.scale, translate=self.image_layer.translate)
-            bb_corners = find_objects(self.labels.layer.data)
-            ids = []
-            bbs = []
-            for i, bb in enumerate(bb_corners):
-                if bb is None:
-                    continue
-                min_ = [slice_.start for slice_ in bb]
-                max_ = [slice_.stop - 1 for slice_ in bb]
-                bb = np.asarray(np.where(list(itertools.product((False, True), repeat=self.image_layer.ndim)), max_, min_))
-                bbs.append(bb)
-                ids.append(i+1)
+            ids, bbs = objects_in_labels(self.labels.layer)
             bb_layer.data = bbs
             bb_layer.features["label"] = np.asarray(ids, dtype=int)
             self.viewer.add_layer(bb_layer)

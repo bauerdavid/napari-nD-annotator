@@ -443,6 +443,24 @@ def test_new_bounding_boxes_get_consecutive_labels(viewer, scene):
         assert [object_list.item(j).idx for j in range(object_list.count())] == list(bbox_layer.features["label"])
 
 
+def test_new_bounding_boxes_do_not_take_the_ids_of_objects_painted_by_hand(viewer, scene):
+    _, labels, object_list = scene
+    bbox_layer = object_list.bounding_box_layer
+    labels.data[1:3, 2:6, 2:6] = 5  # painted by hand, no box
+    object_list.indices = 1
+    event = SimpleNamespace(type="mouse_press")
+    callback = object_list.bounding_box_change(bbox_layer, event)
+    next(callback)
+    corners = np.where(list(itertools.product((False, True), repeat=3)), [6, 30, 30], [2, 25, 25])
+    bbox_layer.add(corners)
+    event.type = "mouse_release"
+    for _ in callback:
+        pass
+    _process_events()
+    assert list(bbox_layer.features["label"]) == [OBJECT_ID, 6]
+    assert object_list.next_index() == 7
+
+
 def test_new_bounding_box_labels_continue_after_the_existing_ones(viewer, scene):
     from napari_nd_annotator import ListWidgetBB
     # the widget is opened when the bounding box layer already has objects

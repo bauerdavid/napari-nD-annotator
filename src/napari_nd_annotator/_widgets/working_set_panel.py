@@ -10,18 +10,39 @@ import html
 from napari.layers import Image, Labels
 from napari.utils.notifications import show_warning
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy, QToolButton,
-                            QVBoxLayout, QWidget)
+from qtpy.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QSizePolicy,
+                            QToolButton, QVBoxLayout, QWidget)
 
 from .._helper_functions import unwrap_viewer
 from .working_set import (BoundingBoxLayer, LinkError, incompatibility, install, linked_boxes, linked_image,
-                          new_boxes_for, new_labels_for, notify, set_boxes, set_source_image, unlink_boxes,
-                          working_set, working_set_changed)
+                          new_boxes_for, new_labels_for, notify, objects_in_labels, set_boxes, set_source_image,
+                          unlink_boxes, working_set, working_set_changed)
 from .working_set_status import PROBLEM_COLOR, WorkingSetStatus, problems
 
 
 def _warn(error):
     show_warning(str(error))
+
+
+def ask_yes_no(title, text):
+    """A question with Yes and No (the answer to a question that cannot be asked is No). Tests replace this."""
+    return QMessageBox.question(None, title, text, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.Yes) == QMessageBox.StandardButton.Yes
+
+
+def ask_boxes_for_painted_objects(labels):
+    """Whether the new box layer of ``labels`` should get a box for each object that is painted in it already.
+
+    Asked only if there are objects. Without boxes they are not in the object list, and the tools cannot work on them.
+    """
+    ids, _ = objects_in_labels(labels)
+    if not ids:
+        return False
+    return ask_yes_no(
+        "Boxes for the existing objects",
+        "The labels layer '%s' has %d object%s already. Create a bounding box for %s?\n\n"
+        "Objects without a box are not in the object list."
+        % (labels.name, len(ids), "" if len(ids) == 1 else "s", "it" if len(ids) == 1 else "each"))
 
 
 def _shape_text(layer):
@@ -69,7 +90,7 @@ class WorkingSetActions:
 
     def new_boxes(self, labels):
         try:
-            new_boxes_for(self.viewer, labels)
+            new_boxes_for(self.viewer, labels, from_objects=ask_boxes_for_painted_objects(labels))
         except LinkError as error:
             _warn(error)
         notify(self.viewer)
