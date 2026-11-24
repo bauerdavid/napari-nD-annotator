@@ -279,6 +279,34 @@ def test_the_layers_chosen_in_the_list_are_linked(viewer):
     assert ws.linked_boxes(labels, viewer) is second_boxes
 
 
+def test_choosing_the_layers_of_the_list_one_by_one_does_not_mix_two_working_sets(viewer, two_sets):
+    ws.install(viewer)
+    layers, widget = two_sets
+    (image_a, labels_a, boxes_a), (image_b, labels_b, boxes_b) = layers["a"], layers["b"]
+    image_b.scale = (3., 1., 1.)
+    _select(viewer, labels_a)
+    # a script switches the list to the second set one layer at a time: in between it holds layers of both sets
+    widget.bounding_box.layer = boxes_b
+    widget.image.layer = image_b
+    widget.labels.layer = labels_b
+    _process_events()
+    assert (widget.image.layer, widget.labels.layer, widget.bounding_box.layer) == (image_b, labels_b, boxes_b)
+    for image, labels, boxes in (layers["a"], layers["b"]):
+        assert ws.linked_image(labels, viewer) is image and ws.linked_boxes(labels, viewer) is boxes
+        assert ws.linked_image(boxes, viewer) is image
+    assert ws.linked_group(viewer, labels_a) and labels_b not in ws.linked_group(viewer, labels_a)
+
+    def scales(name):
+        return [tuple(layer.scale) for layer in layers[name]]
+
+    assert scales("a") == [(1., 1., 1.)] * 3 and scales("b") == [(3., 1., 1.)] * 3
+    # a transform change stays in its own set
+    labels_b.scale = (2., 1., 1.)
+    labels_a.translate = (0., 5., 5.)
+    assert scales("a") == [(1., 1., 1.)] * 3 and scales("b") == [(2., 1., 1.)] * 3
+    assert all(tuple(layer.translate) == (0., 0., 0.) for layer in layers["b"])
+
+
 def test_removing_a_layer_of_the_list_does_not_switch_to_another_one(viewer, two_sets):
     layers, widget = two_sets
     _select(viewer, layers["a"][1])

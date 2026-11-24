@@ -411,6 +411,16 @@ def linked_group(viewer, layer):
     return list(group.values())
 
 
+def in_other_working_sets(viewer, first, second):
+    """Whether ``first`` and ``second`` belong to two different working sets: each is linked to other layers already,
+    but not to the other one. Such layers are not linked to each other or given each other's transform on the way
+    (e.g. while the layers of the object list are chosen one by one)."""
+    group = linked_group(viewer, first)
+    if any(layer is second for layer in group):
+        return False
+    return len(group) > 1 and len(linked_group(viewer, second)) > 1
+
+
 def _on_transform_changed(viewer, event):
     """The transform of a layer was changed (not by the plugin): the layers linked to it take the same."""
     if is_syncing_transforms():

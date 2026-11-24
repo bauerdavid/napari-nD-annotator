@@ -22,7 +22,7 @@ from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size
 from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
 from .working_set import (LinkError, active_working_set, align_transform, auto_link, install as install_working_set,
-                          link_layers,
+                          link_layers, in_other_working_sets,
                           is_scratch, objects_in_labels, set_boxes, set_source_image)
 from .working_set import working_set_changed
 from .working_set_panel import WorkingSetPanel, ask_boxes_for_painted_objects
@@ -582,6 +582,7 @@ if BoundingBoxLayer:
             translate, rotate, shear, affine) would show, clip and measure the object in different places. ``source``
             (the layer whose transform was just changed) sets the transform of the others; without it the image layer
             does. The transform is kept equal from then on: changing it on any of the three changes the others.
+            Layers of two other working sets (a passing mix while the layers are chosen one by one) are left alone.
             """
             layers = self._scale_layers()
             previous, self._scale_watched = self._scale_watched, []
@@ -605,7 +606,7 @@ if BoundingBoxLayer:
             self._syncing_scales = True
             try:
                 for layer in layers:
-                    if layer is not source:
+                    if layer is not source and not in_other_working_sets(self.viewer, source, layer):
                         align_transform(source, layer, why=": the image, labels and bounding box layers of the"
                                                            " object list need the same transform")
             finally:
@@ -1064,7 +1065,8 @@ if BoundingBoxLayer:
         def _write_links(self):
             """The layers chosen here belong together: the labels layer gets the image and the boxes as its links.
 
-            Layers that do not fit are not linked (the status line says so).
+            Layers that do not fit are not linked (the status line says so). Neither are layers of two other working
+            sets: choosing the three layers one by one passes through such mixes, they must not join the two sets.
             """
             if self._following:
                 return
@@ -1072,9 +1074,9 @@ if BoundingBoxLayer:
             if labels is None:
                 return
             try:
-                if image is not None:
+                if image is not None and not in_other_working_sets(self.viewer, labels, image):
                     set_source_image(labels, image, self.viewer)
-                if boxes is not None:
+                if boxes is not None and not in_other_working_sets(self.viewer, labels, boxes):
                     set_boxes(labels, boxes, self.viewer)
             except LinkError:
                 pass
