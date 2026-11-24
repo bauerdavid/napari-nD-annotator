@@ -62,7 +62,82 @@ def layer_dims_order(layer: layers.Layer):
 
 
 def layer_slice_indices(layer: layers.Layer):
-    return tuple(slice(None) if np.isnan(p) else int(p) for p in layer._data_slice.point)
+    """The index of the displayed slice along each dimension that is not displayed (``slice(None)`` for the others).
+
+    Rounded to the nearest index like napari does when it picks the slice to show: the data position of the slice is
+    fractional when the world position does not fall on a voxel of the layer (another layer with a finer z step,
+    a translate that is not a multiple of the scale, or just floating point error, e.g. 3.9999 for slice 4).
+    """
+    return tuple(slice(None) if np.isnan(p) else int(np.round(p)) for p in layer._data_slice.point)
+
+
+# --- the transform of a layer (data -> world): napari composes it from these, in this order
+TRANSFORM_COMPONENTS = ("scale", "translate", "rotate", "shear", "affine")
+
+_transform_sync = {"depth": 0}
+
+
+class syncing_transforms:
+    """Context in which the plugin copies transforms between layers: the transform events this emits are not user
+    changes to be passed on again (see `is_syncing_transforms`)."""
+
+    def __enter__(self):
+        _transform_sync["depth"] += 1
+        return self
+
+    def __exit__(self, *exc):
+        _transform_sync["depth"] -= 1
+        return False
+
+
+def is_syncing_transforms():
+    return _transform_sync["depth"] > 0
+
+
+def layer_transform(layer: layers.Layer, offset=None, factor=None) -> dict:
+    """The transform components of ``layer`` (as keyword arguments of a napari layer).
+
+    With ``offset`` and/or ``factor`` it is the transform of a layer whose voxel ``i`` is voxel
+    ``offset + factor * i`` of ``layer`` (a crop, or a crop resampled along some axes), so that the two show the
+    same place in the world.
+    """
+    from napari.utils.transforms.transform_utils import shear_to_matrix
+    ndim = layer.ndim
+    scale = np.asarray(layer.scale, dtype=float).copy()
+    translate = np.asarray(layer.translate, dtype=float).copy()
+    rotate = np.asarray(layer.rotate, dtype=float).copy()
+    shear = np.asarray(shear_to_matrix(np.asarray(layer.shear, dtype=float), ndim=ndim), dtype=float)
+    if offset is not None:
+        # napari: data -> physical is translate + rotate @ shear @ diag(scale) @ index
+        linear = rotate @ shear @ np.diag(scale)
+        translate = translate + linear @ np.asarray(offset, dtype=float)
+    if factor is not None:
+        scale = scale * np.asarray(factor, dtype=float)
+    return {"scale": scale, "translate": translate, "rotate": rotate, "shear": shear,
+            "affine": np.asarray(layer.affine.affine_matrix, dtype=float).copy()}
+
+
+def copy_transform(reference: layers.Layer, layer: layers.Layer) -> list:
+    """Gives ``layer`` the transform of ``reference`` (its data are left alone: voxel indices of the two then mean
+    the same place). Layers of different dimensionality share the transform of their last dimensions.
+
+    Returns the names of the components that changed.
+    """
+    source, target = layer_transform(reference), layer_transform(layer)
+    count = min(reference.ndim, layer.ndim)
+    new = {name: value.copy() for name, value in target.items()}
+    for name in ("scale", "translate"):
+        new[name][-count:] = source[name][-count:]
+    for name in ("rotate", "shear"):
+        new[name][-count:, -count:] = source[name][-count:, -count:]
+    # the affine matrix is (ndim + 1) x (ndim + 1), its last column is the translation
+    new["affine"][-count - 1:-1, -count - 1:-1] = source["affine"][-count - 1:-1, -count - 1:-1]
+    new["affine"][-count - 1:-1, -1] = source["affine"][-count - 1:-1, -1]
+    changed = [name for name in TRANSFORM_COMPONENTS if not np.allclose(new[name], target[name])]
+    with syncing_transforms():
+        for name in changed:
+            setattr(layer, name, new[name])
+    return changed
 
 
 def layer_get_order(layer: layers.Layer):

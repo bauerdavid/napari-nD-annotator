@@ -175,32 +175,61 @@ def test_new_boxes_do_not_inherit_the_highlight_of_the_selected_object(viewer, s
     np.testing.assert_allclose(layer.edge_color[0], green)
 
 
-# the scale of the boxes is the one of the image (the object list sets it), their translate may differ
-BOX_LAYER_TRANSFORMS = [((3., 1., 1.), (0., 0., 0.)), ((3., 1., 1.), (5., 2., 3.)), ((1.5, 2., .5), (-4., 1., 0.))]
+# a box layer chosen for the list takes the whole transform of the image, whatever it had
+BOX_LAYER_TRANSFORMS = [((3., 1., 1.), (0., 0., 0.), 0.), ((3., 1., 1.), (5., 2., 3.), 0.),
+                        ((1.5, 2., .5), (-4., 1., 0.), 30.)]
 
 
-@pytest.fixture(params=BOX_LAYER_TRANSFORMS, ids=["translate0", "translate=image", "other scale+translate"])
+@pytest.fixture(params=BOX_LAYER_TRANSFORMS, ids=["translate0", "translate=image", "other scale+translate+rotate"])
 def scaled_box_layer(viewer, scene, request):
-    """The bounding box layer of ``scene`` replaced by one with a translate of its own (and any scale: it is set)."""
+    """The bounding box layer of ``scene`` replaced by one with a transform of its own (it is replaced when chosen)."""
     from napari_bbox import BoundingBoxLayer
     image, labels, object_list = scene
-    scale, translate = request.param
-    bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent", scale=scale, translate=translate)
+    scale, translate, angle = request.param
+    bbox_layer = BoundingBoxLayer(ndim=3, edge_color="green", face_color="transparent", scale=scale,
+                                  translate=translate, rotate=angle)
     viewer.add_layer(bbox_layer)
-    corners = np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX, BBOX_MIN) * SCALE + TRANSLATE
-    # the same box in world space as the one of the scene, in the data coordinates of the box layer once it has the
-    # scale of the image (the layer is given it when it is chosen, the data are not rescaled)
-    bbox_layer.data = [(corners - translate) / SCALE]
+    # the corners are image indices: the layer is given the transform of the image, the data are not changed
+    bbox_layer.data = [np.where(list(itertools.product((False, True), repeat=3)), BBOX_MAX, BBOX_MIN).astype(float)]
     bbox_layer.features = {"label": np.array([OBJECT_ID])}
     object_list.bounding_box_layer = bbox_layer
     _process_events()
     return image, labels, object_list, bbox_layer
 
 
-def test_box_layer_with_its_own_scale_and_translate(scaled_box_layer):
-    """The data of the box layer is in the coordinates of the box layer, not in world coordinates."""
-    _, _, object_list, _ = scaled_box_layer
+def test_box_layer_with_its_own_transform(scaled_box_layer):
+    """The box layer is given the transform of the image, its data (image indices) are kept."""
+    image, _, object_list, bbox_layer = scaled_box_layer
+    for name in ("scale", "translate", "rotate"):
+        np.testing.assert_allclose(getattr(bbox_layer, name), getattr(image, name))
     np.testing.assert_array_equal(object_list.item(0).bounding_box, [BBOX_MIN, BBOX_MAX])
+
+
+def test_the_layers_of_the_list_keep_the_same_transform(viewer, scene):
+    image, labels, object_list = scene
+    boxes = object_list.bounding_box_layer
+    image.translate = (1., -2., 4.)
+    image.rotate = 20.
+    for layer in (labels, boxes):
+        np.testing.assert_allclose(layer.translate, image.translate)
+        np.testing.assert_allclose(layer.rotate, image.rotate)
+    boxes.shear = [.1, 0., 0.]
+    for layer in (image, labels):
+        np.testing.assert_allclose(layer.shear, boxes.shear)
+    labels.affine = np.diag([1., 2., 1., 1.])
+    for layer in (image, boxes):
+        np.testing.assert_allclose(layer.affine.affine_matrix, labels.affine.affine_matrix)
+    # a box drawn partly outside the rotated image is clipped to it in image indices
+    corners = np.where(list(itertools.product((False, True), repeat=3)), (12., 50., 20.), (5., 30., -5.))
+    event = SimpleNamespace(type="mouse_press")
+    drag = object_list.bounding_box_change(boxes, event)
+    next(drag)
+    boxes.add(corners)  # what drawing a box does
+    event.type = "mouse_release"
+    with pytest.raises(StopIteration):
+        next(drag)
+    np.testing.assert_allclose(np.min(boxes.data[-1], axis=0), (5., 30., 0.))
+    np.testing.assert_allclose(np.max(boxes.data[-1], axis=0), (9., 39., 20.))
 
 
 def test_selecting_an_object_creates_no_layers_and_copies_no_data(viewer, scene):
@@ -423,6 +452,16 @@ def test_create_layers_action_adds_cropped_views_that_line_up_with_the_originals
                                    original.data_to_world(BBOX_MAX))
     # an explicit action: selecting objects does not do it
     assert object_list.selected_idx is None
+
+
+def test_cropped_layers_line_up_with_a_rotated_and_sheared_original(viewer, scene):
+    image, labels, object_list = scene
+    image.rotate = 25.
+    image.shear = [.2, 0., .1]  # (the labels and boxes follow)
+    crop_image, crop_labels = object_list.item(0).create_layers()
+    for original, crop in ((image, crop_image), (labels, crop_labels)):
+        for index in ((0, 0, 0), (1, 3, 2), np.array(crop.data.shape) - 1):
+            np.testing.assert_allclose(crop.data_to_world(index), original.data_to_world(BBOX_MIN + index))
 
 
 def test_new_bounding_boxes_get_consecutive_labels(viewer, scene):

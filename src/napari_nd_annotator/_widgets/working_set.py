@@ -28,7 +28,8 @@ from napari.layers import Image, Labels, Layer
 from napari.utils.events import EventEmitter
 from napari.utils.notifications import show_info
 
-from .._helper_functions import unwrap_viewer
+from .._helper_functions import unwrap_viewer, copy_transform, layer_transform, is_syncing_transforms, \
+    TRANSFORM_COMPONENTS
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -88,13 +89,23 @@ def linked_boxes(labels, viewer=None):
 
 
 def link_layers(image=None, labels=None, boxes=None):
-    """Records which layers belong together (the one place that writes the links). None leaves a link alone."""
+    """Records which layers belong together (the one place that writes the links). None leaves a link alone.
+
+    Layers that belong together share one transform (their voxel indices mean the same place): the labels layer and
+    the boxes take the transform of the image (of the labels layer without an image).
+    """
     if image is not None:
         for layer in (labels, boxes):
             if layer is not None:
                 layer.metadata[SOURCE_IMAGE] = image
     if labels is not None and boxes is not None:
         labels.metadata[OBJECT_BOXES] = boxes
+    reference = image if image is not None else _linked(labels, SOURCE_IMAGE)
+    if reference is None:
+        reference = labels
+    for layer in (labels, boxes):
+        if layer is not None and reference is not None and layer is not reference:
+            align_transform(reference, layer)
 
 
 class LinkError(ValueError):
@@ -112,33 +123,40 @@ def incompatibility(image, labels):
     return None
 
 
-def align_scale(reference, layer):
-    """Gives ``layer`` the scale of ``reference`` (the voxel indices of the two have to mean the same place)."""
-    reference_scale = np.asarray(reference.scale, dtype=float)
-    count = min(len(reference_scale), layer.ndim)
-    new_scale = np.array(layer.scale, dtype=float)
-    new_scale[-count:] = reference_scale[-count:]
-    if np.allclose(new_scale, layer.scale):
-        return
+def same_transform(first, second):
+    """Whether the two layers have the same transform (scale, translate, rotate, shear and affine)."""
+    if first.ndim != second.ndim:
+        return False
+    a, b = layer_transform(first), layer_transform(second)
+    return all(np.allclose(a[name], b[name]) for name in TRANSFORM_COMPONENTS)
+
+
+def align_transform(reference, layer, why=""):
+    """Gives ``layer`` the transform of ``reference`` (the voxel indices of the two have to mean the same place).
+
+    Says so if anything changed; returns the names of the changed components (scale, translate...).
+    """
     old_scale = tuple(float(s) for s in layer.scale)
-    layer.scale = new_scale
-    show_info("The scale of layer '%s' was %s, set to %s like '%s'" % (
-        layer.name, old_scale, tuple(float(s) for s in new_scale), reference.name))
+    changed = copy_transform(reference, layer)
+    if changed:
+        detail = ""
+        if changed == ["scale"]:
+            detail = " (the scale was %s, it is %s)" % (old_scale, tuple(float(s) for s in layer.scale))
+        show_info("The %s of layer '%s' %s set like '%s'%s%s" % (
+            ", ".join(changed), layer.name, "was" if len(changed) == 1 else "were", reference.name, detail, why))
+    return changed
 
 
 def set_source_image(labels, image, viewer=None):
     """Makes ``image`` the source image of ``labels`` (and of its box layer); raises `LinkError` if they do not fit.
 
-    The labels layer and its boxes take the scale of the image.
+    The labels layer and its boxes take the transform of the image.
     """
     reason = incompatibility(image, labels)
     if reason is not None:
         raise LinkError(reason)
     boxes = linked_boxes(labels, viewer)
     link_layers(image=image, labels=labels, boxes=boxes)
-    for layer in (labels, boxes):
-        if layer is not None:
-            align_scale(image, layer)
 
 
 def set_boxes(labels, boxes, viewer=None):
@@ -148,8 +166,6 @@ def set_boxes(labels, boxes, viewer=None):
                         % (boxes.name, boxes.ndim, labels.name, labels.ndim))
     image = linked_image(labels, viewer)
     link_layers(image=image, labels=labels, boxes=boxes)
-    if image is not None:
-        align_scale(image, boxes)
 
 
 def unlink_boxes(labels):
@@ -158,11 +174,11 @@ def unlink_boxes(labels):
 
 
 def new_labels_for(viewer, image):
-    """Adds an empty labels layer for ``image``: its shape, scale and translate, linked to it, and selects it."""
+    """Adds an empty labels layer for ``image``: its shape and transform, linked to it, and selects it."""
     if getattr(image, "multiscale", False):
         raise LinkError("The image '%s' is multiscale." % image.name)
     labels = viewer.add_labels(np.zeros(tuple(image.data.shape[:image.ndim]), dtype=np.uint16),
-                               name="labels (%s)" % image.name, scale=image.scale, translate=image.translate)
+                               name="labels (%s)" % image.name, **layer_transform(image))
     link_layers(image=image, labels=labels)
     viewer.layers.selection.select_only(labels)
     return labels
@@ -207,7 +223,7 @@ def new_boxes_for(viewer, labels, from_objects=False):
     if image is None:
         raise LinkError("The labels layer '%s' has no source image: the boxes take its scale." % labels.name)
     boxes = BoundingBoxLayer(ndim=labels.ndim, name="objects (%s)" % labels.name, edge_color="green",
-                             face_color="transparent", scale=image.scale, translate=image.translate)
+                             face_color="transparent", **layer_transform(image))
     if from_objects:
         ids, corners = objects_in_labels(labels)
         if ids:
@@ -219,7 +235,7 @@ def new_boxes_for(viewer, labels, from_objects=False):
 
 
 def auto_link(viewer, labels):
-    """Gives a labels layer without a source image the only image that fits it (shape and scale), and says so.
+    """Gives a labels layer without a source image the only image that fits it (shape and transform), and says so.
 
     Returns the image, or None if there is no link and no single fitting image (the user has to choose).
     """
@@ -227,11 +243,11 @@ def auto_link(viewer, labels):
     if image is not None or labels.metadata.get(SOURCE_IMAGE) is not None:
         return image
     fitting = [layer for layer in viewer.layers if isinstance(layer, Image)
-               and incompatibility(layer, labels) is None and np.allclose(layer.scale, labels.scale)]
+               and incompatibility(layer, labels) is None and same_transform(layer, labels)]
     if len(fitting) != 1:
         return None
     set_source_image(labels, fitting[0], viewer)
-    show_info("The source image of the labels layer '%s' is '%s' (the only image of the same shape and scale)"
+    show_info("The source image of the labels layer '%s' is '%s' (the only image of the same shape and transform)"
               % (labels.name, fitting[0].name))
     return fitting[0]
 
@@ -375,6 +391,36 @@ def _on_selected_object_changed(event):
         _emit_if_changed(viewer)
 
 
+def linked_group(viewer, layer):
+    """The layers of ``viewer`` that belong together with ``layer`` (linked to it directly or through other layers:
+    an image, its labels layers and their boxes), ``layer`` included."""
+    layers = list(viewer.layers)
+    in_viewer = {id(other) for other in layers}
+    if id(layer) not in in_viewer:
+        return [layer]
+    keys = (SOURCE_IMAGE, OBJECT_BOXES)
+    group, todo = {id(layer): layer}, [layer]
+    while todo:
+        current = todo.pop()
+        neighbours = [_linked(current, key) for key in keys]
+        neighbours += [other for other in layers if any(_linked(other, key) is current for key in keys)]
+        for other in neighbours:
+            if other is not None and id(other) in in_viewer and id(other) not in group:
+                group[id(other)] = other
+                todo.append(other)
+    return list(group.values())
+
+
+def _on_transform_changed(viewer, event):
+    """The transform of a layer was changed (not by the plugin): the layers linked to it take the same."""
+    if is_syncing_transforms():
+        return
+    source = event.source
+    for layer in linked_group(viewer, source):
+        if layer is not source:
+            align_transform(source, layer)
+
+
 def install(viewer):
     """Makes ``viewer`` drop the links to removed layers and emit `working_set_changed` (once per viewer)."""
     viewer = unwrap_viewer(viewer)
@@ -386,8 +432,21 @@ def install(viewer):
         _prune_links(viewer, event.value)
         _emit_if_changed(viewer)
 
+    def transform_changed(event):
+        _on_transform_changed(viewer, event)
+
+    def watch_transform(layer):
+        for name in TRANSFORM_COMPONENTS:
+            getattr(layer.events, name).connect(transform_changed)
+
+    def inserted(event):
+        watch_transform(event.value)
+        _emit_if_changed(viewer)
+
+    for layer in viewer.layers:
+        watch_transform(layer)
     viewer.layers.events.removed.connect(removed)
-    viewer.layers.events.inserted.connect(lambda event: _emit_if_changed(viewer))
+    viewer.layers.events.inserted.connect(inserted)
     viewer.layers.selection.events.active.connect(lambda event: _emit_if_changed(viewer))
     from .object_list import selected_object_changed
     selected_object_changed.connect(_on_selected_object_changed)  # (connecting twice does nothing)

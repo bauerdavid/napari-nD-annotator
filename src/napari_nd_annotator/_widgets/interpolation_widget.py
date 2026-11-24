@@ -32,7 +32,7 @@ from skimage.morphology import binary_erosion
 from skimage.transform import SimilarityTransform, warp
 from ._utils import ProgressWidget
 from ._utils.shortcuts import LABELS, bind_all
-from .working_set import is_helper_layer, working_set
+from .working_set import is_helper_layer, working_set, install as install_working_set
 from .resources import interpolate_style_path, loading_icon_path
 from .._helper_functions import layer_slice_indices, layer_dims_not_displayed, _coerce_indices_for_vectorization, \
     layer_get_order, layer_dims_displayed, layer_dims_order, viewer_qt_viewer, unwrap_viewer, viewer_main_window
@@ -228,12 +228,12 @@ class InterpolationWorker(QObject):
                         dirs = q_mean / qraylengths.reshape(qraylengths.shape[0], 1)
                         r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), stgs, rpsv_thread.rpSignal)
                         mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
-                        mean_cnt = mean_cnt.astype(np.int32)
+                        mean_cnt = np.round(mean_cnt).astype(np.int32)  # (truncating shifts it towards 0)
                         mask = np.zeros_like(data[tuple(inter_layer_slice)])
                         cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
                     elif method == CONTOUR_BASED:
                         mean_cnt = (prev_w * prev_cnt + cur_w * cnt)/(prev_w + cur_w)
-                        mean_cnt = mean_cnt.astype(np.int32)
+                        mean_cnt = np.round(mean_cnt).astype(np.int32)  # (truncating shifts it towards 0)
                         mask = np.zeros_like(data[tuple(inter_layer_slice)])
                         cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
                     elif method == DISTANCE_BASED:
@@ -310,6 +310,7 @@ class InterpolationWidget(MagicTemplate):
 
     def _initialize(self, viewer: napari.Viewer, annotator_widget):
         self._viewer = unwrap_viewer(viewer)
+        install_working_set(self._viewer)  # (also keeps the transforms of linked layers equal)
         install_selected_label_bbox(self._viewer)
         self._on_active_layer_changed()
         self.viewer.dims.events.ndisplay.connect(self._ndisplay_changed)
@@ -342,6 +343,8 @@ class InterpolationWidget(MagicTemplate):
 
     @debounce
     def _current_step_changed(self, _=None):
+        # also called after the active layer was resliced (``set_data``): a change of its transform (scale,
+        # translate...) shows another slice of it without the viewer moving
         if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
             return
         if self.overlay_worker is not None:
@@ -497,13 +500,13 @@ class InterpolationWidget(MagicTemplate):
                     dirs = q_mean / qraylengths.reshape(qraylengths.shape[0], 1)
                     r_mean_lengths, costs = reconstruct(q_mean, guessRayLengths.copy(), stgs, rpsv_thread.rpSignal)
                     mean_cnt = dirs * r_mean_lengths.reshape(r_mean_lengths.shape[0], 1)
-                    mean_cnt = mean_cnt.astype(np.int32)
+                    mean_cnt = np.round(mean_cnt).astype(np.int32)  # (truncating shifts it towards 0)
                     mean_cnt = [mean_cnt]
                     # mask = np.zeros_like(data[tuple(inter_layer_slice)])
                     # cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
                 elif method == CONTOUR_BASED:
                     mean_cnt = (prev_w * curr_cnt + cur_w * next_cnt) / (prev_w + cur_w)
-                    mean_cnt = mean_cnt.astype(np.int32)
+                    mean_cnt = np.round(mean_cnt).astype(np.int32)  # (truncating shifts it towards 0)
                     mean_cnt = [mean_cnt]
                     # mask = np.zeros_like(data[tuple(inter_layer_slice)])
                     # cv2.drawContours(mask, [np.flip(mean_cnt, -1)], 0, int(selected_label), -1)
@@ -556,6 +559,7 @@ class InterpolationWidget(MagicTemplate):
             self._active_labels_layer.mouse_drag_callbacks.remove(self._on_mouse_drag)
             self._active_labels_layer.events.labels_update.disconnect(self._on_labels_update)
             self._active_labels_layer.events.selected_label.disconnect(self._interpolate_all)
+            self._active_labels_layer.events.set_data.disconnect(self._current_step_changed)
             if "interpolation" in self._active_labels_layer._overlays:
                 self._active_labels_layer._overlays["interpolation"].contour = ContourList()
         self._active_labels_layer = layer if isinstance(layer, Labels) and layer.ndim == 3 else None
@@ -566,6 +570,7 @@ class InterpolationWidget(MagicTemplate):
             self._active_labels_layer.mouse_drag_callbacks.append(self._on_mouse_drag)
             self._active_labels_layer.events.labels_update.connect(self._on_labels_update)
             self._active_labels_layer.events.selected_label.connect(self._interpolate_all)
+            self._active_labels_layer.events.set_data.connect(self._current_step_changed)
 
         if "interpolation" not in self._active_labels_layer._overlays:
             interpolation_overlay = InterpolationOverlay()
@@ -627,14 +632,16 @@ class InterpolationWidget(MagicTemplate):
             cur_slice = layer_slice_indices(layer)
             cnt_list = self._contours_at(cur_slice[self.dimension])
             if len(cnt_list) > 0:
-                mask = np.zeros_like(layer.data[cur_slice])
-                for i in range(len(cnt_list)):
-                    cnt_list[i] = np.asarray(cnt_list[i], dtype=np.int32)
-
+                # the plane of the slice, its axes in data order (as the contours are, whatever the display order)
+                mask = np.zeros(layer.data[cur_slice].shape, dtype=np.uint8)
+                cnt_list = [np.round(np.asarray(cnt)).astype(np.int32) for cnt in cnt_list]
                 cv2.drawContours(mask, cnt_list, -1, 1, -1)
-                update_idx = np.nonzero(mask)
-                order = layer_dims_order(layer)
-                extended_idx = tuple(update_idx[i-1] if i in layer_dims_displayed(layer) else np.full_like(update_idx[0], cur_slice[order[i]]) for i in range(layer.ndim))
+                rows, cols = np.nonzero(mask)
+                plane_axes = [axis for axis in range(layer.ndim) if axis != self.dimension]
+                extended_idx = [None] * layer.ndim
+                extended_idx[plane_axes[0]] = rows
+                extended_idx[plane_axes[1]] = cols
+                extended_idx[self.dimension] = np.full_like(rows, cur_slice[self.dimension])
                 extended_idx = _coerce_indices_for_vectorization(self.active_labels_layer.data, extended_idx)
                 layer.data_setitem(extended_idx, layer.selected_label)
                 with self.contour_mutex:

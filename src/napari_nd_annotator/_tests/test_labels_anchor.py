@@ -65,6 +65,43 @@ def test_the_labels_layer_and_its_boxes_take_the_scale_of_the_image(viewer):
     assert boxes.metadata["source_image_layer"] is image  # the boxes belong to the image of the labels layer
 
 
+def test_linked_layers_take_and_keep_the_whole_transform_of_the_image(viewer):
+    ws.install(viewer)
+    image = _image(viewer, "image", scale=(3., 1., 1.), translate=(1., 2., 3.), rotate=15.)
+    labels = _labels(viewer, "labels", translate=(7., 7., 7.))
+    boxes = _boxes_layer(viewer, "boxes", with_box=False, scale=(2., 2., 2.))
+    ws.link_layers(image=image, labels=labels, boxes=boxes)
+
+    def assert_same(reference):
+        for layer in (image, labels, boxes):
+            for name in ("scale", "translate", "rotate", "shear"):
+                np.testing.assert_allclose(getattr(layer, name), getattr(reference, name), err_msg=name)
+            np.testing.assert_allclose(layer.affine.affine_matrix, reference.affine.affine_matrix)
+
+    assert_same(image)
+    # changing any of them changes the others (no object list is needed for that)
+    image.translate = (0., -4., 5.)
+    assert_same(image)
+    labels.scale = (5., .5, .5)
+    assert_same(labels)
+    boxes.rotate = 40.
+    assert_same(boxes)
+    labels.shear = [.1, .2, 0.]
+    assert_same(labels)
+    image.affine = np.diag([1., 1., 2., 1.])
+    assert_same(image)
+    # a layer that is not linked keeps its own
+    other = _labels(viewer, "other", scale=(9., 9., 9.))
+    image.scale = (1., 1., 1.)
+    assert tuple(other.scale) == (9., 9., 9.)
+
+
+def test_an_image_with_another_translate_is_not_linked_automatically(viewer):
+    _image(viewer, "image", translate=(0., 5., 0.))
+    labels = _labels(viewer, "labels")
+    assert ws.auto_link(viewer, labels) is None
+
+
 def test_the_boxes_need_the_dimensions_of_the_labels_layer(viewer):
     from napari_bbox import BoundingBoxLayer
     labels = _labels(viewer, "labels")

@@ -17,10 +17,12 @@ from napari.utils.notifications import show_info
 from ._utils import WidgetWithLayerList
 from ._utils.clipping import LayerClipper, displayed_layer_dims
 from ._utils.shortcuts import VIEWER, bind_all, unbind_all
-from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size, viewer_qt_viewer
+from .._helper_functions import unwrap_viewer, viewer_camera, viewer_canvas_size, viewer_qt_viewer, layer_transform, \
+    is_syncing_transforms, TRANSFORM_COMPONENTS
 from ..object_fit import fit_box_to_object
 from .projections import DataBox, SliceDisplayWidget
-from .working_set import (LinkError, active_working_set, auto_link, install as install_working_set, link_layers,
+from .working_set import (LinkError, active_working_set, align_transform, auto_link, install as install_working_set,
+                          link_layers,
                           is_scratch, objects_in_labels, set_boxes, set_source_image)
 from .working_set import working_set_changed
 from .working_set_panel import WorkingSetPanel, ask_boxes_for_painted_objects
@@ -252,25 +254,25 @@ if BoundingBoxLayer:
 
             They are plain views of the data, independent of the object list's selection.
             """
-            def translate(layer):
-                # the bounding box is in data (index) coordinates, translate is in world coordinates
-                return self.bounding_box[0, :] * layer.scale + layer.translate
+            def cropped_transform(layer):
+                # the bounding box is in data (index) coordinates: the crop starts at its first corner
+                offset = np.zeros(layer.ndim)
+                offset[-self.bounding_box.shape[1]:] = self.bounding_box[0, :]
+                return layer_transform(layer, offset=offset)
 
             if self.image_layer is not None:
                 image_layer = Image(self.image_layer.data[self.bbox_idx],
                                     name="Cropped %s %d" % (self.image_layer.name, self.idx),
                                     colormap=self.image_layer.colormap, rgb=self.image_layer.rgb,
-                                    scale=self.image_layer.scale)
-                image_layer.translate = translate(self.image_layer)
+                                    **cropped_transform(self.image_layer))
                 self.viewer.add_layer(image_layer)
             else:
                 image_layer = None
             if self.mask_layer is not None:
                 mask_layer = Labels(self.mask_layer.data[self.bbox_idx],
                                     name="Cropped %s %d" % (self.mask_layer.name, self.idx),
-                                    scale=self.mask_layer.scale)
+                                    **cropped_transform(self.mask_layer))
                 mask_layer.selected_label = self.idx
-                mask_layer.translate = translate(self.mask_layer)
                 mask_layer.brush_size = self.mask_layer.brush_size
                 if image_layer is not None:
                     link_layers(image=image_layer, labels=mask_layer)
@@ -574,52 +576,44 @@ if BoundingBoxLayer:
                     if layer is not None]
 
         def _sync_scales(self, source=None):
-            """Gives the image, labels and bounding box layers of the list the same scale.
+            """Gives the image, labels and bounding box layers of the list the same transform.
 
-            Bounding box corners and label voxels are image indices, so layers with different scales would show,
-            clip and measure the object in different places. ``source`` (the layer whose scale was just changed)
-            sets the scale of the others; without it the image layer does. The scale is kept equal from then on:
-            changing the scale of any of the three changes the others.
+            Bounding box corners and label voxels are image indices, so layers with different transforms (scale,
+            translate, rotate, shear, affine) would show, clip and measure the object in different places. ``source``
+            (the layer whose transform was just changed) sets the transform of the others; without it the image layer
+            does. The transform is kept equal from then on: changing it on any of the three changes the others.
             """
             layers = self._scale_layers()
             previous, self._scale_watched = self._scale_watched, []
             for layer in previous:
                 if not any(layer is other for other in layers):
-                    try:
-                        layer.events.scale.disconnect(self._on_scale_changed)
-                    except (ValueError, KeyError, RuntimeError):
-                        pass
+                    for name in TRANSFORM_COMPONENTS:
+                        try:
+                            getattr(layer.events, name).disconnect(self._on_scale_changed)
+                        except (ValueError, KeyError, RuntimeError):
+                            pass
             for layer in layers:
                 if not any(layer is other for other in self._scale_watched):  # the same layer may have two roles
                     if not any(layer is other for other in previous):
-                        layer.events.scale.connect(self._on_scale_changed)
+                        for name in TRANSFORM_COMPONENTS:
+                            getattr(layer.events, name).connect(self._on_scale_changed)
                     self._scale_watched.append(layer)
             if source is None:
                 source = self._image_layer if self._image_layer is not None else (layers[0] if layers else None)
             if source is None or self._syncing_scales:
                 return
-            reference = np.asarray(source.scale, dtype=float)
             self._syncing_scales = True
             try:
                 for layer in layers:
-                    if layer is source:
-                        continue
-                    count = min(len(reference), layer.ndim)
-                    new_scale = np.array(layer.scale, dtype=float)
-                    new_scale[-count:] = reference[-count:]
-                    if not np.allclose(new_scale, layer.scale):
-                        old_scale = tuple(float(s) for s in layer.scale)
-                        layer.scale = new_scale
-                        show_info(
-                            "The scale of layer '%s' was %s, set to %s like '%s': the image, labels and bounding box"
-                            " layers of the object list need the same scale"
-                            % (layer.name, old_scale, tuple(float(s) for s in new_scale), source.name))
+                    if layer is not source:
+                        align_transform(source, layer, why=": the image, labels and bounding box layers of the"
+                                                           " object list need the same transform")
             finally:
                 self._syncing_scales = False
 
         def _on_scale_changed(self, event):
             try:
-                if not self._syncing_scales:
+                if not self._syncing_scales and not is_syncing_transforms():
                     self._sync_scales(event.source)
             except RuntimeError:  # the widget was deleted
                 pass
@@ -855,29 +849,31 @@ if BoundingBoxLayer:
             while event.type == "mouse_move":
                 yield
             self._mouse_down = False
-            # the data of the layer is in its own coordinates, the image extent is in world coordinates
             if len(layer.data) == 0:  # e.g. the last box was deleted: nothing to clip
                 self.update_items()
                 return
-            new_data = np.asarray([[layer.data_to_world(point) for point in box] for box in layer.data]) \
-                .reshape((len(layer.data), -1, layer.ndim))
             if self.image_layer:
-                im_size = self.image_layer.data.shape
-                if self.image_layer.rgb:
-                    im_size = im_size[:-1]
-                world_min = np.asarray(self.image_layer.translate)
-                world_max = np.asarray(im_size)*self.image_layer.scale + world_min
+                # the box layer has the transform of the image (see `_sync_scales`): its data are image indices, so
+                # the box is clipped to the image there (which also holds for a rotated or sheared image)
+                new_data = np.asarray([np.asarray(box, dtype=float) for box in layer.data]) \
+                    .reshape((len(layer.data), -1, layer.ndim))
+                im_size = self.image_layer.data.shape[:self.image_layer.ndim]
+                low = np.zeros(layer.ndim)
+                high = np.asarray(im_size, dtype=float)[-layer.ndim:]
+                voxel = 1.
             else:
-                world_min = np.zeros(new_data.shape[-1])
-                world_max = np.full(new_data.shape[-1], np.inf)
-            if len(new_data) > 0 and (np.any(np.all(new_data > world_max, 1))\
-                    or np.any(np.all(new_data < world_min, 1))):
+                new_data = np.asarray([[layer.data_to_world(point) for point in box] for box in layer.data]) \
+                    .reshape((len(layer.data), -1, layer.ndim))
+                low = np.zeros(new_data.shape[-1])
+                high = np.full(new_data.shape[-1], np.inf)
+                voxel = 0.
+            if len(new_data) > 0 and (np.any(np.all(new_data > high, 1))
+                                      or np.any(np.all(new_data < low, 1))):
                 # a box that is entirely outside the image is dropped
                 layer.data = previous_data
             elif len(new_data) > len(previous_data):
-                voxel = self.image_layer.scale if self.image_layer else 0
-                clipped = np.clip(new_data[-1], world_min, world_max - voxel)
-                layer.data[-1][:] = [layer.world_to_data(point) for point in clipped]
+                clipped = np.clip(new_data[-1], low, high - voxel)
+                layer.data[-1][:] = clipped if self.image_layer else [layer.world_to_data(point) for point in clipped]
                 layer.data = layer.data
             self.update_items()
             if self.projections_widget is not None:
@@ -1127,7 +1123,7 @@ if BoundingBoxLayer:
                 warnings.warn("Select an image layer first: the bounding box layer takes its dimensions and scale")
                 return
             layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
-                                     scale=self.image_layer.scale, translate=self.image_layer.translate)
+                                     **layer_transform(self.image_layer))
             labels = self.labels.layer
             if labels is not None and ask_boxes_for_painted_objects(labels):
                 ids, corners = objects_in_labels(labels)
@@ -1218,7 +1214,7 @@ if BoundingBoxLayer:
                 return
             # the corners below are image indices, so the layer shares the transform of the image
             bb_layer = BoundingBoxLayer(ndim=self.image_layer.ndim, edge_color="green", face_color="transparent",
-                                        scale=self.image_layer.scale, translate=self.image_layer.translate)
+                                        **layer_transform(self.image_layer))
             ids, bbs = objects_in_labels(self.labels.layer)
             bb_layer.data = bbs
             bb_layer.features["label"] = np.asarray(ids, dtype=int)

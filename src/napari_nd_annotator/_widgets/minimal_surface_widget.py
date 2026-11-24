@@ -41,7 +41,7 @@ from ._utils import ProgressWidget, QDoubleSlider, ScriptExecuteWidget
 from ._utils.callbacks import keep_layer_on_top
 from ._utils.clipping import SCAFFOLD_KEY
 from .._helper_functions import layer_dims_displayed, viewer_canvas_size, viewer_camera, unwrap_viewer, \
-    viewer_qt_viewer
+    viewer_qt_viewer, layer_transform, TRANSFORM_COMPONENTS
 from ..surface_anchors import suggest_anchors_in_image
 from ..object_anchors import anchor_store, box_reference, nearest_point_to_ray, pick_along_ray, pick_on_plane
 from .object_list import selected_object_changed, selected_object_info
@@ -965,6 +965,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
                           % selected.label)
             return
         self._run_target = (labels, selected.label, (selected.bbox_min, selected.bbox_max))
+        self._run_image_layer = image  # the layers of the run are shown in its frame (see `_in_image_frame`)
         image_data = image.data
         annotated = self._annotated_mask(selected)
         if annotated is not None:
@@ -1003,8 +1004,10 @@ class _MinimalSurfaceWidget(MagicTemplate):
         estimation_thread.finished.connect(estimation_worker.deleteLater)
         estimation_thread.finished.connect(estimation_thread.deleteLater)
         if BoundingBoxLayer is not None:
+            # the box of the object being computed, in voxel indices of the image
             estimation_worker.bb_layer = BoundingBoxLayer(
-                [[[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]], scale=(z_scale, 1., 1.))
+                [[[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]]],
+                **layer_transform(image))
             self._viewer.add_layer(estimation_worker.bb_layer)
 
             def show_bounding_box(bounding_box, layer=estimation_worker.bb_layer):
@@ -1019,6 +1022,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def __init__(self):
         self._viewer = None
         self._run_target = None
+        self._run_image_layer = None
         self._anchors_layer = None
         self._plane_image_layer = None
         self._anchor_base = None
@@ -1149,6 +1153,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
             layer_args['blending'] = "additive"
         if 'rgb' not in layer_args:
             layer_args['rgb'] = False
+        if "translate" in layer_args or "scale" in layer_args:  # a frame in voxel indices of the image
+            layer_args = self._in_image_frame(layer_args)
         self._viewer.add_layer(Image(data, name=layer_name, **layer_args))
 
     def _mask_received(self, data, offset):
@@ -1160,12 +1166,29 @@ class _MinimalSurfaceWidget(MagicTemplate):
             # the layers added during the run took the selection; Ctrl+Z undoes the result on the active labels layer
             self._viewer.layers.selection.select_only(labels_layer)
 
+    def _in_image_frame(self, layer_args):
+        """The keyword arguments of a layer of the run, in the world.
+
+        The worker gives the frame of its layers in voxel indices of the image: ``translate`` is the voxel their first
+        voxel is, ``scale`` how many image voxels one of theirs is (the computation runs on a crop resampled along z).
+        Composed with the transform of the image, they are shown where they belong also for a rotated, sheared or
+        translated image.
+        """
+        args = dict(layer_args)
+        image = self._run_image_layer
+        if image is None:
+            return args
+        offset, factor = args.pop("translate", None), args.pop("scale", None)
+        args.update(layer_transform(image, offset=offset, factor=factor))
+        return args
+
     def _distance_map_received(self, layer_name, anchor_idx, data, layer_args):
+        layer_args = self._in_image_frame(layer_args)
         if layer_name in self._viewer.layers:
             layer = self._viewer.layers[layer_name]
             layer.data = data
-            layer.translate = layer_args["translate"]
-            layer.scale = layer_args["scale"]
+            for name in [c for c in TRANSFORM_COMPONENTS if c in layer_args]:
+                setattr(layer, name, layer_args[name])
         else:
             layer = self._viewer.add_image(data, name=layer_name, colormap="plasma", visible=False, **layer_args)
         [self.distance_map_combobox, self.second_distance_map_combobox][anchor_idx].value = layer
@@ -1173,11 +1196,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _contour_points_received(self, layer_name, points, layer_args):
         if points is None:
             return
+        layer_args = self._in_image_frame(layer_args)
         if layer_name in self._viewer.layers:
             layer = self._viewer.layers[layer_name]
             layer.data = points
-            layer.translate = layer_args["translate"]
-            layer.scale = layer_args["scale"]
+            for name in [c for c in TRANSFORM_COMPONENTS if c in layer_args]:
+                setattr(layer, name, layer_args[name])
         else:
             layer = self._viewer.add_points(points, name=layer_name, ndim=3, size=2, **layer_args)
         self.start_points_combobox.value = layer
@@ -1323,8 +1347,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             self.blurred_layer = self._viewer.add_image(
                 blurred,
                 name="%s cropped" % image_layer.name,
-                translate=np.add(image_layer.translate, offset),
-                scale=image_layer.scale,
+                **layer_transform(image_layer, offset=offset),
                 colormap=image_layer.colormap,
                 contrast_limits=image_layer.contrast_limits
             )
@@ -1358,7 +1381,8 @@ class _MinimalSurfaceWidget(MagicTemplate):
         blurred = self._blur_image(blurred_image)
         blurred *= self.crop_mask
         self.blurred_layer.data = blurred
-        self.blurred_layer.translate = np.add(image_layer.translate, offset)
+        for name, value in layer_transform(image_layer, offset=offset).items():
+            setattr(self.blurred_layer, name, value)
 
     @image_layer_combobox.connect
     def _ensure_3d_image(self, _=None):

@@ -54,12 +54,7 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
     def __init__(
         self, *, layer: Labels, overlay: InterpolationOverlay, parent=None, **kwargs
     ):
-        points = np.asarray([(0, 0), (1, 1)])
-        self._polygons = [Polygon(
-            pos=points,
-            border_method='gl',
-            border_width=2
-        ) for _ in range(1)]
+        self._polygons = [self._new_polygon()]
 
         super().__init__(
             node=Compound(self._polygons),
@@ -86,24 +81,46 @@ class VispyInterpolationOverlay(LayerOverlayMixin, VispySceneOverlay):
         if self.overlay.enabled:
             self._on_points_change()
 
+    @staticmethod
+    def _new_polygon():
+        return Polygon(pos=np.asarray([(0, 0), (1, 1)]), border_method='gl', border_width=2)
+
+    def _attached_filters(self):
+        """The filters attached to the polygons (a Compound attaches them to the innermost visuals)."""
+        visual = self._polygons[0]
+        while getattr(visual, "_subvisuals", None):
+            visual = visual._subvisuals[0]
+        return list(getattr(visual, "_filters", []))
+
     # @execute_last
     def _on_points_change(self):
-        # print("initial checks in points change:", time.time() - start, flush=True)
         contours = self.overlay.contour.copy()
         n_contours = len(contours)
         n_poly = len(self._polygons)
         if n_poly < n_contours:
-            self._polygons.extend([Polygon(
-                pos=np.asarray([(0, 0), (1, 1)]),
-                border_method='agg',
-                border_width=3
-            ) for _ in range(n_contours - n_poly)])
-        # print(f"extending polygons: {time.time() - start} (n_poly: {n_poly}, n_contours: {n_contours})", flush=True)
+            # The Compound only draws the visuals that are added to it, and it does not keep the filters attached
+            # to it (the scene attaches some): a new polygon gets those of the first one, as detaching them from the
+            # Compound later detaches them from every polygon.
+            filters = self._attached_filters()
+            for _ in range(n_contours - n_poly):
+                poly = self._new_polygon()
+                for filt in filters:
+                    poly.attach(filt)
+                self._polygons.append(poly)
+                self.node.add_subvisual(poly)
+            self._update_color()
+            self._on_blending_change()
+        # The contours are (x, y) in the plane of the slice with the data axes in their order: x is the later of the
+        # two displayed data axes. The node of the layer has x along the second displayed axis, which is the earlier
+        # one when the displayed axes are transposed.
+        displayed = list(self._dims_displayed)
+        transposed = len(displayed) == 2 and displayed[0] > displayed[1]
         for i, poly in enumerate(self._polygons):
             points = contours[i] if i < n_contours else None
             if points is not None and len(points) > 2:
+                points = np.asarray(points)
                 poly.visible = True
-                poly.pos = points
+                poly.pos = points[:, ::-1] if transposed else points
             else:
                 poly.visible = False
 

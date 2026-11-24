@@ -37,7 +37,7 @@ from ._utils.callbacks import reduce_mask, extend_mask
 from ._utils.shortcuts import LABELS, VIEWER, bind_all
 from .._helper_functions import layer_dims_order, layer_dims_displayed, layer_dims_not_displayed, layer_ndisplay, \
     layer_slice_indices, _coerce_indices_for_vectorization, viewer_qt_viewer, unwrap_viewer, \
-    viewer_main_window, viewer_camera
+    viewer_main_window, viewer_camera, layer_transform
 from ..minimal_contour import roi as mc_roi
 from ..minimal_contour._legacy_tmp import clean_legacy_tmp
 from ..minimal_contour.intensity_prior import MAX_SLOWDOWN as MAX_PRIOR_SLOWDOWN, SIMILAR, SIMILAR_OR_BRIGHTER, \
@@ -1089,7 +1089,8 @@ class MinimalContourWidget(MagicTemplate):
             with self.viewer.layers.selection.events.active.blocker(self._on_active_layer_changed):
                 self.viewer.layers.remove(labels_layer)
             new_labels = self.viewer.add_labels(
-                np.zeros(source_layer.data.shape[:source_layer.ndim], dtype=dtype), name=name)
+                np.zeros(source_layer.data.shape[:source_layer.ndim], dtype=dtype), name=name,
+                **layer_transform(source_layer))
             link_layers(image=source_layer, labels=new_labels)
             self.viewer.layers.selection.select_only(new_labels)
             return True
