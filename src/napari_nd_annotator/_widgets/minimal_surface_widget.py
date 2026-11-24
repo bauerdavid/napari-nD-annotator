@@ -81,6 +81,21 @@ ANCHOR_COLORS = ["red", "cyan"]
 
 SUGGESTION_MODES = {"Axis": "axis", "Fan (farthest pair)": "fan"}
 
+# The channels of an RGB image that Minimal Surface can work on (it needs one intensity per voxel): the index of the
+# color, or None for the mean of the three
+RGB_CHANNELS = {"Gray (mean of R, G, B)": None, "Red": 0, "Green": 1, "Blue": 2}
+
+
+def warn_user(message):
+    """A warning that napari shows every time.
+
+    Python shows a warning only the first time it is raised from a place, so a button that fails for the same reason
+    again would do nothing visible; this makes napari show the message (as a notification) on every call.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.warn(message, UserWarning, stacklevel=3)
+
 CAD_BLURRING = "Edge preserving" #"Curvature Anisotropic Diffusion"
 GAUSSIAN_BLURRING = "Gaussian"
 
@@ -688,6 +703,11 @@ class _MinimalSurfaceWidget(MagicTemplate):
     # 3D image, which is used while no object is selected.
     image_layer_combobox = field(Image, label="Image").with_options(visible=False)
     image_status_label = field(widget_type="Label", label="Image")
+    channel_combobox = field(widget_type="ComboBox", label="Channel").with_options(
+        choices=list(RGB_CHANNELS), visible=False,
+        tooltip="The channel of the RGB image that the surface is computed on (the anchors are suggested and placed"
+                " on it as well): one color, or the mean of the three. Shown only for RGB images."
+    )
     object_status_label = field(widget_type="Label", label="Object")
 
     @magicclass(layout="horizontal", labels=False)
@@ -832,32 +852,33 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def _suggest_anchors(self):
         if self.call_button.text != "Run":
-            warnings.warn("Wait until the estimation finishes before suggesting anchors")
+            warn_user("Wait until the estimation finishes before suggesting anchors")
             return
         selected = self._selected_object()
         if selected is None:
-            warnings.warn("Select an object in the object list first")
+            warn_user("Select an object in the object list first")
             return
         label, bbox_min, bbox_max, image_layer = selected.label, selected.bbox_min, selected.bbox_max, selected.image_layer
-        if image_layer.ndim != 3 or image_layer.rgb:
-            warnings.warn("Suggesting anchors needs a 3D image layer")
+        if image_layer.ndim != 3:
+            warn_user("Suggesting anchors needs a 3D image: '%s' has %d dimensions" % (image_layer.name, image_layer.ndim))
             return
         if self.used_feature == CUSTOM:
             show_info("The suggestion uses the gradient feature, not the custom one")
         result = suggest_anchors_in_image(
-            image_layer.data, bbox_min, bbox_max, resample=(self._z_scale_of(image_layer), 1., 1.), alpha=self.alpha,
-            beta=self.beta,
+            self._intensity_data(image_layer), bbox_min, bbox_max, resample=(self._z_scale_of(image_layer), 1., 1.),
+            alpha=self.alpha, beta=self.beta,
             blur_func=self._blur_image if self.is_blurring_enabled else None,
             ignore_mask=self._annotated_mask(selected),
             **self._suggestion_options()
         )
         if not result.found:
-            warnings.warn("No anchor suggestion for object %d: %s" % (label, result.reason))
+            warn_user("No anchor suggestion for object %d: %s" % (label, result.reason))
             return
         anchor_store(selected.bbox_layer).set(label, [result.p1, result.p2])
         self._update_object_state()
-        message = "Suggested anchors for object %d (confidence %.2f%s)" % (
-            label, result.confidence, ", blurred" if self.is_blurring_enabled else ", not blurred"
+        message = "Suggested anchors for object %d (confidence %.2f%s%s)" % (
+            label, result.confidence, ", blurred" if self.is_blurring_enabled else ", not blurred",
+            ", channel: %s" % self.channel_combobox.value if image_layer.rgb else ""
         )
         if result.confidence < .2:
             message += ", low: check the points"
@@ -865,7 +886,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
 
     def _z_scale_of(self, image_layer):
         """The z scale of ``image_layer`` (see `z_scale_from_layer_scale`); warns if y and x differ."""
-        if image_layer is None or image_layer.ndim < 3 or image_layer.rgb:
+        if image_layer is None or image_layer.ndim < 3:
             return 1.
         y, x = np.asarray(image_layer.scale, dtype=float)[-2:]
         if not np.isclose(y, x, rtol=1e-3):
@@ -877,9 +898,30 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def z_scale(self):
         """The z scale of the image of the selected object (or the chosen image): from its layer scale."""
         layer = self.image_layer
-        if layer is None or layer.ndim < 3 or layer.rgb:
+        if layer is None or layer.ndim < 3:
             return 1.
         return z_scale_from_layer_scale(layer.scale)
+
+    def _intensity_data(self, image_layer):
+        """The 3D array of one intensity per voxel that Minimal Surface works on.
+
+        The data of the layer, or for an RGB image the channel chosen in the ``Channel`` combobox: a view for a color,
+        the mean of the three colors otherwise (computed once, and again when the data or the choice change).
+        """
+        data = image_layer.data
+        if not image_layer.rgb:
+            return data
+        if getattr(image_layer, "multiscale", False):
+            data = data[0]
+        index = RGB_CHANNELS[self.channel_combobox.value]
+        if index is not None:
+            return data[..., index]
+        cached = getattr(self, "_mean_channel_cache", None)
+        if cached is not None and cached[0] is data:
+            return cached[1]
+        mean = np.asarray(data)[..., :3].mean(axis=-1, dtype=np.float32)
+        self._mean_channel_cache = (data, mean)
+        return mean
 
     def _update_z_scale_label(self, *_):
         layer = self.image_layer
@@ -908,7 +950,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if not self.ignore_annotated_checkbox.value:
             return None
         labels, image = selected.labels_layer, selected.image_layer
-        if labels is None or tuple(labels.data.shape) != tuple(image.data.shape):
+        if labels is None or tuple(labels.data.shape) != tuple(image.data.shape[:image.ndim]):
             return None
         return annotated_voxels(labels.data, selected.label)
 
@@ -944,36 +986,36 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _start_estimation(self):
         selected = self._selected_object()
         if selected is None:
-            warnings.warn("No object selected: select one in the object list")
+            warn_user("No object selected: select one in the object list")
             return
         image, labels = selected.image_layer, selected.labels_layer
-        if image.ndim != 3 or image.rgb:
-            warnings.warn("Minimal Surface works only with 3D, single channel images")
+        if image.ndim != 3:
+            warn_user("Minimal Surface works only with 3D images: '%s' has %d dimensions" % (image.name, image.ndim))
             return
         if labels is None:
-            warnings.warn("Select a labels layer in the object list")
+            warn_user("Select a labels layer in the object list")
             return
         if not np.array_equal(labels.data.shape[:labels.ndim], image.data.shape[:image.ndim]):
-            warnings.warn("The labels layer of the object list and its image have different shapes")
+            warn_user("The labels layer of the object list and its image have different shapes")
             return
         if np.issubdtype(labels.dtype, np.integer) and selected.label > np.iinfo(labels.dtype).max:
-            warnings.warn("The label id %d does not fit the data type of the labels layer (%s)" % (selected.label, labels.dtype))
+            warn_user("The label id %d does not fit the data type of the labels layer (%s)" % (selected.label, labels.dtype))
             return
         anchors = anchor_store(selected.bbox_layer).get(selected.label)
         if len(anchors) < 2:
-            warnings.warn("Object %d needs two anchors: click on its surface in the 3D view or press 'Suggest anchors'"
-                          % selected.label)
+            warn_user("Object %d needs two anchors: click on its surface in the 3D view or press 'Suggest anchors'"
+                      % selected.label)
             return
         self._run_target = (labels, selected.label, (selected.bbox_min, selected.bbox_max))
-        image_data = image.data
+        image_data = self._intensity_data(image)
         annotated = self._annotated_mask(selected)
         if annotated is not None:
             # the surface is computed on a copy without the other objects; the selected one stays, it may be replaced
             image_data = np.array(image_data)
             image_data[annotated] = 0
         if self.slice_annotation_method in EstimationWorker.AUTOMATIC_METHODS and self.used_feature == GRADIENT:
-            warnings.warn("The automatic slice annotation needs a feature that tells the object from the background:"
-                          " choose 'Gradient + intensity' (or a custom feature) as the feature in the Image tab")
+            warn_user("The automatic slice annotation needs a feature that tells the object from the background:"
+                      " choose 'Gradient + intensity' (or a custom feature) as the feature in the Image tab")
             return
         phi_func = {GRADIENT: None, GRADIENT_INTENSITY: gradient_intensity_features}.get(
             self.used_feature, self._run_feature_extractor)
@@ -1311,10 +1353,11 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if pair is None or image_layer is None:
             return
         if is_checked:
-            bb = pts_2_bb(pair[0], pair[1], image_layer.data.shape, image_layer.scale)
+            intensity = self._intensity_data(image_layer)
+            bb = pts_2_bb(pair[0], pair[1], intensity.shape, image_layer.scale)
             bb = bb.round().astype(int)
             bb_slice = bb_2_slice(bb)
-            blurred_image = image_layer.data[bb_slice]
+            blurred_image = intensity[bb_slice]
             self.crop_mask = generate_sphere_mask(blurred_image.shape)
             offset = bb.min(0)
 
@@ -1348,11 +1391,12 @@ class _MinimalSurfaceWidget(MagicTemplate):
         pair = self._anchor_pair()
         if pair is None:
             return
-        bb = pts_2_bb(pair[0], pair[1], image_layer.data.shape, image_layer.scale)
+        intensity = self._intensity_data(image_layer)
+        bb = pts_2_bb(pair[0], pair[1], intensity.shape, image_layer.scale)
         bb = bb.round().astype(int)
         offset = bb.min(0)
         bb_slice = bb_2_slice(bb)
-        blurred_image = image_layer.data[bb_slice]
+        blurred_image = intensity[bb_slice]
         if self.crop_mask is None or self.crop_mask.shape != blurred_image.shape:
             self.crop_mask = generate_sphere_mask(blurred_image.shape)
         blurred = self._blur_image(blurred_image)
@@ -1365,7 +1409,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         self._update_z_scale_label()
         self._update_image_status()
         if self.image_layer is not None and self.image_layer.ndim == 2:
-            warnings.warn("Minimal Surface works only with 3D images!")
+            warn_user("Minimal Surface works only with 3D images: '%s' is 2D" % self.image_layer.name)
         is_enabled = self.image_layer is not None and self.image_layer.ndim == 3
         if self.image_layer is not None:
             self.Tabs.enabled = is_enabled
@@ -1407,12 +1451,22 @@ class _MinimalSurfaceWidget(MagicTemplate):
             text = "%s (of the selected object)" % layer.name
         else:
             text = "%s (no object selected)" % layer.name
+        is_rgb = layer is not None and layer.rgb
+        # Minimal Surface needs one intensity per voxel: an RGB image is worked on one channel at a time
+        self.channel_combobox.visible = is_rgb
+        if is_rgb:
+            text += ", RGB: choose the channel below"
         self.image_status_label.value = text
+
+    @channel_combobox.connect
+    def _on_channel_changed(self, _=None):
+        self._update_custom_feature_image()
+        self._update_blurred_layer()
 
     @image_layer_combobox.connect
     def _update_custom_feature_image(self, _=None):
         if self.image_layer is not None and self.image_layer.ndim != 2:
-            self.feature_editor.variables["image"] = self.image_layer.data
+            self.feature_editor.variables["image"] = self._intensity_data(self.image_layer)
 
     # --- objects and their anchors
 
@@ -1439,7 +1493,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
             self._reset_anchor_base(None)
             return
         image_layer = selected.image_layer
-        if image_layer.ndim == 3 and not image_layer.rgb and image_layer is not self.image_layer_combobox.value:
+        if image_layer.ndim == 3 and image_layer is not self.image_layer_combobox.value:
             self.image_layer = image_layer  # remembered for when no object is selected
         anchors = anchor_store(selected.bbox_layer).get(selected.label)
         self.object_status_label.value = "%d (%d/2 anchors)" % (selected.label, len(anchors))
@@ -1523,7 +1577,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
     def _clear_anchors(self):
         selected = self._selected_object()
         if selected is None:
-            warnings.warn("Select an object in the object list first")
+            warn_user("Select an object in the object list first")
             return
         anchor_store(selected.bbox_layer).clear(selected.label)
         self._update_object_state()
@@ -1616,7 +1670,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         except RuntimeError:  # the widget was deleted
             return None
         selected = self._selected_object()
-        if selected is None or selected.image_layer.ndim != 3 or selected.image_layer.rgb:
+        if selected is None or selected.image_layer.ndim != 3:
             return None
         return selected
 
@@ -1673,7 +1727,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         store = anchor_store(selected.bbox_layer)
         reference = None
         if self.anchor_placement_combobox.value != IMAGE_PLANE:
-            reference = box_reference(selected.image_layer.data, selected.bbox_min, selected.bbox_max)
+            reference = box_reference(self._intensity_data(selected.image_layer), selected.bbox_min, selected.bbox_max)
         camera = viewer_camera(self._viewer)
         saved = camera.mouse_pan, camera.mouse_zoom
         camera.mouse_pan = camera.mouse_zoom = False  # the view does not rotate with the anchor
@@ -1721,7 +1775,7 @@ class _MinimalSurfaceWidget(MagicTemplate):
         if self.anchor_placement_combobox.value == IMAGE_PLANE and image_layer.depiction == "plane":
             return pick_on_plane(start, end, image_layer.plane.position, image_layer.plane.normal,
                                  selected.bbox_min, selected.bbox_max)
-        return pick_along_ray(image_layer.data, start, end, selected.bbox_min, selected.bbox_max,
+        return pick_along_ray(self._intensity_data(image_layer), start, end, selected.bbox_min, selected.bbox_max,
                               reference=reference)
 
 if minimal_surface is not None:
