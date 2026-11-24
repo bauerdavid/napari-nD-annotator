@@ -24,6 +24,7 @@ from .working_set import (LinkError, active_working_set, auto_link, install as i
                           is_scratch, objects_in_labels, set_boxes, set_source_image)
 from .working_set import working_set_changed
 from .working_set_panel import WorkingSetPanel, ask_boxes_for_painted_objects
+from .selected_label_bbox import install_selected_label_bbox
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -954,6 +955,7 @@ if BoundingBoxLayer:
             super().__init__(viewer, [("bounding_box", BoundingBoxLayer), ("image", Image), ("labels", Labels)], add_layers=False)
             layout = QVBoxLayout()
             self.viewer = viewer
+            install_selected_label_bbox(viewer)
             self.prev_n_layers = len(viewer.layers)
             self._following = False
             self.channels_dim = None
