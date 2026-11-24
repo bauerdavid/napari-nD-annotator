@@ -41,6 +41,7 @@ from ..mean_contour._contour import calcRpsvInterpolation
 from ..mean_contour._reconstruction import reconstruct
 from ..mean_contour._essentials import magnitude
 from .interpolation_overlay.interpolation_overlay import InterpolationOverlay, ContourList, mutex as overlay_mutex
+from .selected_label_bbox import install_selected_label_bbox
 import warnings
 
 DISTANCE_BASED = "Distance-based"
@@ -308,6 +309,7 @@ class InterpolationWidget(MagicTemplate):
 
     def _initialize(self, viewer: napari.Viewer, annotator_widget):
         self._viewer = unwrap_viewer(viewer)
+        install_selected_label_bbox(self._viewer)
         self._on_active_layer_changed()
         self.viewer.dims.events.ndisplay.connect(self._ndisplay_changed)
         # self.viewer.dims.events.ndisplay.connect(lambda _: self._reset_contours() if self.viewer.dims.ndisplay == 3)

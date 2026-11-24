@@ -28,6 +28,7 @@ except ImportError:
 from .interpolation_widget import InterpolationWidget
 from .minimal_contour_widget import MinimalContourWidget
 from .minimal_surface_widget import MinimalSurfaceWidget
+from .selected_label_bbox import install_selected_label_bbox
 from ._utils.callbacks import (
     extend_mask,
     reduce_mask,
@@ -67,6 +68,7 @@ class AnnotatorWidget(MagicTemplate):
     def __init__(self, viewer: napari.Viewer, persist=True):
         self._viewer = unwrap_viewer(viewer)
         self.persist = persist
+        install_selected_label_bbox(self._viewer)
         self._active_labels_layer = None
         self._active_bbox_layer = None
 

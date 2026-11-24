@@ -19,6 +19,7 @@ from ._utils.clipping import LayerClipper, displayed_layer_dims
 from ._utils.shortcuts import VIEWER, bind_all, unbind_all
 from .._helper_functions import unwrap_viewer, viewer_qt_viewer, viewer_camera
 from .projections import SliceDisplayWidget
+from .selected_label_bbox import install_selected_label_bbox
 
 try:
     from napari_bbox import BoundingBoxLayer
@@ -697,6 +698,7 @@ if BoundingBoxLayer:
             super().__init__(viewer, [("bounding_box", BoundingBoxLayer), ("image", Image), ("labels", Labels)], add_layers=False)
             layout = QVBoxLayout()
             self.viewer = viewer
+            install_selected_label_bbox(viewer)
             self.prev_n_layers = len(viewer.layers)
             self.channels_dim = None
             self.list_widget = None
