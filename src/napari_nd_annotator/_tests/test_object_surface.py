@@ -333,9 +333,20 @@ def test_the_layers_of_the_object_list_get_the_scale_of_the_image(viewer, scene)
                                      metadata={"source_image_layer": image_layer})  # (else a dialog asks for it)
     object_list.mask_layer = other_labels
     assert tuple(other_labels.scale) == (5., 1., 1.)
-    # the replaced layer is not followed any more
     image_layer.scale = (6., 1., 1.)
-    assert tuple(other_labels.scale) == (6., 1., 1.) and tuple(labels.scale) == (5., 1., 1.)
+    assert tuple(other_labels.scale) == (6., 1., 1.)
+    # the replaced layer still has the image as its source image: linked layers share one transform without the
+    # object list too (see working_set.link_layers)
+    assert tuple(labels.scale) == (6., 1., 1.)
+    # once it is not linked any more, the object list does not follow it either (it stopped watching it)
+    from napari_nd_annotator._widgets.working_set import OBJECT_BOXES, SOURCE_IMAGE
+    labels.metadata.pop(SOURCE_IMAGE)
+    labels.metadata.pop(OBJECT_BOXES, None)
+    labels.scale = (4., 4., 4.)
+    assert tuple(image_layer.scale) == (6., 1., 1.) and tuple(other_labels.scale) == (6., 1., 1.)
+    assert tuple(boxes.scale) == (6., 1., 1.)
+    image_layer.scale = (2., 1., 1.)
+    assert tuple(labels.scale) == (4., 4., 4.)
 
 
 def test_the_buttons_are_always_visible_and_the_settings_are_grouped_in_tabs(viewer, scene):
