@@ -188,7 +188,11 @@ def _shown_slice(labels):
 
 def _vispy_overlay(viewer, labels, overlay):
     from napari_nd_annotator._helper_functions import viewer_qt_viewer
-    return viewer_qt_viewer(viewer).canvas._layer_overlay_to_visual[labels][overlay]
+    canvas = viewer_qt_viewer(viewer).canvas
+    visual_map = getattr(canvas, "_layer_overlay_to_visual", None)  # (newer napari: the canvas keeps them)
+    if visual_map is not None:
+        return visual_map[labels][overlay]
+    return canvas.layer_to_visual[labels].overlays[overlay]  # napari 0.5: the layer's visual keeps them
 
 
 def test_the_slice_of_the_widget_is_the_displayed_one_with_a_fractional_data_position(interpolation_scene):
