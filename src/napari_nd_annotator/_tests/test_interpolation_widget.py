@@ -149,7 +149,11 @@ def _wait_for(condition, timeout=10):
 
 
 def _wait_for_workers(interpolation_widget, timeout=10):
-    _wait_for(lambda: all(w is None for w in interpolation_widget.workers), timeout)
+    # A recompute can still be queued (e.g. the autofill path of a paint stroke defers it with QTimer.singleShot):
+    # its workers would start after the check, and yield contours into the widgets after the viewer is closed.
+    _process_events()
+    _wait_for(lambda: not interpolation_widget._recompute_pending
+              and all(w is None for w in interpolation_widget.workers), timeout)
 
 
 @pytest.fixture
@@ -286,3 +290,92 @@ def test_every_interpolated_contour_of_a_slice_is_drawn(interpolation_scene):
     first, second = vispy_overlay._polygons
     assert first.visible and second.visible
     np.testing.assert_allclose(second.color.rgba, first.color.rgba)
+
+
+# --- undo: Interpolate is one edit, undo/redo recompute the interpolation, a stroke undoes the contour it baked in
+
+def _shown_has_label(labels, label=1):
+    return bool(np.any(np.asarray(labels._slice.image.raw) == label))
+
+
+def test_interpolate_is_one_edit_that_undo_reverts(interpolation_scene):
+    viewer, interpolation_widget, labels, overlay = interpolation_scene
+    _wait_for_workers(interpolation_widget)
+    before = labels.data.copy()
+    n_edits = len(labels._undo_history)
+    interpolation_widget.Interpolate()
+    assert _wait_for(lambda: interpolation_widget.interpolate_button.enabled and np.any(labels.data[10] == 1))
+    interpolated = labels.data.copy()
+    assert all(np.any(interpolated[z] == 1) for z in range(5, 16))
+    assert len(labels._undo_history) == n_edits + 1
+    assert _shown_has_label(labels) and len(overlay.contour) == 0
+
+    labels.undo()
+    np.testing.assert_array_equal(labels.data, before)
+    assert not _shown_has_label(labels)
+    # the interpolation is computed again: shown, and Interpolate applies it again
+    assert _wait_for(lambda: len(overlay.contour) == 1)
+    _wait_for_workers(interpolation_widget)
+    labels.redo()
+    np.testing.assert_array_equal(labels.data, interpolated)
+    assert _shown_has_label(labels)
+    _wait_for_workers(interpolation_widget)
+    assert len(overlay.contour) == 0
+    labels.undo()
+    assert _wait_for(lambda: len(overlay.contour) == 1)
+    _wait_for_workers(interpolation_widget)
+    interpolation_widget.Interpolate()
+    assert _wait_for(lambda: interpolation_widget.interpolate_button.enabled and np.any(labels.data[10] == 1))
+    np.testing.assert_array_equal(labels.data, interpolated)
+
+
+def test_undoing_an_edit_recomputes_the_interpolation(interpolation_scene):
+    viewer, interpolation_widget, labels, overlay = interpolation_scene
+    viewer.dims.set_point(0, 20)
+    _wait_for_workers(interpolation_widget)
+    labels.paint_polygon(np.array([[20, 10, 10], [20, 10, 49], [20, 19, 49], [20, 19, 10]], float), 1)
+    _process_events()
+    viewer.dims.set_point(0, 18)
+    assert _wait_for(lambda: len(overlay.contour) == 1)  # between slices 15 and 20
+    _wait_for_workers(interpolation_widget)
+    labels.undo()
+    assert not np.any(labels.data[20] == 1)
+    assert _wait_for(lambda: len(overlay.contour) == 0)
+    _wait_for_workers(interpolation_widget)
+    assert len(overlay.contour) == 0
+    labels.redo()
+    assert _wait_for(lambda: len(overlay.contour) == 1)
+
+
+def test_one_undo_reverts_a_stroke_and_the_interpolated_contour_it_painted(interpolation_scene):
+    from dataclasses import dataclass
+    from napari.utils._proxies import ReadOnlyWrapper
+    from napari.utils.interactions import mouse_press_callbacks, mouse_release_callbacks
+
+    @dataclass
+    class MouseEvent:
+        type: str
+        position: tuple
+        is_dragging: bool = False
+        dims_displayed: tuple = (1, 2)
+        dims_point: tuple = (10, 0, 0)
+        view_direction: tuple = None
+        pos: tuple = (0, 0)
+        button: int = 1
+        modifiers: tuple = ()
+        handled: bool = False
+
+    viewer, interpolation_widget, labels, overlay = interpolation_scene
+    _wait_for_workers(interpolation_widget)
+    before = labels.data.copy()
+    n_edits = len(labels._undo_history)
+    labels.mode = "paint"
+    labels.brush_size = 3
+    position = (10, 30, 30)  # outside the interpolated rectangle (rows 10-19)
+    mouse_press_callbacks(labels, ReadOnlyWrapper(MouseEvent(type="mouse_press", position=position)))
+    mouse_release_callbacks(labels, MouseEvent(type="mouse_release", position=position))
+    _process_events()
+    assert labels.data[10, 30, 30] == 1 and labels.data[10, 15, 30] == 1  # the stroke and the baked contour
+    assert len(labels._undo_history) == n_edits + 1 and not labels._staged_history
+    labels.undo()
+    np.testing.assert_array_equal(labels.data, before)

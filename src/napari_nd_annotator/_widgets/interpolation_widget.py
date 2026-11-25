@@ -295,6 +295,7 @@ class InterpolationWidget(MagicTemplate):
         self._is_painting = False
         self._labels_update_tmp = None
         self._recompute_pending = False
+        self._history_seen = None  # the undo history of the active layer as last seen (see _on_set_data)
         self.workers = []
         self.workers_mutex = threading.Lock()
         self.overlay_worker = None
@@ -388,11 +389,16 @@ class InterpolationWidget(MagicTemplate):
         return layer_slice_indices(self.active_labels_layer)[self.dimension]
 
     def Interpolate(self, _=None):
-        if self.active_labels_layer is None or self.dimension is None:
+        layer = self.active_labels_layer
+        dimension = self.dimension
+        if layer is None or dimension is None or "interpolation" not in layer._overlays:
             return
-        # self.progress_dialog.setMaximum(self.active_labels_layer.data.shape[self.dimension])
-        # self.progress_dialog.setVisible(True)
-        worker = self._store_interpolation()
+        with self.contour_mutex:
+            stored_contours = list(self._stored_contours or [])
+        label = layer.selected_label
+        # the polygons are rasterized in a worker; the labels are written on the GUI thread (_bake_interpolation)
+        worker = self._interpolation_indices(stored_contours, layer.data.shape, dimension)
+        worker.returned.connect(lambda indices: self._bake_interpolation(layer, dimension, indices, label))
         def on_worker_finished():
             self.interpolate_button.enabled = True
             self.event_filter.is_loading = False
@@ -401,23 +407,32 @@ class InterpolationWidget(MagicTemplate):
         worker.start()
         self.event_filter.is_loading = True
 
+    @staticmethod
     @thread_worker
-    def _store_interpolation(self):
-        if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
-            return
-        for i in range(len(self._stored_contours)):
-            with self.contour_mutex:
-                slice_contours = self._stored_contours[i]
-            slice_template = list(layer_slice_indices(self.active_labels_layer))
-            cur_slice = slice_template.copy()
-            cur_slice[self.dimension] = i
-            cur_slice = tuple(cur_slice)
+    def _interpolation_indices(stored_contours, shape, dimension):
+        """The indices of the pixels inside the interpolated contours (``stored_contours[i]``: those of slice ``i``
+        along ``dimension``), as a fancy index into a layer of ``shape``."""
+        plane_axes = [axis for axis in range(len(shape)) if axis != dimension]
+        plane_shape = tuple(shape[axis] for axis in plane_axes)
+        indices = [[] for _ in shape]
+        for i, slice_contours in enumerate(stored_contours):
             for contour in slice_contours:
-                mask_slice = self.active_labels_layer.data[cur_slice]
-                rr, cc = skimage.draw.polygon(contour[:, 1], contour[:, 0], mask_slice.shape)
-                mask_slice[rr, cc] = self.active_labels_layer.selected_label
+                rr, cc = skimage.draw.polygon(contour[:, 1], contour[:, 0], plane_shape)
+                indices[plane_axes[0]].append(rr)
+                indices[plane_axes[1]].append(cc)
+                indices[dimension].append(np.full_like(rr, i))
+        return tuple(np.concatenate(axis_indices) if axis_indices else np.empty(0, dtype=np.intp)
+                     for axis_indices in indices)
+
+    def _bake_interpolation(self, layer, dimension, indices, label):
+        """Writes the interpolated slices into ``layer`` as a single edit, which one undo reverts."""
+        if layer is not self.active_labels_layer or dimension != self.dimension:
+            return  # the layer or its slicing changed while the contours were being rasterized
         self._reset_contours()
-        self.active_labels_layer.refresh()
+        if indices[0].size == 0:
+            return
+        # (also refreshes the displayed slice, and emits labels_update and paint)
+        layer.data_setitem(_coerce_indices_for_vectorization(layer.data, list(indices)), label)
 
     def _interpolate_all(self):
         if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
@@ -560,6 +575,8 @@ class InterpolationWidget(MagicTemplate):
             self._active_labels_layer.events.labels_update.disconnect(self._on_labels_update)
             self._active_labels_layer.events.selected_label.disconnect(self._interpolate_all)
             self._active_labels_layer.events.set_data.disconnect(self._current_step_changed)
+            self._active_labels_layer.events.set_data.disconnect(self._on_set_data)
+            self._active_labels_layer.events.paint.disconnect(self._remember_history)
             if "interpolation" in self._active_labels_layer._overlays:
                 self._active_labels_layer._overlays["interpolation"].contour = ContourList()
         self._active_labels_layer = layer if isinstance(layer, Labels) and layer.ndim == 3 else None
@@ -571,6 +588,9 @@ class InterpolationWidget(MagicTemplate):
             self._active_labels_layer.events.labels_update.connect(self._on_labels_update)
             self._active_labels_layer.events.selected_label.connect(self._interpolate_all)
             self._active_labels_layer.events.set_data.connect(self._current_step_changed)
+            self._active_labels_layer.events.set_data.connect(self._on_set_data)
+            self._active_labels_layer.events.paint.connect(self._remember_history)
+        self._remember_history()
 
         if "interpolation" not in self._active_labels_layer._overlays:
             interpolation_overlay = InterpolationOverlay()
@@ -626,6 +646,7 @@ class InterpolationWidget(MagicTemplate):
                 and ("minimal_contour" not in layer._overlays or not layer._overlays["minimal_contour"].enabled)):
             return
         self._is_painting = True
+        baked = False  # whether an interpolated contour was painted, staged to be undone with the stroke
         # Without a single slicing dimension (e.g. a 3D layer in the 3D view) there are no interpolated
         # contours to bake in: let napari paint on its own.
         if layer.mode in ["erase", "paint"] and self.dimension is not None:
@@ -643,14 +664,16 @@ class InterpolationWidget(MagicTemplate):
                 extended_idx[plane_axes[1]] = cols
                 extended_idx[self.dimension] = np.full_like(rows, cur_slice[self.dimension])
                 extended_idx = _coerce_indices_for_vectorization(self.active_labels_layer.data, extended_idx)
-                layer.data_setitem(extended_idx, layer.selected_label)
+                baked = self._bake_into_stroke(layer, extended_idx)
                 with self.contour_mutex:
                     layer._overlays["interpolation"].contour = ContourList()
-
 
         yield
         while event.type == "mouse_move":
             yield
+        if baked and not layer._block_history and layer._staged_history:
+            # no stroke followed (napari's paint callback did not start one): the baked contour is an edit of its own
+            layer._commit_staged_history()
         self._is_painting = False
         if self._labels_update_tmp is not None:
             data, offset = self._labels_update_tmp
@@ -670,6 +693,25 @@ class InterpolationWidget(MagicTemplate):
             cur_slice_data = layer.data[layer_slice_indices(layer)]
             if not np.any(cur_slice_data):
                 self._interpolate_all()
+
+    def _bake_into_stroke(self, layer, indices):
+        """Paints the interpolated contour of the slice when a stroke starts on it, as part of that stroke's edit.
+
+        This callback runs before napari's paint callback opens the stroke (``block_history``), so ``data_setitem``
+        saves the contour as an edit of its own, and undoing the stroke would leave the contour painted. Its atoms are
+        moved to the staged history instead, which the stroke commits together with its own. Returns whether they
+        were moved (they are then committed at the end of the drag if no stroke did it).
+        """
+        if layer._block_history:  # a block is already open: the edit is staged in it
+            layer.data_setitem(indices, layer.selected_label)
+            return False
+        top = layer._undo_history[-1] if layer._undo_history else None
+        layer.data_setitem(indices, layer.selected_label)
+        if not layer._undo_history or layer._undo_history[-1] is top:
+            return False  # nothing changed
+        layer._staged_history.extend(layer._undo_history.pop())
+        self._remember_history()
+        return True
 
     def _on_labels_update(self, event):
         if self._is_painting:
@@ -709,8 +751,24 @@ class InterpolationWidget(MagicTemplate):
             return
         self._execute_interpolation(layer_slice_indices(self.active_labels_layer)[self.dimension])
 
-    def _on_set_data(self, event):
-        ...
+    @staticmethod
+    def _history_state(layer):
+        undo, redo = layer._undo_history, layer._redo_history
+        return len(undo), len(redo), id(undo[-1]) if undo else None, id(redo[-1]) if redo else None
+
+    def _remember_history(self, _=None):
+        """Called when an edit is added to the undo history (paint event), which the widget already followed."""
+        layer = self._active_labels_layer
+        self._history_seen = None if layer is None else self._history_state(layer)
+
+    def _on_set_data(self, _=None):
+        # Undo and redo change the data and refresh the layer (set_data) without a labels_update or paint event:
+        # the history changed without a paint event, so the interpolated contours have to be recomputed.
+        layer = self._active_labels_layer
+        if layer is None or self._history_state(layer) == self._history_seen:
+            return
+        self._remember_history()
+        self._interpolate_all()
 
     def _store_contour(self, data):
         idx, contour_list = data
