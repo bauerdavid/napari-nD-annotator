@@ -10,7 +10,6 @@ import cv2
 import scipy.ndimage
 import skimage.draw
 from magicclass import magicclass, field, vfield, bind_key, MagicTemplate
-from magicgui._util import debounce
 from napari._qt.layer_controls.qt_labels_controls import QtLabelsControls
 from napari._qt.qt_resources import get_current_stylesheet
 from napari._qt.widgets.qt_mode_buttons import QtModePushButton
@@ -301,6 +300,12 @@ class InterpolationWidget(MagicTemplate):
         self.overlay_worker = None
         self._stored_contours = []
         self.contour_mutex = overlay_mutex
+        # Coalesces the overlay updates of a burst of slice changes. A QTimer and not magicgui's debounce: that one
+        # calls on a threading.Timer thread, and the overlay (and so vispy) must only be touched on the GUI thread.
+        self._overlay_timer = QTimer(self.native)
+        self._overlay_timer.setSingleShot(True)
+        self._overlay_timer.setInterval(0)
+        self._overlay_timer.timeout.connect(self._refresh_overlay)
         # layout.addStretch() -> how?
 
     def __post_init__(self):
@@ -342,14 +347,14 @@ class InterpolationWidget(MagicTemplate):
         main_window.installEventFilter(self.event_filter)
         self.native.setMouseTracking(True)
 
-    @debounce
     def _current_step_changed(self, _=None):
         # also called after the active layer was resliced (``set_data``): a change of its transform (scale,
         # translate...) shows another slice of it without the viewer moving
+        self._overlay_timer.start()  # -> _refresh_overlay, on the GUI thread
+
+    def _refresh_overlay(self):
         if self.active_labels_layer is None or "interpolation" not in self.active_labels_layer._overlays:
             return
-        if self.overlay_worker is not None:
-            self.overlay_worker.quit()
         self._update_overlay()
 
     def _dims_order_changed(self):
